@@ -1,0 +1,35 @@
+name: OpenWorkSwift
+options:
+  bundleIdPrefix: ai.openwork
+  deploymentTarget:
+    macOS: "13.0"
+  xcodeVersion: "15.0"
+  defaultConfig: Debug
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    PRODUCT_NAME: "OpenWork"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+targets:
+  OpenWorkSwift:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Sources
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openwork.OpenWorkSwift
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 OpenWork. All rights reserved."
+        INFOPLIST_KEY_CFBundleDisplayName: "OpenWork"
+        INFOPLIST_KEY_CFBundleIconFile: "AppIcon"
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_EMIT_LOC_STRINGS: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
+        COMBINE_HIDPI_IMAGES: YES
+        CODE_SIGN_STYLE: Automatic

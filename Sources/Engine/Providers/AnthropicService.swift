@@ -1,0 +1,319 @@
+import Foundation
+
+public final class AnthropicService: LLMProviderClient, @unchecked Sendable {
+    public static let shared = AnthropicService()
+
+    private let session: URLSession
+
+    public init() {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 120
+        config.timeoutIntervalForResource = 300
+        self.session = URLSession(configuration: config)
+    }
+
+    public func testConnection(provider: ModelProvider) async throws -> Bool {
+        guard !provider.apiKey.isEmpty else { return false }
+        let endpoint = "\(provider.baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/models"
+        guard let url = URL(string: endpoint) else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(provider.apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 8
+        let (_, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse {
+            return http.statusCode == 200 || http.statusCode == 400
+        }
+        return false
+    }
+
+    public func listModels(provider: ModelProvider) async throws -> [ModelInfo] {
+        let endpoint = "\(provider.baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/models"
+        if let url = URL(string: endpoint), !provider.apiKey.isEmpty {
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.setValue(provider.apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            request.timeoutInterval = 8
+            if let (data, response) = try? await session.data(for: request),
+               let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                struct AnthropicModelsResponse: Codable {
+                    struct Item: Codable {
+                        let id: String
+                        let display_name: String?
+                    }
+                    let data: [Item]?
+                }
+                if let parsed = try? JSONDecoder().decode(AnthropicModelsResponse.self, from: data),
+                   let data = parsed.data, !data.isEmpty {
+                    return data.map { m in
+                        let isReasoning = m.id.contains("3-7") || m.id.contains("r1") || m.id.contains("thinking")
+                        return ModelInfo(
+                            id: m.id,
+                            name: m.display_name ?? m.id,
+                            providerId: provider.id,
+                            contextWindow: 200000,
+                            supportsVision: true,
+                            supportsReasoning: isReasoning,
+                            supportsStreaming: true,
+                            supportsTools: true,
+                            description: "Anthropic Claude Model",
+                            isDefault: m.id.contains("3-7") || m.id.contains("3-5-sonnet"),
+                            speedTier: m.id.contains("haiku") ? "Fast" : "Powerful",
+                            costPer1kPrompt: m.id.contains("haiku") ? 0.0008 : 0.003,
+                            costPer1kCompletion: m.id.contains("haiku") ? 0.004 : 0.015
+                        )
+                    }
+                }
+            }
+        }
+
+        return [
+            ModelInfo(id: "claude-3-7-sonnet-20250219", name: "Claude 3.7 Sonnet (Hybrid)", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: true, isDefault: true, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
+            ModelInfo(id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
+            ModelInfo(id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Fast", costPer1kPrompt: 0.0008, costPer1kCompletion: 0.004),
+            ModelInfo(id: "claude-3-opus-20240229", name: "Claude 3 Opus", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Powerful", costPer1kPrompt: 0.015, costPer1kCompletion: 0.075)
+        ]
+    }
+
+    public func streamChat(
+        provider: ModelProvider,
+        model: ModelInfo,
+        systemPrompt: String,
+        messages: [ChatMessage],
+        temperature: Double,
+        maxTokens: Int,
+        reasoningEffort: ReasoningEffort,
+        tools: [Tool],
+        onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
+    ) async throws {
+        let endpoint = "\(provider.baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/messages"
+        guard let url = URL(string: endpoint) else {
+            throw NSError(domain: "AnthropicService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid Anthropic URL"])
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(provider.apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+
+        var formattedMessages: [[String: Any]] = []
+        for msg in messages {
+            if msg.role == .tool {
+                formattedMessages.append([
+                    "role": "user",
+                    "content": [
+                        [
+                            "type": "tool_result",
+                            "tool_use_id": msg.id,
+                            "content": msg.content
+                        ]
+                    ]
+                ])
+            } else {
+                let role = msg.role == .assistant ? "assistant" : "user"
+                formattedMessages.append(["role": role, "content": msg.content])
+            }
+        }
+
+        var body: [String: Any] = [
+            "model": model.id,
+            "messages": formattedMessages,
+            "stream": true,
+            "max_tokens": maxTokens,
+            "system": systemPrompt
+        ]
+
+        if model.supportsReasoning && reasoningEffort != .off {
+            let budgetTokens = reasoningEffort == .high ? 4096 : (reasoningEffort == .medium ? 2048 : 1024)
+            body["thinking"] = [
+                "type": "enabled",
+                "budget_tokens": budgetTokens
+            ]
+        } else {
+            body["temperature"] = temperature
+        }
+
+        // Add native tools in Anthropic schema { name: "...", description: "...", input_schema: {...} }
+        if !tools.isEmpty {
+            var anthropicTools: [[String: Any]] = []
+            for t in tools where t.isEnabled {
+                var parametersDict: [String: Any] = ["type": "object", "properties": [String: Any]()]
+                if let data = t.parametersJsonSchema.data(using: .utf8),
+                   let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   !parsed.isEmpty {
+                    parametersDict = parsed
+                } else {
+                    switch t.name {
+                    case "file_read":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "path": ["type": "string", "description": "Relative or absolute path to the file to read"]
+                            ],
+                            "required": ["path"]
+                        ]
+                    case "file_write":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "path": ["type": "string", "description": "Relative or absolute path to the file to write"],
+                                "content": ["type": "string", "description": "Text or code content to write to the file"]
+                            ],
+                            "required": ["path", "content"]
+                        ]
+                    case "file_list":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "path": ["type": "string", "description": "Directory path to list files for"]
+                            ]
+                        ]
+                    case "terminal_command":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "command": ["type": "string", "description": "Bash/zsh shell command to execute"],
+                                "cwd": ["type": "string", "description": "Working directory path for execution"]
+                            ],
+                            "required": ["command"]
+                        ]
+                    case "web_search":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "query": ["type": "string", "description": "Search engine query string"]
+                            ],
+                            "required": ["query"]
+                        ]
+                    case "calculator":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "expression": ["type": "string", "description": "Mathematical formula to evaluate"]
+                            ],
+                            "required": ["expression"]
+                        ]
+                    case "document_extract", "extract_document", "read_pdf_or_image":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "path": ["type": "string", "description": "File path to PDF document or image for OCR"]
+                            ],
+                            "required": ["path"]
+                        ]
+                    case "workspace_semantic_search":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "query": ["type": "string", "description": "Semantic query to search across workspace files"],
+                                "top_k": ["type": "integer", "description": "Top matches to return"]
+                            ],
+                            "required": ["query"]
+                        ]
+                    case "agent_spawn":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "task_title": ["type": "string", "description": "Short title of the delegated sub-task"],
+                                "task_description": ["type": "string", "description": "Detailed instructions for the sub-agent"],
+                                "subagent_id": ["type": "string", "description": "Target sub-agent identifier"],
+                                "subagent_name": ["type": "string", "description": "Display name of the target sub-agent"]
+                            ],
+                            "required": ["task_title", "task_description"]
+                        ]
+                    case "agent_message":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "to_agent_id": ["type": "string", "description": "Target agent ID or 'broadcast'"],
+                                "to_agent_name": ["type": "string", "description": "Target agent name"],
+                                "content": ["type": "string", "description": "Message content or query to deliver to the other agent"],
+                                "message_type": ["type": "string", "description": "Type: task_delegation, task_response, consultation, or broadcast"]
+                            ],
+                            "required": ["content"]
+                        ]
+                    default:
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "parameters": ["type": "string", "description": "Parameters for this tool"]
+                            ]
+                        ]
+                    }
+                }
+
+                anthropicTools.append([
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": parametersDict
+                ])
+            }
+            if !anthropicTools.isEmpty {
+                body["tools"] = anthropicTools
+            }
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 500
+            throw NSError(domain: "AnthropicService", code: status, userInfo: [NSLocalizedDescriptionKey: "Anthropic returned HTTP status \(status)"])
+        }
+
+        var currentToolUseId = ""
+        var currentToolName = ""
+        var currentToolArgs = ""
+
+        for try await line in bytes.lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("data:") else { continue }
+            let payload = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            guard let data = payload.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+            let eventType = json["type"] as? String
+
+            if eventType == "content_block_start" {
+                if let contentBlock = json["content_block"] as? [String: Any],
+                   contentBlock["type"] as? String == "tool_use" {
+                    currentToolUseId = contentBlock["id"] as? String ?? UUID().uuidString
+                    currentToolName = contentBlock["name"] as? String ?? ""
+                    currentToolArgs = ""
+                }
+            } else if eventType == "content_block_delta" {
+                if let delta = json["delta"] as? [String: Any] {
+                    let deltaType = delta["type"] as? String
+                    if deltaType == "text_delta" {
+                        let text = delta["text"] as? String ?? ""
+                        onChunk(LLMStreamChunk(deltaText: text))
+                    } else if deltaType == "thinking_delta" {
+                        let reasoning = delta["thinking"] as? String ?? ""
+                        onChunk(LLMStreamChunk(deltaReasoning: reasoning))
+                    } else if deltaType == "input_json_delta" {
+                        let partialJson = delta["partial_json"] as? String ?? ""
+                        currentToolArgs += partialJson
+                    }
+                }
+            } else if eventType == "content_block_stop" {
+                if !currentToolName.isEmpty {
+                    let toolCall = ToolCallInfo(
+                        id: currentToolUseId,
+                        toolName: currentToolName,
+                        argumentsJson: currentToolArgs.isEmpty ? "{}" : currentToolArgs,
+                        status: .running
+                    )
+                    onChunk(LLMStreamChunk(toolCalls: [toolCall]))
+                    currentToolUseId = ""
+                    currentToolName = ""
+                    currentToolArgs = ""
+                }
+            } else if eventType == "message_stop" {
+                onChunk(LLMStreamChunk(isFinished: true))
+            }
+        }
+    }
+}

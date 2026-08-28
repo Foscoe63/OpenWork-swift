@@ -1,0 +1,19 @@
+# Xcode & Swift Build Artifacts
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# macOS System Files
+.DS_Store
+*.swp
+*~
+.Spotlight-V100
+.Trashes
+
+# Secrets & Local Config
+.env
+.env.local
+*.key
