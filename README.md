@@ -46,7 +46,13 @@ Unlike conventional Electron- or web-wrapped AI tools that consume gigabytes of 
 - **PDFKit & Vision OCR Extractor**: Extract structured text from PDFs or run optical character recognition on scanned images and diagrams via Apple's Neural Engine.
 - **Staged Pipeline Workspaces**: Automated workspace staging folders (`input/` and `output/`) for batch file processing.
 
-### 6. Extensions, MCP & Skill Ecosystem
+### 6. Watch Folders & Real-Time Ingestion Triggers (Claude Co-Work Style)
+- **Directory & File Watchers**: Real-time macOS `DispatchSource` filesystem event monitors on workspace folders, staging directories, or external storage drives.
+- **Automated Morning Briefs & Daily Updates**: Autonomously synthesizes executive Morning Briefs, Daily Project Updates, and Code Review digests as files are modified or dropped in.
+- **Dedicated Watch Folders Hub**: Left sidebar navigation tab with active listener statuses, one-click manual scan triggers, and generated artifact drawers.
+- **Settings Watch Hub**: Global and workspace configuration for watch paths, file debouncing intervals, and assigned briefing agents.
+
+### 7. Extensions, MCP & Skill Ecosystem
 - **Model Context Protocol (MCP)**: Built-in JSON-RPC 2.0 client engine supporting `stdio` and `SSE` transport modes.
 - **Extensions & Plugins Hub**: Install, configure, and manage MCP servers, custom scripts, agent skills, and system extensions with custom environment variables.
 - **Prompt Template Catalog & Autocomplete**: Over 70 business and technical prompt presets with `/` slash-command autocomplete in the message composer.

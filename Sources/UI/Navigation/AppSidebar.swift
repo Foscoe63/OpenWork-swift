@@ -25,10 +25,12 @@ public struct AppSidebar: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 4) {
                     navButton(for: .chat, count: appState.sessions.filter { !$0.isArchived }.count)
+                    navButton(for: .localModels, count: appState.localMLXModels.filter { $0.isDownloaded }.count)
                     navButton(for: .agents, count: appState.agents.count)
                     navButton(for: .providers, count: appState.providers.filter { $0.isEnabled }.count)
                     navButton(for: .automations, count: appState.automations.filter { $0.isEnabled }.count)
-                    navButton(for: .artifacts, count: nil)
+                    navButton(for: .watchFolders, count: appState.watchItems.filter { $0.isEnabled }.count)
+                    navButton(for: .artifacts, count: appState.artifacts.count)
                     navButton(for: .memory, count: appState.memories.count)
                     navButton(for: .tools, count: appState.tools.filter { $0.isEnabled }.count)
                     navButton(for: .dashboard, count: nil)
@@ -50,7 +52,7 @@ public struct AppSidebar: View {
             // Bottom Footer (Settings & Status)
             bottomFooter
         }
-        .frame(minWidth: 240, idealWidth: 260, maxWidth: 300)
+        .frame(minWidth: 200, idealWidth: 260, maxWidth: 450)
         .background(ThemeColors.sidebarBg(for: appState.settings.theme))
     }
 

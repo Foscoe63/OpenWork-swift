@@ -225,24 +225,39 @@ public final class OpenAIService: LLMProviderClient, @unchecked Sendable {
         if !systemPrompt.isEmpty {
             formattedMessages.append(["role": "system", "content": systemPrompt])
         }
+        let isLocalEndpoint = provider.baseUrl.contains("mlx") || provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.contains("localhost")
         for msg in messages {
             if msg.role == .tool {
-                formattedMessages.append([
-                    "role": "tool",
-                    "content": msg.content,
-                    "tool_call_id": msg.id
-                ])
+                if isLocalEndpoint {
+                    // Local endpoints (MLX, Ollama, LM Studio) expect tool observations as user messages unless native tool_calls were emitted
+                    formattedMessages.append([
+                        "role": "user",
+                        "content": "[Tool Result]:\n\(msg.content)\n\nPlease continue your response incorporating the tool result above."
+                    ])
+                } else {
+                    formattedMessages.append([
+                        "role": "tool",
+                        "content": msg.content,
+                        "tool_call_id": msg.id
+                    ])
+                }
             } else {
                 formattedMessages.append(["role": msg.role.rawValue, "content": msg.content])
             }
         }
+
+        let loadedSettings = PersistenceManager.shared.loadSettings()
+        let presencePenalty = loadedSettings.autoAdjustPenaltiesForLocalModels && isLocalEndpoint ? max(0.35, loadedSettings.defaultPresencePenalty) : loadedSettings.defaultPresencePenalty
+        let frequencyPenalty = loadedSettings.autoAdjustPenaltiesForLocalModels && isLocalEndpoint ? max(0.35, loadedSettings.defaultFrequencyPenalty) : loadedSettings.defaultFrequencyPenalty
 
         var body: [String: Any] = [
             "model": model.id,
             "messages": formattedMessages,
             "stream": true,
             "temperature": temperature,
-            "max_tokens": maxTokens
+            "max_tokens": maxTokens,
+            "presence_penalty": presencePenalty,
+            "frequency_penalty": frequencyPenalty
         ]
 
         if model.supportsReasoning && reasoningEffort != .off {
@@ -250,7 +265,7 @@ public final class OpenAIService: LLMProviderClient, @unchecked Sendable {
         }
 
         // Add native structured tool schemas if tools are provided
-        if !tools.isEmpty {
+        if !tools.isEmpty && !provider.baseUrl.contains("mlx") && !provider.baseUrl.contains("127.0.0.1") && !provider.baseUrl.contains("localhost") {
             var toolsArray: [[String: Any]] = []
             for t in tools where t.isEnabled {
                 var parametersDict: [String: Any] = ["type": "object", "properties": [String: Any]()]
@@ -348,6 +363,24 @@ public final class OpenAIService: LLMProviderClient, @unchecked Sendable {
                                 "message_type": ["type": "string", "description": "Type: task_delegation, task_response, consultation, or broadcast"]
                             ],
                             "required": ["content"]
+                        ]
+                    case "mcp_call":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "server": ["type": "string", "description": "Name or ID of the MCP server (e.g. 'macuse', 'filesystem', 'fetch')"],
+                                "tool": ["type": "string", "description": "Tool or action name to run on the MCP server (e.g. 'get_calendar_events', 'get_reminders')"],
+                                "arguments": ["type": "object", "description": "Arguments/parameters for the tool"]
+                            ],
+                            "required": ["server", "tool"]
+                        ]
+                    case _ where t.category == .mcp || t.name.contains("_call"):
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "action": ["type": "string", "description": "Action or tool to execute on the MCP server (e.g. 'get_calendar_events', 'query')"],
+                                "parameters": ["type": "object", "description": "Key-value parameters for the MCP action"]
+                            ]
                         ]
                     default:
                         parametersDict = [

@@ -6,6 +6,7 @@ public enum ToolCategory: String, Codable, CaseIterable, Sendable {
     case terminal = "terminal"
     case web = "web"
     case agents = "agents"
+    case mediaVision = "mediaVision"
     case custom = "custom"
     case mcp = "mcp"
 
@@ -16,6 +17,7 @@ public enum ToolCategory: String, Codable, CaseIterable, Sendable {
         case .terminal: return "Terminal & Shell"
         case .web: return "Web & Search"
         case .agents: return "Multi-Agent Orchestration"
+        case .mediaVision: return "Generative Media & MLX Vision"
         case .custom: return "Custom Scripts"
         case .mcp: return "Model Context Protocol (MCP)"
         }
@@ -28,6 +30,7 @@ public enum ToolCategory: String, Codable, CaseIterable, Sendable {
         case .terminal: return "terminal.fill"
         case .web: return "globe"
         case .agents: return "person.3.fill"
+        case .mediaVision: return "paintpalette.fill"
         case .custom: return "curlybraces"
         case .mcp: return "puzzlepiece.extension.fill"
         }
@@ -66,20 +69,36 @@ public struct Tool: Identifiable, Codable, Hashable, Sendable {
         self.requiresApproval = requiresApproval
         self.serverUrl = serverUrl
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        self.name = try container.decodeIfPresent(String.self, forKey: .name) ?? "tool"
+        self.displayName = try container.decodeIfPresent(String.self, forKey: .displayName) ?? name
+        self.description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
+        self.category = try container.decodeIfPresent(ToolCategory.self, forKey: .category) ?? .system
+        self.parametersJsonSchema = try container.decodeIfPresent(String.self, forKey: .parametersJsonSchema) ?? "{}"
+        self.isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        self.requiresApproval = try container.decodeIfPresent(Bool.self, forKey: .requiresApproval) ?? false
+        self.serverUrl = try container.decodeIfPresent(String.self, forKey: .serverUrl)
+    }
 }
 
-public enum ToolCallStatus: String, Codable, CaseIterable, Sendable {
+public enum ToolCallStatus: String, Codable, Sendable {
     case running = "running"
+    case completed = "completed"
     case success = "success"
+    case failed = "failed"
     case error = "error"
+    case pendingApproval = "pendingApproval"
     case waitingApproval = "waitingApproval"
 
     public var icon: String {
         switch self {
-        case .running: return "hourglass"
-        case .success: return "checkmark.circle.fill"
-        case .error: return "xmark.octagon.fill"
-        case .waitingApproval: return "hand.raised.fill"
+        case .running: return "arrow.triangle.2.circlepath"
+        case .completed, .success: return "checkmark.circle.fill"
+        case .failed, .error: return "xmark.circle.fill"
+        case .pendingApproval, .waitingApproval: return "hand.raised.fill"
         }
     }
 }
@@ -92,17 +111,17 @@ public struct ToolCallInfo: Identifiable, Codable, Hashable, Sendable {
     public var resultOutput: String?
     public var errorMessage: String?
     public var durationMs: Double
-    public var executedAt: Date
+    public var timestamp: Date
 
     public init(
         id: String = UUID().uuidString,
         toolName: String,
-        argumentsJson: String,
+        argumentsJson: String = "{}",
         status: ToolCallStatus = .running,
         resultOutput: String? = nil,
         errorMessage: String? = nil,
         durationMs: Double = 0,
-        executedAt: Date = Date()
+        timestamp: Date = Date()
     ) {
         self.id = id
         self.toolName = toolName
@@ -111,6 +130,6 @@ public struct ToolCallInfo: Identifiable, Codable, Hashable, Sendable {
         self.resultOutput = resultOutput
         self.errorMessage = errorMessage
         self.durationMs = durationMs
-        self.executedAt = executedAt
+        self.timestamp = timestamp
     }
 }

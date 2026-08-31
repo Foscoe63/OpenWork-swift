@@ -1,6 +1,132 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Custom Native Chat Text View for macOS (Return to send, Shift/Option/Slash+Return for newline)
+public struct ChatInputRepresentable: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    var onSend: () -> Void
+    var onTextChange: ((String) -> Void)?
+
+    public func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    public func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+
+        let textView = CustomChatNSTextView()
+        textView.delegate = context.coordinator
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.font = .systemFont(ofSize: 13)
+        textView.textColor = .labelColor
+        textView.backgroundColor = .clear
+        textView.drawsBackground = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.textContainer?.lineFragmentPadding = 2
+        textView.textContainer?.widthTracksTextView = true
+        textView.onSend = onSend
+        textView.placeholderString = placeholder
+
+        scrollView.documentView = textView
+        context.coordinator.textView = textView
+
+        return scrollView
+    }
+
+    public func updateNSView(_ nsView: NSScrollView, context: Context) {
+        if let textView = nsView.documentView as? CustomChatNSTextView {
+            if textView.string != text {
+                textView.string = text
+                textView.needsDisplay = true
+            }
+            textView.placeholderString = placeholder
+            textView.onSend = onSend
+        }
+    }
+
+    public class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ChatInputRepresentable
+        weak var textView: CustomChatNSTextView?
+
+        init(_ parent: ChatInputRepresentable) {
+            self.parent = parent
+        }
+
+        public func textDidChange(_ notification: Notification) {
+            guard let tv = textView else { return }
+            parent.text = tv.string
+            parent.onTextChange?(tv.string)
+        }
+    }
+}
+
+final class CustomChatNSTextView: NSTextView {
+    var onSend: (() -> Void)?
+    var placeholderString: String = ""
+
+    override func keyDown(with event: NSEvent) {
+        // Return key is 36, Numpad Enter is 76
+        if event.keyCode == 36 || event.keyCode == 76 {
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+            // Shift+Return or Option+Return or Control+Return -> Insert a new line
+            if flags.contains(.shift) || flags.contains(.option) || flags.contains(.control) {
+                super.insertNewline(nil)
+                return
+            }
+
+            // Command+Return -> Send message
+            if flags.contains(.command) {
+                if !self.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    onSend?()
+                }
+                return
+            }
+
+            // Check if user typed slash+return (text right before cursor is '/' or '\')
+            let currentString = self.string as NSString
+            let selectedRange = self.selectedRange()
+            if selectedRange.location > 0 {
+                let charBefore = currentString.substring(with: NSRange(location: selectedRange.location - 1, length: 1))
+                if charBefore == "/" || charBefore == "\\" {
+                    // Replace the trailing slash with a newline
+                    self.insertText("\n", replacementRange: NSRange(location: selectedRange.location - 1, length: 1))
+                    return
+                }
+            }
+
+            // Plain Return without modifiers -> Send message
+            if flags.isEmpty {
+                if !self.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    onSend?()
+                }
+                return
+            }
+        }
+
+        super.keyDown(with: event)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        if string.isEmpty && !placeholderString.isEmpty {
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: font ?? NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.placeholderTextColor
+            ]
+            let rect = NSRect(x: 4, y: 2, width: bounds.width - 8, height: bounds.height - 4)
+            (placeholderString as NSString).draw(in: rect, withAttributes: attrs)
+        }
+    }
+}
+
 public struct ComposerView: View {
     @ObservedObject var appState: AppState
     @ObservedObject var voiceEngine = VoiceSpeechEngine.shared
@@ -153,28 +279,24 @@ public struct ComposerView: View {
                 .buttonStyle(.plain)
                 .help(voiceEngine.isRecording ? "Stop Dictation" : "Dictate with Voice (macOS STT)")
 
-                // Text Input Field
-                ZStack(alignment: .topLeading) {
-                    if appState.composerText.isEmpty {
-                        Text("Type a prompt, or / for slash commands...")
-                            .font(.system(size: 13))
-                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.6))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 8)
+                // Text Input Field (Return sends, Shift/Option/Slash+Return inserts newline)
+                ChatInputRepresentable(
+                    text: $appState.composerText,
+                    placeholder: "Type a prompt, or / for slash commands (Return to send, Shift+Return for newline)...",
+                    onSend: {
+                        if !appState.isGenerating && !appState.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            sendMessage()
+                        }
                     }
-
-                    TextEditor(text: $appState.composerText)
-                        .font(.system(size: 13))
-                        .frame(minHeight: 36, maxHeight: 120)
-                        .scrollContentBackground(.hidden)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 4)
-                }
+                )
+                .frame(minHeight: 36, maxHeight: 120)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 4)
 
                 // Send or Stop Button
                 if appState.isGenerating {
                     Button {
-                        appState.isGenerating = false
+                        appState.cancelCurrentGeneration()
                     } label: {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 24))
@@ -238,9 +360,61 @@ public struct ComposerView: View {
                 }
                 .menuStyle(.borderlessButton)
 
-                // Model Picker Pill
+                // Model Picker Pill (with Local Apple Silicon MLX models support)
                 Menu {
-                    ForEach(appState.providers.filter { $0.isEnabled }) { prov in
+                    // 1. Local MLX On-Device Models Section
+                    let downloadedLocal = appState.localMLXModels.filter { $0.isDownloaded }
+                    Section("⚡️ Local Apple Silicon (MLX)") {
+                        if !downloadedLocal.isEmpty {
+                            ForEach(downloadedLocal) { localModel in
+                                Button {
+                                    appState.selectLocalMLXModel(localModel)
+                                } label: {
+                                    HStack {
+                                        Text(localModel.name)
+                                        if let q = localModel.quantization {
+                                            Text("[\(q)]")
+                                        }
+                                        if localModel.isVLM {
+                                            Text("👁")
+                                        }
+                                        if localModel.useCase == .reasoning {
+                                            Text("🧠")
+                                        }
+                                        if localModel.id == appState.selectedModelId {
+                                            Image(systemName: "checkmark")
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // Show curated presets if scan is still empty
+                            ForEach(LocalMLXEngine.curatedModels.prefix(6)) { localModel in
+                                Button {
+                                    appState.selectLocalMLXModel(localModel)
+                                } label: {
+                                    HStack {
+                                        Text(localModel.name)
+                                        if let q = localModel.quantization {
+                                            Text("[\(q)]")
+                                        }
+                                        if localModel.id == appState.selectedModelId {
+                                            Image(systemName: "checkmark")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Button {
+                            appState.navigationDestination = .localModels
+                        } label: {
+                            Label("Manage Local Models Catalog...", systemImage: "cube.fill")
+                        }
+                    }
+
+                    // 2. Other Configured & Enabled Providers
+                    ForEach(appState.providers.filter { $0.isEnabled && $0.kind != .omlx && $0.kind != .vmlx }) { prov in
                         Section(prov.name) {
                             ForEach(prov.models) { m in
                                 Button {
@@ -262,10 +436,15 @@ public struct ComposerView: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: appState.currentProvider.kind.icon)
+                        let isMLX = appState.currentProvider.kind == .omlx || appState.currentProvider.kind == .vmlx || appState.localMLXModels.contains(where: { $0.id == appState.selectedModelId })
+                        Image(systemName: isMLX ? "cpu.fill" : appState.currentProvider.kind.icon)
                             .font(.system(size: 10))
+                            .foregroundColor(isMLX ? Color(hex: "#C084FC") : ThemeColors.textSecondary(for: appState.settings.theme))
+
                         Text(appState.currentModel.name)
                             .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
+
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 8))
                     }

@@ -62,9 +62,9 @@ public struct ToolCallCardView: View {
 
     private var statusColor: Color {
         switch toolCall.status {
-        case .running, .waitingApproval: return .orange
-        case .success: return .green
-        case .error: return .red
+        case .running, .waitingApproval, .pendingApproval: return .orange
+        case .success, .completed: return .green
+        case .error, .failed: return .red
         }
     }
 }

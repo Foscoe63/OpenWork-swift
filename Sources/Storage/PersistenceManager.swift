@@ -96,8 +96,16 @@ public final class PersistenceManager: @unchecked Sendable {
             saveWorkspaces(items)
         }
 
-        // Merge any new default workspace presets that don't exist yet
+        // Sanitize any obsolete/invalid SF symbols in stored workspace categories/icons
         var modified = false
+        for i in 0..<items.count {
+            if items[i].icon == "person.crop.circle.badge.sparkables" || items[i].icon == "person.crop.circle.badge.sparkles" {
+                items[i].icon = "person.crop.circle.badge.checkmark"
+                modified = true
+            }
+        }
+
+        // Merge any new default workspace presets that don't exist yet
         for def in defaultWorkspaces {
             if !items.contains(where: { $0.id == def.id }) {
                 items.append(def)
@@ -116,21 +124,67 @@ public final class PersistenceManager: @unchecked Sendable {
 
     // MARK: - Settings
     public func loadSettings() -> AppSettings {
-        if let settings = storage.load(AppSettings.self, from: "settings.json") {
-            return settings
+        var settings: AppSettings
+        if let loaded = storage.load(AppSettings.self, from: "settings.json") {
+            settings = loaded
+        } else {
+            settings = AppSettings.default
+            saveSettings(settings)
         }
-        let `default` = AppSettings.default
-        saveSettings(`default`)
-        return `default`
+
+        // Synchronize MCP servers
+        let backupMcp = loadMCPServers()
+        if settings.mcpServers.isEmpty {
+            settings.mcpServers = backupMcp
+            saveSettings(settings)
+        } else {
+            saveMCPServers(settings.mcpServers)
+        }
+
+        return settings
     }
 
     public func saveSettings(_ settings: AppSettings) {
         storage.save(settings, to: "settings.json")
+        saveMCPServers(settings.mcpServers)
+    }
+
+    // MARK: - MCP Servers Backup Store
+    public func loadMCPServers() -> [MCPServerConfig] {
+        if let servers = storage.load([MCPServerConfig].self, from: "mcp_servers.json"), !servers.isEmpty {
+            return servers
+        }
+        let defaults = AppSettings.defaultMCPServers
+        saveMCPServers(defaults)
+        return defaults
+    }
+
+    public func saveMCPServers(_ servers: [MCPServerConfig]) {
+        storage.save(servers, to: "mcp_servers.json")
     }
 
     // MARK: - Providers
     public var defaultProviders: [ModelProvider] {
         [
+            ModelProvider(
+                id: "builtin-mlx-local",
+                name: "Built-in (Apple Silicon MLX)",
+                type: .local,
+                kind: .omlx,
+                baseUrl: "http://127.0.0.1:8000/v1",
+                apiKey: "",
+                isEnabled: true,
+                isDefault: true,
+                models: [
+                    ModelInfo(id: "mlx-community/Ornith-1.5-35B-A3B-8bit", name: "Ornith 1.5 35B A3B 8bit", providerId: "builtin-mlx-local", contextWindow: 262144, supportsReasoning: true, supportsTools: true, isDefault: true, speedTier: "Powerful"),
+                    ModelInfo(id: "mlx-community/Qwen3-Coder-Next-REAP-48B-A3B-mlx-8Bit", name: "Qwen3 Coder Next REAP 48B (8-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsTools: true, speedTier: "Powerful"),
+                    ModelInfo(id: "mlx-community/Qwen3.6-35B-A3B-8bit", name: "Qwen3.6 35B (8-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, speedTier: "Fast"),
+                    ModelInfo(id: "mlx-community/Qwen3.8-27B-8bit", name: "Qwen3.8 27B (8-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, speedTier: "Balanced"),
+                    ModelInfo(id: "mlx-community/Qwen3.8-27B-MLX-8bit", name: "Qwen3.8 27B MLX (Vision 8-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsVision: true, speedTier: "Balanced"),
+                    ModelInfo(id: "mlx-community/Qwen2.5-Coder-32B-Instruct-4bit", name: "Qwen 2.5 Coder 32B (MLX 4-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsTools: true, speedTier: "Fast"),
+                    ModelInfo(id: "mlx-community/DeepSeek-R1-Distill-Qwen-14B-4bit", name: "DeepSeek R1 Distill 14B (MLX)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsReasoning: true, speedTier: "Fast")
+                ]
+            ),
             ModelProvider(
                 id: "ollama-local",
                 name: "Ollama (Local)",
@@ -139,7 +193,6 @@ public final class PersistenceManager: @unchecked Sendable {
                 baseUrl: "http://127.0.0.1:11434",
                 apiKey: "",
                 isEnabled: true,
-                isDefault: true,
                 models: [
                     ModelInfo(id: "llama3:latest", name: "Llama 3 (8B)", providerId: "ollama-local", contextWindow: 8192, supportsVision: false, supportsReasoning: false, isDefault: true, speedTier: "Fast"),
                     ModelInfo(id: "llama3.3:latest", name: "Llama 3.3 (70B)", providerId: "ollama-local", contextWindow: 131072, supportsVision: false, supportsReasoning: false, speedTier: "Powerful"),
@@ -149,17 +202,17 @@ public final class PersistenceManager: @unchecked Sendable {
                 ]
             ),
             ModelProvider(
-                id: "omlx-local",
-                name: "oMLX (Apple Silicon)",
+                id: "builtin-mlx-local",
+                name: "Apple Silicon (Built-in)",
                 type: .local,
                 kind: .omlx,
                 baseUrl: "http://127.0.0.1:8000/v1",
                 apiKey: "",
                 isEnabled: true,
                 models: [
-                    ModelInfo(id: "mlx-community/Qwen2.5-Coder-32B-Instruct-4bit", name: "Qwen 2.5 Coder 32B (MLX 4-bit)", providerId: "omlx-local", contextWindow: 65536, supportsTools: true, isDefault: true, speedTier: "Fast"),
-                    ModelInfo(id: "mlx-community/DeepSeek-R1-Distill-Qwen-14B-4bit", name: "DeepSeek R1 Distill 14B (MLX)", providerId: "omlx-local", contextWindow: 65536, supportsReasoning: true, speedTier: "Fast"),
-                    ModelInfo(id: "mlx-community/Llama-3.3-70B-Instruct-4bit", name: "Llama 3.3 70B (MLX 4-bit)", providerId: "omlx-local", contextWindow: 131072, speedTier: "Balanced")
+                    ModelInfo(id: "mlx-community/Qwen2.5-Coder-32B-Instruct-4bit", name: "Qwen 2.5 Coder 32B (MLX 4-bit)", providerId: "builtin-mlx-local", contextWindow: 65536, supportsTools: true, isDefault: true, speedTier: "Fast"),
+                    ModelInfo(id: "mlx-community/DeepSeek-R1-Distill-Qwen-14B-4bit", name: "DeepSeek R1 Distill 14B (MLX)", providerId: "builtin-mlx-local", contextWindow: 65536, supportsReasoning: true, speedTier: "Fast"),
+                    ModelInfo(id: "mlx-community/Llama-3.3-70B-Instruct-4bit", name: "Llama 3.3 70B (MLX 4-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, speedTier: "Balanced")
                 ]
             ),
             ModelProvider(
@@ -281,6 +334,18 @@ public final class PersistenceManager: @unchecked Sendable {
             saveProviders(loaded)
         }
 
+        // Normalize naming to match Osaurus / GrizzyClaw built-in Apple Silicon engine
+        var modified = false
+        for i in 0..<loaded.count {
+            if loaded[i].kind == .omlx && (loaded[i].name.contains("oMLX") || loaded[i].name.contains("omlx")) {
+                loaded[i].name = "Apple Silicon (Built-in)"
+                modified = true
+            }
+        }
+        if modified {
+            saveProviders(loaded)
+        }
+
         // Hydrate API keys securely from macOS Keychain if available
         for i in 0..<loaded.count {
             if let secret = KeychainManager.shared.getSecret(forKey: "provider_key_\(loaded[i].id)"), !secret.isEmpty {
@@ -304,15 +369,39 @@ public final class PersistenceManager: @unchecked Sendable {
 
     // MARK: - Agents
     public func loadAgents() -> [Agent] {
-        if let items = storage.load([Agent].self, from: "agents.json"), !items.isEmpty {
+        var items: [Agent] = []
+        if let loaded = storage.load([Agent].self, from: "agents.json"), !loaded.isEmpty {
+            items = loaded
+        } else {
+            items = defaultAgents
+            saveAgents(items)
             return items
         }
-        let defaults: [Agent] = [
+
+        // Sanitize any invalid or obsolete SF symbols loaded from user's disk cache
+        var modified = false
+        for i in 0..<items.count {
+            if items[i].avatar == "person.crop.circle.badge.sparkables" || items[i].avatar == "person.crop.circle.badge.sparkles" {
+                items[i].avatar = "person.crop.circle.badge.checkmark"
+                modified = true
+            } else if items[i].avatar == "square.3.layers.3d.down.right.fill" {
+                items[i].avatar = "square.3.layers.3d.down.right"
+                modified = true
+            }
+        }
+        if modified {
+            saveAgents(items)
+        }
+        return items
+    }
+
+    public var defaultAgents: [Agent] {
+        [
             Agent(
                 id: "lead-assistant",
                 name: "OpenWork Lead Agent",
                 description: "Primary orchestrator agent capable of answering questions, decomposing complex goals, and spawning specialized sub-agents.",
-                avatar: "person.crop.circle.badge.sparkables",
+                avatar: "person.crop.circle.badge.checkmark",
                 color: "#8B5CF6",
                 role: "Lead General Orchestrator",
                 systemPrompt: """
@@ -410,7 +499,7 @@ public final class PersistenceManager: @unchecked Sendable {
                 id: "architect-agent",
                 name: "Systems Architect Agent",
                 description: "Designs system topology, data flow, API contracts, and high-level structural blueprints.",
-                avatar: "square.3.layers.3d.down.right.fill",
+                avatar: "square.3.layers.3d.down.right",
                 color: "#EC4899",
                 role: "Principal Systems Architect",
                 systemPrompt: """
@@ -520,8 +609,6 @@ public final class PersistenceManager: @unchecked Sendable {
                 isBuiltIn: true
             )
         ]
-        saveAgents(defaults)
-        return defaults
     }
 
     public func saveAgents(_ agents: [Agent]) {
@@ -530,10 +617,33 @@ public final class PersistenceManager: @unchecked Sendable {
 
     // MARK: - Sessions
     public func loadSessions() -> [Session] {
-        if let items = storage.load([Session].self, from: "sessions.json"), !items.isEmpty {
-            return items
+        var items: [Session] = []
+        if let loaded = storage.load([Session].self, from: "sessions.json"), !loaded.isEmpty {
+            items = loaded
+        } else {
+            let initial = defaultSessions
+            saveSessions(initial)
+            return initial
         }
-        let initial = [
+
+        // Sanitize any invalid or obsolete SF symbols loaded in chat message avatars
+        var modified = false
+        for sIdx in 0..<items.count {
+            for mIdx in 0..<items[sIdx].messages.count {
+                if items[sIdx].messages[mIdx].agentAvatar == "person.crop.circle.badge.sparkables" || items[sIdx].messages[mIdx].agentAvatar == "person.crop.circle.badge.sparkles" {
+                    items[sIdx].messages[mIdx].agentAvatar = "person.crop.circle.badge.checkmark"
+                    modified = true
+                }
+            }
+        }
+        if modified {
+            saveSessions(items)
+        }
+        return items
+    }
+
+    public var defaultSessions: [Session] {
+        [
             Session(
                 id: "welcome-session",
                 workspaceId: "default-workspace",
@@ -562,15 +672,13 @@ public final class PersistenceManager: @unchecked Sendable {
                         """,
                         agentId: "lead-assistant",
                         agentName: "OpenWork Lead Agent",
-                        agentAvatar: "person.crop.circle.badge.sparkables",
+                        agentAvatar: "person.crop.circle.badge.checkmark",
                         agentColor: "#8B5CF6",
                         modelId: "llama3:latest"
                     )
                 ]
             )
         ]
-        saveSessions(initial)
-        return initial
     }
 
     public func saveSessions(_ sessions: [Session]) {
@@ -578,26 +686,77 @@ public final class PersistenceManager: @unchecked Sendable {
     }
 
     // MARK: - Tools
-    public func loadTools() -> [Tool] {
-        if let items = storage.load([Tool].self, from: "tools.json"), !items.isEmpty {
-            return items
-        }
-        let defaults: [Tool] = [
+    public var defaultTools: [Tool] {
+        [
             Tool(id: "file_read", name: "file_read", displayName: "Read File", description: "Reads text content from a file path in authorized workspace directories", category: .files),
             Tool(id: "file_write", name: "file_write", displayName: "Write File", description: "Creates or overwrites a file with content", category: .files, requiresApproval: false),
             Tool(id: "file_list", name: "file_list", displayName: "List Directory", description: "Lists files and subdirectories in a given folder", category: .files),
-            Tool(id: "terminal_command", name: "terminal_command", displayName: "Execute Shell Command", description: "Executes a shell command in macOS bash/zsh", category: .terminal, requiresApproval: false),
-            Tool(id: "web_search", name: "web_search", displayName: "Web Search", description: "Searches the web for documentation, APIs, and real-time knowledge", category: .web),
+            Tool(id: "file_copy", name: "file_copy", displayName: "Copy File", description: "Copies files or directories from source to destination", category: .files, requiresApproval: false),
+            Tool(id: "file_move", name: "file_move", displayName: "Move File", description: "Moves or renames files or directories", category: .files, requiresApproval: false),
+            Tool(id: "file_delete", name: "file_delete", displayName: "Delete File", description: "Removes a file or directory from disk", category: .files, requiresApproval: false),
+            Tool(id: "terminal_command", name: "terminal_command", displayName: "Execute Shell Command", description: "Executes a shell command in macOS terminal (zsh/bash/fish)", category: .terminal, requiresApproval: false),
+            Tool(id: "web_search", name: "web_search", displayName: "Web Search", description: "Searches the web for documentation, news, APIs, and real-time knowledge", category: .web),
             Tool(id: "calculator", name: "calculator", displayName: "Math Calculator", description: "Evaluates mathematical expressions and formulas", category: .system),
+            Tool(id: "get_current_date", name: "get_current_date", displayName: "Get Current Date", description: "Returns the current date in YYYY-MM-DD format", category: .system),
             Tool(id: "document_extract", name: "document_extract", displayName: "PDF & Vision OCR Extractor", description: "Extracts text from PDF documents via PDFKit or scanned images/receipts via Apple Vision framework OCR", category: .files),
             Tool(id: "workspace_semantic_search", name: "workspace_semantic_search", displayName: "Workspace Semantic Search (RAG)", description: "Performs local semantic chunk search across all source files in the active workspace", category: .files),
+            Tool(id: "generate_image", name: "generate_image", displayName: "Generative Media & Canvas Image", description: "Generates UI diagrams, illustrations, charts, or SVG canvas artwork from prompts", category: .mediaVision),
+            Tool(id: "mlx_vision_describe", name: "mlx_vision_describe", displayName: "MLX Vision Multi-modal Describer", description: "Analyzes images, diagrams, and screenshots using local MLX vision models and Apple Vision classification", category: .mediaVision),
+            Tool(id: "image_analyze", name: "image_analyze", displayName: "Vision OCR & Image Structure Analyzer", description: "Detects text, bounding boxes, labels, and structured components inside screenshots and image files", category: .mediaVision),
             Tool(id: "agent_spawn", name: "agent_spawn", displayName: "Spawn Sub-Agent", description: "Launches a specialized child sub-agent to execute a sub-task autonomously", category: .agents),
             Tool(id: "agent_message", name: "agent_message", displayName: "Message Agent", description: "Sends an inter-agent message or query to another agent in the network", category: .agents),
             Tool(id: "memory_store", name: "memory_store", displayName: "Save to Memory", description: "Saves a persistent fact, preference, or context item to the workspace memory", category: .system),
             Tool(id: "memory_recall", name: "memory_recall", displayName: "Recall Memory", description: "Retrieves stored memories by search term or category", category: .system)
         ]
-        saveTools(defaults)
-        return defaults
+    }
+
+    public func loadTools() -> [Tool] {
+        var items: [Tool] = []
+        if let loaded = storage.load([Tool].self, from: "tools.json"), !loaded.isEmpty {
+            items = loaded
+        } else {
+            items = defaultTools
+            saveTools(items)
+            return items
+        }
+
+        var modified = false
+        for def in defaultTools {
+            if !items.contains(where: { $0.id == def.id || $0.name == def.name }) {
+                items.append(def)
+                modified = true
+            }
+        }
+
+        // Sync tools from configured MCP servers in settings
+        let settings = loadSettings()
+        for server in settings.mcpServers {
+            let toolId = "mcp_\(server.id)"
+            let clean = server.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
+            let toolName = "\(clean)_call"
+            
+            if let idx = items.firstIndex(where: { $0.id == toolId || $0.name == toolName }) {
+                // Update name & metadata if changed
+                items[idx].displayName = "\(server.name) MCP Server"
+                items[idx].description = "Executes tools and actions via the \(server.name) MCP server (\(server.transportType.displayName))"
+                items[idx].category = .mcp
+            } else {
+                items.append(Tool(
+                    id: toolId,
+                    name: toolName,
+                    displayName: "\(server.name) MCP Server",
+                    description: "Executes tools and actions via the \(server.name) MCP server (\(server.transportType.displayName))",
+                    category: .mcp,
+                    isEnabled: server.isEnabled
+                ))
+                modified = true
+            }
+        }
+
+        if modified {
+            saveTools(items)
+        }
+        return items
     }
 
     public func saveTools(_ tools: [Tool]) {
@@ -799,4 +958,162 @@ public final class PersistenceManager: @unchecked Sendable {
     public func savePlugins(_ plugins: [AppExtensionPlugin]) {
         storage.save(plugins, to: "plugins.json")
     }
+
+    // MARK: - Watch Folders & Watch Items
+    public var defaultWatchItems: [WatchItem] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let defaultWorkspacePath = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces/Main")
+        let inputPath = (defaultWorkspacePath as NSString).appendingPathComponent("input")
+
+        return [
+            WatchItem(
+                id: "watch-morning-brief",
+                workspaceId: "default-workspace",
+                name: "Workspace Daily Morning Brief",
+                description: "Monitors workspace root changes and synthesizes a morning executive brief artifact daily.",
+                path: defaultWorkspacePath,
+                watchType: .folder,
+                fileExtensionsFilter: ["swift", "md", "json", "py", "ts", "txt"],
+                targetAgentId: "lead-assistant",
+                artifactTemplate: .morningBrief,
+                outputDestination: "output",
+                isEnabled: true,
+                autoGenerateArtifact: true,
+                debounceIntervalSeconds: 3.0,
+                eventsCount: 4,
+                createdArtifactsCount: 2
+            ),
+            WatchItem(
+                id: "watch-pipeline-input",
+                workspaceId: "default-workspace",
+                name: "Staged Ingestion Pipeline (input/)",
+                description: "Monitors the input staging directory. Auto-processes incoming documents and scripts into output summaries.",
+                path: inputPath,
+                watchType: .folder,
+                fileExtensionsFilter: ["*"],
+                targetAgentId: "data-analyst-agent",
+                artifactTemplate: .fileProcessingPipeline,
+                outputDestination: "output",
+                isEnabled: true,
+                autoGenerateArtifact: true,
+                debounceIntervalSeconds: 2.0,
+                eventsCount: 8,
+                createdArtifactsCount: 4
+            ),
+            WatchItem(
+                id: "watch-code-review-hook",
+                workspaceId: "default-workspace",
+                name: "Real-Time Code Review Watcher",
+                description: "Monitors source code files and generates review artifacts with recommendations on file saves.",
+                path: defaultWorkspacePath,
+                watchType: .pattern,
+                fileExtensionsFilter: ["swift", "ts", "py", "rs", "go"],
+                targetAgentId: "reviewer-agent",
+                artifactTemplate: .codeReviewDigest,
+                outputDestination: "output",
+                isEnabled: true,
+                autoGenerateArtifact: true,
+                debounceIntervalSeconds: 4.0,
+                eventsCount: 3,
+                createdArtifactsCount: 1
+            )
+        ]
+    }
+
+    public func loadWatchItems() -> [WatchItem] {
+        if let items = storage.load([WatchItem].self, from: "watch_items.json"), !items.isEmpty {
+            return items
+        }
+        let defaults = defaultWatchItems
+        saveWatchItems(defaults)
+        return defaults
+    }
+
+    public func saveWatchItems(_ items: [WatchItem]) {
+        storage.save(items, to: "watch_items.json")
+    }
+
+    // MARK: - Automation Generated Artifacts
+    public var defaultArtifacts: [AutomationArtifact] {
+        return [
+            AutomationArtifact(
+                id: "artifact-sample-brief-1",
+                workspaceId: "default-workspace",
+                watchItemId: "watch-morning-brief",
+                agentId: "lead-assistant",
+                agentName: "Lead Assistant",
+                title: "Executive Morning Brief",
+                subtitle: "Automated synthesis of workspace activities & health",
+                category: .brief,
+                content: """
+                # 🌅 Morning Executive Brief
+                *Generated automatically by OpenWork-Swift Agent Pipeline*
+
+                ---
+
+                ### 🚀 Key Focus for Today
+                - **Autonomous Agent Loop**: Native structured tool schemas (`tools` JSON schema) operating across Anthropic, OpenAI, and Ollama.
+                - **Watch Folders Engine**: Real-time folder watching active on workspace directory.
+                - **Workspace Health**: All module builds passing cleanly on macOS 14/15 ARM64.
+
+                ---
+
+                ### 📊 Activity & Modifications Summary
+                - **Recent Changes**: 12 files updated across UI, State, Engine, and Storage layers.
+                - **Memory & Context**: Long-term memory store active with 2 persistent architectural rules.
+                - **Extensions Active**: Filesystem MCP, Web Fetch, Vision OCR, Native Voice Engine.
+
+                ---
+
+                ### 🎯 Recommended Next Steps
+                1. Review pending tasks in the Automations tab.
+                2. Test live artifacts generation in the Live Canvas workbench.
+                3. Inspect inter-agent communication logs in the Side Inspector.
+                """,
+                format: "markdown",
+                sourceTrigger: "Watch Folder: Workspace Morning Brief"
+            ),
+            AutomationArtifact(
+                id: "artifact-sample-daily-2",
+                workspaceId: "default-workspace",
+                watchItemId: "watch-pipeline-input",
+                agentId: "coder-agent",
+                agentName: "Coder Agent",
+                title: "Daily Project & Activity Digest",
+                subtitle: "Summary of code refactoring & pipeline executions",
+                category: .digest,
+                content: """
+                # 📈 Daily Project & Activity Digest
+                **Date:** Today | **Agent:** Coder Agent
+
+                ### 🛠️ Key Milestones Completed:
+                - ✅ Implemented `WatchItem` models & directory monitoring pipeline
+                - ✅ Integrated Claude Co-Work style artifact synthesis engine
+                - ✅ Added Watch Folders navigation tab and Settings management hub
+                - ✅ Verified pure Swift & Apple Silicon zero-electron performance footprint
+
+                ### 📋 System Verification:
+                - Memory footprint: ~48 MB RAM
+                - Binary size: ~8.5 MB native Mach-O
+                - Compilation status: 0 errors, 0 warnings
+                """,
+                format: "markdown",
+                sourceTrigger: "Watch Folder: Staged Ingestion Pipeline"
+            )
+        ]
+    }
+
+    public func loadArtifacts() -> [AutomationArtifact] {
+        if let items = storage.load([AutomationArtifact].self, from: "automation_artifacts.json"), !items.isEmpty {
+            return items
+        }
+        let defaults = defaultArtifacts
+        saveArtifacts(defaults)
+        return defaults
+    }
+
+    public func saveArtifacts(_ artifacts: [AutomationArtifact]) {
+        storage.save(artifacts, to: "automation_artifacts.json")
+    }
 }
+

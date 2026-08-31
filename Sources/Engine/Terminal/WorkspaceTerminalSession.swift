@@ -15,29 +15,46 @@ public final class WorkspaceTerminalSession: ObservableObject {
     @Published public var lines: [TerminalLogLine] = []
     @Published public var isRunning: Bool = false
     @Published public var currentCommand: String = ""
+    @Published public var commandHistory: [String] = []
+    @Published public var activeShellName: String = "zsh"
 
     private var activeProcess: Process?
 
     public init() {
-        appendLine("$ openwork-swift --version", isError: false)
-        appendLine("OpenWork-Swift v1.0.0 (Darwin arm64) - Interactive Workspace Terminal Ready", isError: false)
-        appendLine("Type any macOS shell command below (e.g. ls -la, git status, swift build)", isError: false)
+        let settings = PersistenceManager.shared.loadSettings()
+        let shell = (settings.terminalShell as NSString).lastPathComponent
+        self.activeShellName = shell.isEmpty ? "zsh" : shell
+        
+        appendLine("OpenWork-Swift Interactive Terminal (\(activeShellName))", isError: false)
+        appendLine("Type any command (e.g. ls -la, git status, cargo, swift build, python3)", isError: false)
+        appendLine("----------------------------------------------------------------------", isError: false)
     }
 
-    public func execute(command: String, in workingDirectory: String) {
+    public func execute(command: String, in workingDirectory: String, customShell: String? = nil) {
         guard !command.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         let cmd = command.trimmingCharacters(in: .whitespaces)
-        appendLine("$ \(cmd)", isError: false)
+        
+        if !commandHistory.contains(cmd) {
+            commandHistory.append(cmd)
+        }
+
+        let settings = PersistenceManager.shared.loadSettings()
+        let shellPath = customShell ?? (settings.terminalShell.isEmpty ? "/bin/zsh" : settings.terminalShell)
+        self.activeShellName = (shellPath as NSString).lastPathComponent
+
+        let folderName = ((workingDirectory as NSString).expandingTildeInPath as NSString).lastPathComponent
+        appendLine("[\(folderName)] $ \(cmd)", isError: false)
 
         isRunning = true
         let process = Process()
         let pipe = Pipe()
         let errPipe = Pipe()
 
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.executableURL = URL(fileURLWithPath: shellPath)
         process.arguments = ["-c", cmd]
+        process.environment = ToolExecutionEngine.defaultEnvironment(custom: settings.customEnvironmentVariables)
 
-        let dir = workingDirectory.isEmpty ? FileManager.default.currentDirectoryPath : workingDirectory
+        let dir = workingDirectory.isEmpty ? FileManager.default.currentDirectoryPath : (workingDirectory as NSString).expandingTildeInPath
         process.currentDirectoryURL = URL(fileURLWithPath: dir)
 
         process.standardOutput = pipe
@@ -65,10 +82,12 @@ public final class WorkspaceTerminalSession: ObservableObject {
 
         process.terminationHandler = { [weak self] proc in
             Task { @MainActor [weak self] in
+                pipe.fileHandleForReading.readabilityHandler = nil
+                errPipe.fileHandleForReading.readabilityHandler = nil
                 self?.isRunning = false
                 self?.activeProcess = nil
                 if proc.terminationStatus != 0 {
-                    self?.appendLine("[Process exited with code \(proc.terminationStatus)]", isError: true)
+                    self?.appendLine("[Exited with code \(proc.terminationStatus)]", isError: true)
                 }
             }
         }
@@ -95,10 +114,10 @@ public final class WorkspaceTerminalSession: ObservableObject {
         lines.removeAll()
     }
 
-    private func appendLine(_ text: String, isError: Bool) {
+    public func appendLine(_ text: String, isError: Bool) {
         lines.append(TerminalLogLine(text: text, isError: isError))
-        if lines.count > 1000 {
-            lines.removeFirst(lines.count - 1000)
+        if lines.count > 1500 {
+            lines.removeFirst(lines.count - 1500)
         }
     }
 }

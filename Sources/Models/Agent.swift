@@ -47,7 +47,7 @@ public struct Agent: Identifiable, Codable, Hashable, Sendable {
         id: String = UUID().uuidString,
         name: String,
         description: String = "",
-        avatar: String = "person.crop.circle.badge.sparkables",
+        avatar: String = "person.crop.circle.badge.checkmark",
         color: String = "#8B5CF6",
         role: String = "General Assistant",
         systemPrompt: String = "You are a helpful, expert AI assistant. Provide concise, high quality and accurate answers.",

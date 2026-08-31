@@ -349,7 +349,7 @@ public struct AgentEditModalView: View {
 
     private let availableAvatars = [
         "sparkles", "brain.head.profile", "chevron.left.forwardslash.chevron.right",
-        "checkmark.shield.fill", "square.3.layers.3d.down.right.fill", "terminal.fill",
+        "checkmark.shield.fill", "square.3.layers.3d.down.right", "terminal.fill",
         "wrench.and.screwdriver.fill", "cpu", "globe", "folder.badge.gearshape"
     ]
 
@@ -465,11 +465,23 @@ public struct AgentEditModalView: View {
 
                     // Allowed Tools
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Allowed Tools & Capabilities")
-                            .font(.system(size: 12, weight: .bold))
+                        HStack {
+                            Text("Allowed Tools & Capabilities")
+                                .font(.system(size: 12, weight: .bold))
+                            Spacer()
+                            Button("Select All") {
+                                for t in appState.tools {
+                                    if !draft.allowedToolIds.contains(t.id) {
+                                        draft.allowedToolIds.append(t.id)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11))
+                        }
 
                         ForEach(appState.tools) { tool in
-                            let isIncluded = draft.allowedToolIds.contains(tool.id)
+                            let isIncluded = draft.allowedToolIds.contains(tool.id) || draft.allowedToolIds.contains(tool.name)
                             Toggle(isOn: Binding(
                                 get: { isIncluded },
                                 set: { val in
@@ -478,17 +490,18 @@ public struct AgentEditModalView: View {
                                             draft.allowedToolIds.append(tool.id)
                                         }
                                     } else {
-                                        draft.allowedToolIds.removeAll(where: { $0 == tool.id })
+                                        draft.allowedToolIds.removeAll(where: { $0 == tool.id || $0 == tool.name })
                                     }
                                 }
                             )) {
-                                HStack {
+                                HStack(spacing: 6) {
                                     Image(systemName: tool.category.icon)
                                         .font(.system(size: 11))
-                                    Text(tool.name)
-                                        .font(.system(size: 11.5))
-                                    Text("(\(tool.description))")
-                                        .font(.system(size: 10))
+                                        .foregroundColor(tool.category == .mcp ? ThemeColors.accent(for: appState.settings.accentColor) : .primary)
+                                    Text(tool.displayName)
+                                        .font(.system(size: 11.5, weight: .medium))
+                                    Text("(\(tool.name))")
+                                        .font(.system(size: 10, design: .monospaced))
                                         .foregroundColor(.secondary)
                                 }
                             }

@@ -17,3 +17,6 @@ DerivedData/
 .env
 .env.local
 *.key
+
+# AutoClaw KDream data
+.autoclaw/

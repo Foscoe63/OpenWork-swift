@@ -100,13 +100,28 @@ public struct AutomationsView: View {
 
                 Spacer()
 
-                Button("Run Now") {
-                    appState.showToast("Triggered automation: \(auto.name)")
-                    appState.createNewSession(agentId: auto.targetAgentId)
-                    appState.sendMessage(text: auto.promptTemplate)
+                HStack(spacing: 6) {
+                    Button {
+                        appState.createArtifactFromAutomation(auto)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "sparkles")
+                            Text("Synthesize Artifact")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .font(.system(size: 11))
+                    .controlSize(.small)
+
+                    Button("Run in Chat") {
+                        appState.showToast("Triggered automation: \(auto.name)")
+                        appState.createNewSession(agentId: auto.targetAgentId)
+                        appState.sendMessage(text: auto.promptTemplate)
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.system(size: 11))
+                    .controlSize(.small)
                 }
-                .buttonStyle(.bordered)
-                .font(.system(size: 11))
 
                 Toggle("", isOn: Binding(
                     get: { auto.isEnabled },

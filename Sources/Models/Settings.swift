@@ -130,6 +130,20 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
         self.env = env
         self.isEnabled = isEnabled
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        self.name = try container.decodeIfPresent(String.self, forKey: .name) ?? "MCP Server"
+        self.transportType = try container.decodeIfPresent(MCPTransportType.self, forKey: .transportType) ?? .stdio
+        self.command = try container.decodeIfPresent(String.self, forKey: .command) ?? "npx"
+        self.args = try container.decodeIfPresent([String].self, forKey: .args) ?? []
+        self.workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory) ?? ""
+        self.url = try container.decodeIfPresent(String.self, forKey: .url) ?? ""
+        self.headers = try container.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+        self.env = try container.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
+        self.isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+    }
 }
 
 public struct AppSettings: Codable, Hashable, Sendable {
@@ -145,15 +159,21 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var defaultTemperature: Double
     public var defaultMaxTokens: Int
     public var defaultTopP: Double
+    public var defaultPresencePenalty: Double
+    public var defaultFrequencyPenalty: Double
+    public var defaultRepeatPenalty: Double
+    public var autoAdjustPenaltiesForLocalModels: Bool
+    public var autoLoopBreakerEnabled: Bool
     public var defaultReasoningEffort: ReasoningEffort
     public var streamResponses: Bool
     public var autoCompactContext: Bool
     public var contextCompactionThresholdTokens: Int
     public var playNotificationSounds: Bool
 
-    // Permissions
+    // Permissions & Shell
     public var authorizedFolders: [String]
     public var terminalSafetyLevel: TerminalSafetyLevel
+    public var terminalShell: String // e.g. "/bin/zsh", "/bin/bash", "/opt/homebrew/bin/fish"
     public var allowWebAccess: Bool
     public var sandboxAgentFileSystem: Bool
 
@@ -179,6 +199,15 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var speechVoiceIdentifier: String
     public var imageGenerationEnabled: Bool
 
+    // MLX Local Runtime & External Models (GrizzyClaw & Osaurus Parity)
+    public var customMLXModelsDirectory: String
+    public var scanHuggingFaceCache: Bool
+    public var scanLMStudioModels: Bool
+    public var customHFCachePath: String
+    public var autoLoadTopMLXModelOnLaunch: Bool
+    public var mlxGpuMemoryBudgetRatio: Double
+    public var mlxContextLength: Int
+
     // Environment
     public var customEnvironmentVariables: [String: String]
 
@@ -193,6 +222,56 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var developerMode: Bool
     public var verboseLogging: Bool
 
+    public static var defaultMCPServers: [MCPServerConfig] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let workspaceMain = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces/Main")
+        return [
+            MCPServerConfig(
+                id: "mcp-filesystem",
+                name: "Filesystem MCP",
+                transportType: .stdio,
+                command: "npx",
+                args: ["-y", "@modelcontextprotocol/server-filesystem", workspaceMain],
+                workingDirectory: workspaceMain,
+                isEnabled: true
+            ),
+            MCPServerConfig(
+                id: "mcp-fetch",
+                name: "Web Fetch MCP",
+                transportType: .stdio,
+                command: "npx",
+                args: ["-y", "@modelcontextprotocol/server-fetch"],
+                isEnabled: true
+            ),
+            MCPServerConfig(
+                id: "mcp-memory",
+                name: "Memory Graph MCP",
+                transportType: .stdio,
+                command: "npx",
+                args: ["-y", "@modelcontextprotocol/server-memory"],
+                isEnabled: true
+            ),
+            MCPServerConfig(
+                id: "mcp-git",
+                name: "Git Repository MCP",
+                transportType: .stdio,
+                command: "npx",
+                args: ["-y", "@modelcontextprotocol/server-git", "--repository", workspaceMain],
+                workingDirectory: workspaceMain,
+                isEnabled: true
+            ),
+            MCPServerConfig(
+                id: "mcp-macuse",
+                name: "MacUse",
+                transportType: .stdio,
+                command: "npx",
+                args: ["-y", "macuse-mcp"],
+                workingDirectory: workspaceMain,
+                isEnabled: true
+            )
+        ]
+    }
+
     public init(
         defaultWorkspaceId: String = "default-workspace",
         defaultAgentId: String = "lead-assistant",
@@ -203,6 +282,11 @@ public struct AppSettings: Codable, Hashable, Sendable {
         defaultTemperature: Double = 0.7,
         defaultMaxTokens: Int = 4096,
         defaultTopP: Double = 1.0,
+        defaultPresencePenalty: Double = 0.35,
+        defaultFrequencyPenalty: Double = 0.35,
+        defaultRepeatPenalty: Double = 1.25,
+        autoAdjustPenaltiesForLocalModels: Bool = true,
+        autoLoopBreakerEnabled: Bool = true,
         defaultReasoningEffort: ReasoningEffort = .medium,
         streamResponses: Bool = true,
         autoCompactContext: Bool = true,
@@ -210,6 +294,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         playNotificationSounds: Bool = true,
         authorizedFolders: [String] = [FileManager.default.homeDirectoryForCurrentUser.path],
         terminalSafetyLevel: TerminalSafetyLevel = .safeOnly,
+        terminalShell: String = "/bin/zsh",
         allowWebAccess: Bool = true,
         sandboxAgentFileSystem: Bool = false,
         theme: AppTheme = .dark,
@@ -223,11 +308,18 @@ public struct AppSettings: Codable, Hashable, Sendable {
         maxAutonomousIterations: Int = 25,
         showInterAgentCommunicationLogs: Bool = true,
         enableAgentCollaborationRoom: Bool = true,
-        mcpServers: [MCPServerConfig] = [],
+        mcpServers: [MCPServerConfig] = defaultMCPServers,
         voiceInputEnabled: Bool = false,
         voiceSynthesisEnabled: Bool = false,
         speechVoiceIdentifier: String = "com.apple.speech.synthesis.voice.Alex",
         imageGenerationEnabled: Bool = true,
+        customMLXModelsDirectory: String = "",
+        scanHuggingFaceCache: Bool = true,
+        scanLMStudioModels: Bool = true,
+        customHFCachePath: String = "",
+        autoLoadTopMLXModelOnLaunch: Bool = false,
+        mlxGpuMemoryBudgetRatio: Double = 0.75,
+        mlxContextLength: Int = 131072,
         customEnvironmentVariables: [String: String] = ["OPENWORK_ENV": "development"],
         cloudSyncEnabled: Bool = false,
         cloudControlPlaneUrl: String = "https://cloud.openwork.ai/api",
@@ -246,6 +338,11 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.defaultTemperature = defaultTemperature
         self.defaultMaxTokens = defaultMaxTokens
         self.defaultTopP = defaultTopP
+        self.defaultPresencePenalty = defaultPresencePenalty
+        self.defaultFrequencyPenalty = defaultFrequencyPenalty
+        self.defaultRepeatPenalty = defaultRepeatPenalty
+        self.autoAdjustPenaltiesForLocalModels = autoAdjustPenaltiesForLocalModels
+        self.autoLoopBreakerEnabled = autoLoopBreakerEnabled
         self.defaultReasoningEffort = defaultReasoningEffort
         self.streamResponses = streamResponses
         self.autoCompactContext = autoCompactContext
@@ -253,6 +350,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.playNotificationSounds = playNotificationSounds
         self.authorizedFolders = authorizedFolders
         self.terminalSafetyLevel = terminalSafetyLevel
+        self.terminalShell = terminalShell
         self.allowWebAccess = allowWebAccess
         self.sandboxAgentFileSystem = sandboxAgentFileSystem
         self.theme = theme
@@ -266,11 +364,18 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.maxAutonomousIterations = maxAutonomousIterations
         self.showInterAgentCommunicationLogs = showInterAgentCommunicationLogs
         self.enableAgentCollaborationRoom = enableAgentCollaborationRoom
-        self.mcpServers = mcpServers
+        self.mcpServers = mcpServers.isEmpty ? AppSettings.defaultMCPServers : mcpServers
         self.voiceInputEnabled = voiceInputEnabled
         self.voiceSynthesisEnabled = voiceSynthesisEnabled
         self.speechVoiceIdentifier = speechVoiceIdentifier
         self.imageGenerationEnabled = imageGenerationEnabled
+        self.customMLXModelsDirectory = customMLXModelsDirectory
+        self.scanHuggingFaceCache = scanHuggingFaceCache
+        self.scanLMStudioModels = scanLMStudioModels
+        self.customHFCachePath = customHFCachePath
+        self.autoLoadTopMLXModelOnLaunch = autoLoadTopMLXModelOnLaunch
+        self.mlxGpuMemoryBudgetRatio = mlxGpuMemoryBudgetRatio
+        self.mlxContextLength = mlxContextLength
         self.customEnvironmentVariables = customEnvironmentVariables
         self.cloudSyncEnabled = cloudSyncEnabled
         self.cloudControlPlaneUrl = cloudControlPlaneUrl
@@ -281,5 +386,79 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.verboseLogging = verboseLogging
     }
 
-    public static let `default` = AppSettings()
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let def = AppSettings.default
+
+        self.defaultWorkspaceId = try container.decodeIfPresent(String.self, forKey: .defaultWorkspaceId) ?? def.defaultWorkspaceId
+        self.defaultAgentId = try container.decodeIfPresent(String.self, forKey: .defaultAgentId) ?? def.defaultAgentId
+        self.defaultProviderId = try container.decodeIfPresent(String.self, forKey: .defaultProviderId) ?? def.defaultProviderId
+        self.defaultModelId = try container.decodeIfPresent(String.self, forKey: .defaultModelId) ?? def.defaultModelId
+        self.autoSaveIntervalSeconds = try container.decodeIfPresent(Int.self, forKey: .autoSaveIntervalSeconds) ?? def.autoSaveIntervalSeconds
+        self.startOnLogin = try container.decodeIfPresent(Bool.self, forKey: .startOnLogin) ?? def.startOnLogin
+
+        self.defaultTemperature = try container.decodeIfPresent(Double.self, forKey: .defaultTemperature) ?? def.defaultTemperature
+        self.defaultMaxTokens = try container.decodeIfPresent(Int.self, forKey: .defaultMaxTokens) ?? def.defaultMaxTokens
+        self.defaultTopP = try container.decodeIfPresent(Double.self, forKey: .defaultTopP) ?? def.defaultTopP
+        self.defaultPresencePenalty = try container.decodeIfPresent(Double.self, forKey: .defaultPresencePenalty) ?? def.defaultPresencePenalty
+        self.defaultFrequencyPenalty = try container.decodeIfPresent(Double.self, forKey: .defaultFrequencyPenalty) ?? def.defaultFrequencyPenalty
+        self.defaultRepeatPenalty = try container.decodeIfPresent(Double.self, forKey: .defaultRepeatPenalty) ?? def.defaultRepeatPenalty
+        self.autoAdjustPenaltiesForLocalModels = try container.decodeIfPresent(Bool.self, forKey: .autoAdjustPenaltiesForLocalModels) ?? def.autoAdjustPenaltiesForLocalModels
+        self.autoLoopBreakerEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoLoopBreakerEnabled) ?? def.autoLoopBreakerEnabled
+        self.defaultReasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .defaultReasoningEffort) ?? def.defaultReasoningEffort
+        self.streamResponses = try container.decodeIfPresent(Bool.self, forKey: .streamResponses) ?? def.streamResponses
+        self.autoCompactContext = try container.decodeIfPresent(Bool.self, forKey: .autoCompactContext) ?? def.autoCompactContext
+        self.contextCompactionThresholdTokens = try container.decodeIfPresent(Int.self, forKey: .contextCompactionThresholdTokens) ?? def.contextCompactionThresholdTokens
+        self.playNotificationSounds = try container.decodeIfPresent(Bool.self, forKey: .playNotificationSounds) ?? def.playNotificationSounds
+
+        self.authorizedFolders = try container.decodeIfPresent([String].self, forKey: .authorizedFolders) ?? def.authorizedFolders
+        self.terminalSafetyLevel = try container.decodeIfPresent(TerminalSafetyLevel.self, forKey: .terminalSafetyLevel) ?? def.terminalSafetyLevel
+        self.terminalShell = try container.decodeIfPresent(String.self, forKey: .terminalShell) ?? def.terminalShell
+        self.allowWebAccess = try container.decodeIfPresent(Bool.self, forKey: .allowWebAccess) ?? def.allowWebAccess
+        self.sandboxAgentFileSystem = try container.decodeIfPresent(Bool.self, forKey: .sandboxAgentFileSystem) ?? def.sandboxAgentFileSystem
+
+        self.theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? def.theme
+        self.accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? def.accentColor
+        self.uiScalePercent = try container.decodeIfPresent(Int.self, forKey: .uiScalePercent) ?? def.uiScalePercent
+        self.editorFontSize = try container.decodeIfPresent(Int.self, forKey: .editorFontSize) ?? def.editorFontSize
+        self.useTranslucentBackground = try container.decodeIfPresent(Bool.self, forKey: .useTranslucentBackground) ?? def.useTranslucentBackground
+        self.compactSidebar = try container.decodeIfPresent(Bool.self, forKey: .compactSidebar) ?? def.compactSidebar
+
+        self.allowSubAgentCreation = try container.decodeIfPresent(Bool.self, forKey: .allowSubAgentCreation) ?? def.allowSubAgentCreation
+        self.maxGlobalSubAgentDepth = try container.decodeIfPresent(Int.self, forKey: .maxGlobalSubAgentDepth) ?? def.maxGlobalSubAgentDepth
+        self.maxAutonomousIterations = try container.decodeIfPresent(Int.self, forKey: .maxAutonomousIterations) ?? def.maxAutonomousIterations
+        self.showInterAgentCommunicationLogs = try container.decodeIfPresent(Bool.self, forKey: .showInterAgentCommunicationLogs) ?? def.showInterAgentCommunicationLogs
+        self.enableAgentCollaborationRoom = try container.decodeIfPresent(Bool.self, forKey: .enableAgentCollaborationRoom) ?? def.enableAgentCollaborationRoom
+
+        let decodedMcp = try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers) ?? []
+        self.mcpServers = decodedMcp.isEmpty ? AppSettings.defaultMCPServers : decodedMcp
+
+        self.voiceInputEnabled = try container.decodeIfPresent(Bool.self, forKey: .voiceInputEnabled) ?? def.voiceInputEnabled
+        self.voiceSynthesisEnabled = try container.decodeIfPresent(Bool.self, forKey: .voiceSynthesisEnabled) ?? def.voiceSynthesisEnabled
+        self.speechVoiceIdentifier = try container.decodeIfPresent(String.self, forKey: .speechVoiceIdentifier) ?? def.speechVoiceIdentifier
+        self.imageGenerationEnabled = try container.decodeIfPresent(Bool.self, forKey: .imageGenerationEnabled) ?? def.imageGenerationEnabled
+
+        self.customMLXModelsDirectory = try container.decodeIfPresent(String.self, forKey: .customMLXModelsDirectory) ?? def.customMLXModelsDirectory
+        self.scanHuggingFaceCache = try container.decodeIfPresent(Bool.self, forKey: .scanHuggingFaceCache) ?? def.scanHuggingFaceCache
+        self.scanLMStudioModels = try container.decodeIfPresent(Bool.self, forKey: .scanLMStudioModels) ?? def.scanLMStudioModels
+        self.customHFCachePath = try container.decodeIfPresent(String.self, forKey: .customHFCachePath) ?? def.customHFCachePath
+        self.autoLoadTopMLXModelOnLaunch = try container.decodeIfPresent(Bool.self, forKey: .autoLoadTopMLXModelOnLaunch) ?? def.autoLoadTopMLXModelOnLaunch
+        self.mlxGpuMemoryBudgetRatio = try container.decodeIfPresent(Double.self, forKey: .mlxGpuMemoryBudgetRatio) ?? def.mlxGpuMemoryBudgetRatio
+        self.mlxContextLength = try container.decodeIfPresent(Int.self, forKey: .mlxContextLength) ?? def.mlxContextLength
+
+        self.customEnvironmentVariables = try container.decodeIfPresent([String: String].self, forKey: .customEnvironmentVariables) ?? def.customEnvironmentVariables
+
+        self.cloudSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .cloudSyncEnabled) ?? def.cloudSyncEnabled
+        self.cloudControlPlaneUrl = try container.decodeIfPresent(String.self, forKey: .cloudControlPlaneUrl) ?? def.cloudControlPlaneUrl
+        self.cloudAccountEmail = try container.decodeIfPresent(String.self, forKey: .cloudAccountEmail) ?? def.cloudAccountEmail
+        self.cloudOrganizationName = try container.decodeIfPresent(String.self, forKey: .cloudOrganizationName) ?? def.cloudOrganizationName
+
+        self.autoCheckForUpdates = try container.decodeIfPresent(Bool.self, forKey: .autoCheckForUpdates) ?? def.autoCheckForUpdates
+        self.developerMode = try container.decodeIfPresent(Bool.self, forKey: .developerMode) ?? def.developerMode
+        self.verboseLogging = try container.decodeIfPresent(Bool.self, forKey: .verboseLogging) ?? def.verboseLogging
+    }
+
+    public static var `default`: AppSettings {
+        AppSettings()
+    }
 }

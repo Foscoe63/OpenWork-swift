@@ -23,6 +23,8 @@ public struct SettingsView: View {
     @State private var newWsCategory: WorkspaceCategory = .general
     @State private var newWsAgentId = ""
     @State private var newWsFolderPath = ""
+    @State private var showingAddWatchItemModal = false
+    @State private var editingWatchItem: WatchItem? = nil
 
     public init(appState: AppState) {
         self.appState = appState
@@ -52,10 +54,14 @@ public struct SettingsView: View {
                         switch appState.settingsTab {
                         case "general":
                             generalPage
+                        case "mlx":
+                            mlxSettingsPage
                         case "preferences":
                             preferencesPage
                         case "permissions":
                             permissionsPage
+                        case "watchFolders":
+                            watchFoldersPage
                         case "extensions":
                             extensionsPage
                         case "advanced":
@@ -109,6 +115,15 @@ public struct SettingsView: View {
                 get: { selectedPluginForDetail != nil },
                 set: { if !$0 { selectedPluginForDetail = nil } }
             ), plugin: plug)
+        }
+        .sheet(isPresented: $showingAddWatchItemModal) {
+            WatchItemEditModalView(appState: appState, isPresented: $showingAddWatchItemModal)
+        }
+        .sheet(item: $editingWatchItem) { item in
+            WatchItemEditModalView(appState: appState, isPresented: Binding(
+                get: { editingWatchItem != nil },
+                set: { if !$0 { editingWatchItem = nil } }
+            ), watchItem: item)
         }
     }
 
@@ -277,8 +292,10 @@ public struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     // WORKSPACE GROUP
                     sidebarGroup(title: "WORKSPACE") {
+                        sidebarItem(id: "mlx", title: "Apple Silicon MLX", icon: "cpu.fill")
                         sidebarItem(id: "preferences", title: "Preferences", icon: "slider.horizontal.3")
                         sidebarItem(id: "permissions", title: "Permissions & Folders", icon: "folder.badge.gearshape")
+                        sidebarItem(id: "watchFolders", title: "Watch Folders & Triggers", icon: "eye.circle.fill")
                         sidebarItem(id: "extensions", title: "Extensions & Plugins", icon: "puzzlepiece.extension")
                         sidebarItem(id: "advanced", title: "Advanced", icon: "wrench.and.screwdriver")
                     }
@@ -450,7 +467,7 @@ public struct SettingsView: View {
                     .frame(width: 240)
                 }
 
-                SettingsRow(title: "Assigned Agent Sandbox", subtitle: "Bind this workspace to a dedicated AI Agent role", icon: "person.crop.circle.badge.sparkables") {
+                SettingsRow(title: "Assigned Agent Sandbox", subtitle: "Bind this workspace to a dedicated AI Agent role", icon: "person.crop.circle.badge.checkmark") {
                     Picker("", selection: Binding(
                         get: { appState.currentWorkspace.assignedAgentId ?? "" },
                         set: { newAgentId in
@@ -670,7 +687,7 @@ public struct SettingsView: View {
                 }
             }
 
-            SettingsCard(title: "Default Lead Agent & Model", description: "Default selections for new sessions", icon: "person.crop.circle.badge.sparkables") {
+            SettingsCard(title: "Default Lead Agent & Model", description: "Default selections for new sessions", icon: "person.crop.circle.badge.checkmark") {
                 SettingsRow(title: "Default Agent", subtitle: "Initial agent assigned to new chats", icon: "person.fill") {
                     Picker("", selection: $appState.settings.defaultAgentId) {
                         ForEach(appState.agents) { ag in
@@ -681,9 +698,33 @@ public struct SettingsView: View {
                 }
 
                 SettingsRow(title: "Default Model Provider", subtitle: "Provider for default inference", icon: "server.rack") {
-                    Picker("", selection: $appState.settings.defaultProviderId) {
+                    Picker("", selection: Binding(
+                        get: { appState.settings.defaultProviderId },
+                        set: { newProvId in
+                            appState.settings.defaultProviderId = newProvId
+                            if let prov = appState.providers.first(where: { $0.id == newProvId }) {
+                                if !prov.models.contains(where: { $0.id == appState.settings.defaultModelId }) {
+                                    appState.settings.defaultModelId = prov.models.first?.id ?? ""
+                                }
+                            }
+                            appState.updateSettings(appState.settings)
+                        }
+                    )) {
                         ForEach(appState.providers.filter { $0.isEnabled }) { prov in
                             Text(prov.name).tag(prov.id)
+                        }
+                    }
+                    .frame(width: 220)
+                }
+
+                // Default Model Picker
+                let currentProv = appState.providers.first(where: { $0.id == appState.settings.defaultProviderId }) ?? appState.providers.first
+                SettingsRow(title: "Default Model", subtitle: "Primary model used for new sessions (\(currentProv?.name ?? "Provider"))", icon: "cpu") {
+                    Picker("", selection: $appState.settings.defaultModelId) {
+                        if let prov = currentProv {
+                            ForEach(prov.models) { model in
+                                Text("\(model.name) (\(model.speedTier))").tag(model.id)
+                            }
                         }
                     }
                     .frame(width: 220)
@@ -703,12 +744,258 @@ public struct SettingsView: View {
         }
     }
 
+    // MLX Settings Page (Parity with Osaurus & GrizzyClaw)
+    private var mlxSettingsPage: some View {
+        VStack(spacing: 16) {
+            // Hardware Status Card
+            SettingsCard(
+                title: "Apple Silicon Unified Memory",
+                description: "Hardware telemetry and runtime budget for MLX metal shaders",
+                icon: "cpu.fill"
+            ) {
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Total Physical RAM")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Text(String(format: "%.1f GB", LocalMLXEngine.physicalRAMGB))
+                            .font(.system(size: 16, weight: .bold))
+                    }
+                    Divider().frame(height: 30)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Safe GPU Memory Budget")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Text(String(format: "%.1f GB (%.0f%%)", LocalMLXEngine.physicalRAMGB * appState.settings.mlxGpuMemoryBudgetRatio, appState.settings.mlxGpuMemoryBudgetRatio * 100))
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.green)
+                    }
+                    Divider().frame(height: 30)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Installed MLX Models")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Text("\(appState.localMLXModels.filter { $0.isDownloaded }.count) Active")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+
+                SettingsRow(title: "GPU Memory Budget Ratio", subtitle: "Fraction of unified RAM allocated for weights + KV cache", icon: "gauge.with.dots.needle.bottom.50percent") {
+                    HStack(spacing: 8) {
+                        Slider(value: $appState.settings.mlxGpuMemoryBudgetRatio, in: 0.5...0.9, step: 0.05)
+                            .frame(width: 140)
+                        Text("\(Int(appState.settings.mlxGpuMemoryBudgetRatio * 100))%")
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                }
+
+                SettingsRow(title: "Default Context Length", subtitle: "Maximum token sequence context for MLX generation", icon: "ruler") {
+                    Picker("", selection: $appState.settings.mlxContextLength) {
+                        Text("32K (32,768)").tag(32768)
+                        Text("64K (65,536)").tag(65536)
+                        Text("128K (131,072)").tag(131072)
+                        Text("256K (262,144)").tag(262144)
+                    }
+                    .frame(width: 160)
+                }
+            }
+
+            // External Model Discovery Locations (Osaurus Parity)
+            SettingsCard(
+                title: "External Model Locations & Hub Caches",
+                description: "Scan existing model weights on this Mac without copying or duplicating files",
+                icon: "externaldrive.badge.person.crop"
+            ) {
+                SettingsRow(title: "Hugging Face Cache (~/.cache/huggingface)", subtitle: "Reference downloaded Hugging Face snapshots in-place", icon: "folder.badge.gearshape") {
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.scanHuggingFaceCache },
+                        set: { val in
+                            appState.settings.scanHuggingFaceCache = val
+                            appState.updateSettings(appState.settings)
+                            appState.rescanMLXModels()
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                }
+
+                if appState.settings.scanHuggingFaceCache {
+                    SettingsRow(title: "Custom HF Cache Path", subtitle: "Optional custom HF_HOME or HF_HUB_CACHE folder", icon: "folder") {
+                        HStack(spacing: 6) {
+                            TextField("~/.cache/huggingface/hub", text: $appState.settings.customHFCachePath)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 220)
+                            Button("Browse...") {
+                                let panel = NSOpenPanel()
+                                panel.canChooseFiles = false
+                                panel.canChooseDirectories = true
+                                if panel.runModal() == .OK, let url = panel.url {
+                                    appState.settings.customHFCachePath = url.path
+                                    appState.updateSettings(appState.settings)
+                                    appState.rescanMLXModels()
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                }
+
+                SettingsRow(title: "LM Studio Library (~/.cache/lm-studio)", subtitle: "Discover safetensors and MLX weights from LM Studio", icon: "desktopcomputer") {
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.scanLMStudioModels },
+                        set: { val in
+                            appState.settings.scanLMStudioModels = val
+                            appState.updateSettings(appState.settings)
+                            appState.rescanMLXModels()
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                }
+
+                SettingsRow(title: "Custom MLX Models Directory", subtitle: "Specific folder on external SSD or hard drive", icon: "externaldrive.fill") {
+                    HStack(spacing: 6) {
+                        TextField("~/.openwork/mlx_models", text: $appState.settings.customMLXModelsDirectory)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                        Button("Browse...") {
+                            let panel = NSOpenPanel()
+                            panel.canChooseFiles = false
+                            panel.canChooseDirectories = true
+                            if panel.runModal() == .OK, let url = panel.url {
+                                appState.settings.customMLXModelsDirectory = url.path
+                                appState.updateSettings(appState.settings)
+                                appState.rescanMLXModels()
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
+                HStack {
+                    if appState.isScanningMLX {
+                        ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
+                        Text("Scanning local directories...")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("\(appState.localMLXModels.filter { $0.isDownloaded }.count) local models discovered")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        appState.rescanMLXModels()
+                    } label: {
+                        Label("Rescan Now", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(appState.isScanningMLX)
+                }
+                .padding(.top, 4)
+            }
+
+            // Discovered & Curated MLX Models List
+            SettingsCard(
+                title: "MLX Model Catalog & Installed Weights (\(appState.localMLXModels.count))",
+                description: "Select, run, or download Apple Silicon optimized model weights",
+                icon: "square.grid.2x2.fill"
+            ) {
+                VStack(spacing: 8) {
+                    ForEach(appState.localMLXModels) { model in
+                        HStack(alignment: .center, spacing: 12) {
+                            Image(systemName: model.useCase.iconName)
+                                .font(.system(size: 14))
+                                .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                                .frame(width: 24, height: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(model.name)
+                                        .font(.system(size: 12, weight: .bold))
+
+                                    if let q = model.quantization {
+                                        Text(q)
+                                            .font(.system(size: 9.5, weight: .medium))
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1.5)
+                                            .background(ThemeColors.border(for: appState.settings.theme))
+                                            .cornerRadius(4)
+                                    }
+
+                                    if model.isDownloaded {
+                                        Text("INSTALLED")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .padding(.horizontal, 4)
+                                            .padding(.vertical, 1)
+                                            .background(Color.green.opacity(0.2))
+                                            .foregroundColor(.green)
+                                            .cornerRadius(3)
+                                    }
+
+                                    Text(model.compatibility.displayName)
+                                        .font(.system(size: 9.5))
+                                        .foregroundColor(model.compatibility == .runsWell ? .green : (model.compatibility == .tight ? .orange : .red))
+                                }
+
+                                Text(model.description)
+                                    .font(.system(size: 10.5))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+
+                            Spacer()
+
+                            Text(model.formattedRAM)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(.secondary)
+
+                            if model.isDownloaded {
+                                Button("Select Model") {
+                                    if let omlx = appState.providers.first(where: { $0.kind == .omlx }) {
+                                        appState.selectedProviderId = omlx.id
+                                        appState.selectedModelId = model.id
+                                        appState.showToast("Selected \(model.name) as active model")
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            } else {
+                                Button("Download (\(model.formattedSize))") {
+                                    appState.pullMLXModel(model)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                        .padding(10)
+                        .background(ThemeColors.cardBg(for: appState.settings.theme))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(ThemeColors.border(for: appState.settings.theme).opacity(0.6), lineWidth: 1)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     // 2. Preferences
     private var preferencesPage: some View {
         VStack(spacing: 16) {
             SettingsCard(title: "Inference & Reasoning", description: "Sampling parameters for autonomous LLM responses", icon: "slider.horizontal.3") {
                 SettingsRow(title: "Temperature (\(String(format: "%.2f", appState.settings.defaultTemperature)))", subtitle: "Lower for precise coding, higher for creative research", icon: "thermometer.medium") {
                     Slider(value: $appState.settings.defaultTemperature, in: 0.0...1.0, step: 0.05)
+                        .frame(width: 180)
+                }
+
+                SettingsRow(title: "Top-P Sampling (\(String(format: "%.2f", appState.settings.defaultTopP)))", subtitle: "Nucleus sampling probability threshold", icon: "chart.bar.xaxis") {
+                    Slider(value: $appState.settings.defaultTopP, in: 0.1...1.0, step: 0.05)
                         .frame(width: 180)
                 }
 
@@ -724,6 +1011,91 @@ public struct SettingsView: View {
                     }
                     .frame(width: 200)
                 }
+            }
+
+            SettingsCard(title: "Repetition, Presence & Loop Control", description: "Fine-tune penalties and loop prevention across any LLM provider", icon: "repeat.circle.fill") {
+                SettingsRow(title: "Frequency Penalty (\(String(format: "%.2f", appState.settings.defaultFrequencyPenalty)))", subtitle: "Penalizes repeated tokens based on cumulative frequency (-2.0 to 2.0)", icon: "waveform.path.ecg") {
+                    HStack(spacing: 8) {
+                        Slider(value: $appState.settings.defaultFrequencyPenalty, in: 0.0...1.0, step: 0.05)
+                            .frame(width: 140)
+                        Button("0.35") {
+                            appState.settings.defaultFrequencyPenalty = 0.35
+                            appState.updateSettings(appState.settings)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+                }
+
+                SettingsRow(title: "Presence Penalty (\(String(format: "%.2f", appState.settings.defaultPresencePenalty)))", subtitle: "Penalizes repeated tokens based on presence in generated text (-2.0 to 2.0)", icon: "sparkle") {
+                    HStack(spacing: 8) {
+                        Slider(value: $appState.settings.defaultPresencePenalty, in: 0.0...1.0, step: 0.05)
+                            .frame(width: 140)
+                        Button("0.35") {
+                            appState.settings.defaultPresencePenalty = 0.35
+                            appState.updateSettings(appState.settings)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+                }
+
+                SettingsRow(title: "Repeat Penalty (\(String(format: "%.2f", appState.settings.defaultRepeatPenalty)))", subtitle: "Multiplicative penalty used by Ollama and local engines (1.0 to 2.0)", icon: "arrow.triangle.2.circlepath") {
+                    HStack(spacing: 8) {
+                        Slider(value: $appState.settings.defaultRepeatPenalty, in: 1.0...2.0, step: 0.05)
+                            .frame(width: 140)
+                        Button("1.25") {
+                            appState.settings.defaultRepeatPenalty = 1.25
+                            appState.updateSettings(appState.settings)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+                }
+
+                SettingsRow(title: "Auto-Detect & Optimize for Local Models", subtitle: "Automatically apply higher penalties and ReAct safety for MLX, Ollama, and local endpoints", icon: "wand.and.stars") {
+                    Toggle("", isOn: $appState.settings.autoAdjustPenaltiesForLocalModels)
+                        .toggleStyle(.switch)
+                }
+
+                SettingsRow(title: "Autonomous Stream Loop Breaker", subtitle: "Halt autoregressive sentence looping in real-time using fuzzy similarity", icon: "shield.lefthalf.filled") {
+                    Toggle("", isOn: $appState.settings.autoLoopBreakerEnabled)
+                        .toggleStyle(.switch)
+                }
+
+                // Quick Diagnosis & Auto-Tuning presets
+                HStack(spacing: 10) {
+                    Button {
+                        // Preset for local MLX / Ollama models (prone to repetition)
+                        appState.settings.defaultFrequencyPenalty = 0.35
+                        appState.settings.defaultPresencePenalty = 0.35
+                        appState.settings.defaultRepeatPenalty = 1.25
+                        appState.settings.autoAdjustPenaltiesForLocalModels = true
+                        appState.settings.autoLoopBreakerEnabled = true
+                        appState.updateSettings(appState.settings)
+                        appState.showToast("Applied Optimized Anti-Looping Preset")
+                    } label: {
+                        Label("Apply Anti-Looping Preset (Recommended for MLX/Ollama)", systemImage: "bolt.badge.checkmark.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button {
+                        // Preset for cloud models (OpenAI/Anthropic/DeepSeek)
+                        appState.settings.defaultFrequencyPenalty = 0.0
+                        appState.settings.defaultPresencePenalty = 0.0
+                        appState.settings.defaultRepeatPenalty = 1.0
+                        appState.settings.autoAdjustPenaltiesForLocalModels = true
+                        appState.settings.autoLoopBreakerEnabled = true
+                        appState.updateSettings(appState.settings)
+                        appState.showToast("Applied Standard Cloud Model Defaults")
+                    } label: {
+                        Label("Reset to Standard Defaults", systemImage: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.top, 4)
             }
 
             SettingsCard(title: "Chat Experience", description: "Streaming and context management", icon: "bubble.left.and.bubble.right") {
@@ -748,8 +1120,39 @@ public struct SettingsView: View {
     // 3. Permissions
     private var permissionsPage: some View {
         VStack(spacing: 16) {
-            SettingsCard(title: "Terminal & Shell Safety", description: "Command execution boundaries for autonomous agents", icon: "terminal.fill") {
-                SettingsRow(title: "Safety Level", subtitle: "Permission policy for shell commands", icon: "shield") {
+            SettingsCard(title: "Terminal & Shell Configuration", description: "Default shell binary, execution environment, and interactive console", icon: "terminal.fill") {
+                SettingsRow(title: "Default Terminal Shell", subtitle: "Shell executable for terminal tools and interactive console", icon: "chevron.left.forwardslash.chevron.right") {
+                    Picker("", selection: Binding(
+                        get: { appState.settings.terminalShell },
+                        set: { newShell in
+                            appState.settings.terminalShell = newShell
+                            appState.updateSettings(appState.settings)
+                            WorkspaceTerminalSession.shared.activeShellName = (newShell as NSString).lastPathComponent
+                        }
+                    )) {
+                        Text("Zsh (/bin/zsh) [macOS Default]").tag("/bin/zsh")
+                        Text("Bash (/bin/bash)").tag("/bin/bash")
+                        Text("POSIX sh (/bin/sh)").tag("/bin/sh")
+                        Text("Fish (/opt/homebrew/bin/fish)").tag("/opt/homebrew/bin/fish")
+                        Text("Dash (/bin/dash)").tag("/bin/dash")
+                    }
+                    .frame(width: 240)
+                }
+
+                SettingsRow(title: "Custom Shell Binary Path", subtitle: "Override with any custom shell or virtual environment binary", icon: "terminal") {
+                    TextField("/bin/zsh", text: Binding(
+                        get: { appState.settings.terminalShell },
+                        set: { newPath in
+                            appState.settings.terminalShell = newPath
+                            appState.updateSettings(appState.settings)
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11, design: .monospaced))
+                    .frame(width: 240)
+                }
+
+                SettingsRow(title: "Safety Level", subtitle: "Permission policy for autonomous agent shell commands", icon: "shield") {
                     Picker("", selection: $appState.settings.terminalSafetyLevel) {
                         ForEach(TerminalSafetyLevel.allCases) { lvl in
                             Text(lvl.displayName).tag(lvl)
@@ -802,6 +1205,140 @@ public struct SettingsView: View {
                             appState.updateSettings(appState.settings)
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // 3b. Watch Folders & Real-Time Triggers
+    private var watchFoldersPage: some View {
+        VStack(spacing: 16) {
+            SettingsCard(
+                title: "Watch Folders & Ingestion Targets (\(appState.watchItems.count))",
+                description: "Monitor directories and files to automatically synthesize Morning Briefs, Daily Updates, and Code Reviews",
+                icon: "eye.circle.fill"
+            ) {
+                VStack(spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Active Watch Target Monitors")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                            Text("Automatic background filesystem listeners trigger agent synthesis when files are modified or dropped in")
+                                .font(.system(size: 10.5))
+                                .foregroundColor(.secondary)
+                        }
+
+                        Spacer()
+
+                        Button {
+                            showingAddWatchItemModal = true
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "plus")
+                                Text("Add Watch Target...")
+                            }
+                            .font(.system(size: 11.5, weight: .semibold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
+                    if appState.watchItems.isEmpty {
+                        Text("No watch targets configured. Click 'Add Watch Target' above to start monitoring directories.")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 8)
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(appState.watchItems) { item in
+                                HStack(spacing: 10) {
+                                    Image(systemName: item.watchType.icon)
+                                        .font(.system(size: 14))
+                                        .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                                        .frame(width: 24, height: 24)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack(spacing: 6) {
+                                            Text(item.name)
+                                                .font(.system(size: 12, weight: .bold))
+                                                .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+
+                                            Text(item.artifactTemplate.displayName)
+                                                .font(.system(size: 9.5, weight: .medium))
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 1.5)
+                                                .background(ThemeColors.border(for: appState.settings.theme))
+                                                .cornerRadius(4)
+                                        }
+
+                                        Text(item.path.isEmpty ? appState.currentWorkspace.folderPath : item.path)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                    }
+
+                                    Spacer()
+
+                                    HStack(spacing: 8) {
+                                        Button("Scan Now") {
+                                            appState.triggerWatchScan(item)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+
+                                        Button("Edit") {
+                                            editingWatchItem = item
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+
+                                        Toggle("", isOn: Binding(
+                                            get: { item.isEnabled },
+                                            set: { val in
+                                                var updated = item
+                                                updated.isEnabled = val
+                                                appState.saveWatchItem(updated)
+                                            }
+                                        ))
+                                        .toggleStyle(.switch)
+                                        .controlSize(.mini)
+                                    }
+                                }
+                                .padding(10)
+                                .background(ThemeColors.border(for: appState.settings.theme).opacity(0.25))
+                                .cornerRadius(8)
+                            }
+                        }
+                    }
+                }
+            }
+
+            SettingsCard(
+                title: "Artifact Generation Defaults",
+                description: "Executive brief formatting and automated pipeline output settings",
+                icon: "sparkles.tv.fill"
+            ) {
+                SettingsRow(
+                    title: "Default Briefing Agent",
+                    subtitle: "Primary agent assigned to synthesize morning briefs and activity reports",
+                    icon: "person.crop.circle.badge.checkmark"
+                ) {
+                    Picker("", selection: $appState.settings.defaultAgentId) {
+                        ForEach(appState.agents) { ag in
+                            Text("\(ag.name) (\(ag.role))").tag(ag.id)
+                        }
+                    }
+                    .frame(width: 220)
+                }
+
+                SettingsRow(
+                    title: "Interactive Live Canvas Output",
+                    subtitle: "Render synthesized HTML, Tailwind, and React artifacts in the Live Canvas",
+                    icon: "sparkles"
+                ) {
+                    Toggle("", isOn: .constant(true))
+                        .toggleStyle(.switch)
+                        .disabled(true)
                 }
             }
         }
@@ -944,7 +1481,7 @@ public struct SettingsView: View {
             ) {
                 if filteredPlugins.isEmpty {
                     VStack(spacing: 8) {
-                        Image(systemName: "puzzlepiece.slash")
+                        Image(systemName: "puzzlepiece.extension")
                             .font(.system(size: 26))
                             .foregroundColor(.secondary)
                             .padding(.top, 8)
@@ -1059,18 +1596,43 @@ public struct SettingsView: View {
             // MARK: - NATIVE HARDWARE EXTENSIONS
             SettingsCard(title: "Built-In Hardware & System Extensions", description: "Hardware-accelerated capabilities on Apple Silicon", icon: "cpu.fill") {
                 SettingsRow(title: "Voice Input (Whisper / Speech Recognition)", subtitle: "Dictate prompts using microphone input", icon: "mic.fill") {
-                    Toggle("", isOn: $appState.settings.voiceInputEnabled)
-                        .toggleStyle(.switch)
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.voiceInputEnabled },
+                        set: { val in
+                            appState.settings.voiceInputEnabled = val
+                            appState.updateSettings(appState.settings)
+                        }
+                    ))
+                    .toggleStyle(.switch)
                 }
 
                 SettingsRow(title: "Speech Synthesis", subtitle: "Read assistant replies aloud using macOS native TTS", icon: "speaker.wave.2.fill") {
-                    Toggle("", isOn: $appState.settings.voiceSynthesisEnabled)
-                        .toggleStyle(.switch)
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.voiceSynthesisEnabled },
+                        set: { val in
+                            appState.settings.voiceSynthesisEnabled = val
+                            appState.updateSettings(appState.settings)
+                        }
+                    ))
+                    .toggleStyle(.switch)
                 }
 
-                SettingsRow(title: "Generative Media & MLX Vision", subtitle: "Enable DALL-E, local Stable Diffusion, and OCR tools", icon: "paintpalette.fill") {
-                    Toggle("", isOn: $appState.settings.imageGenerationEnabled)
-                        .toggleStyle(.switch)
+                SettingsRow(title: "Generative Media & MLX Vision", subtitle: "Enable DALL-E, local Stable Diffusion, and Apple Vision tools", icon: "paintpalette.fill") {
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.imageGenerationEnabled },
+                        set: { val in
+                            appState.settings.imageGenerationEnabled = val
+                            appState.updateSettings(appState.settings)
+                            for idx in appState.tools.indices {
+                                if appState.tools[idx].category == .mediaVision {
+                                    appState.tools[idx].isEnabled = val
+                                }
+                            }
+                            PersistenceManager.shared.saveTools(appState.tools)
+                            appState.showToast(val ? "Enabled Vision & Media Tools" : "Disabled Vision & Media Tools")
+                        }
+                    ))
+                    .toggleStyle(.switch)
                 }
             }
         }
@@ -1256,9 +1818,16 @@ public struct SettingsView: View {
 
                 Divider()
 
-                SettingsRow(title: "Auto-Check Updates", subtitle: "Periodically check for releases", icon: "bell") {
-                    Toggle("", isOn: $appState.settings.autoCheckForUpdates)
-                        .toggleStyle(.switch)
+                SettingsRow(title: "Auto-Check Updates", subtitle: "Periodically check for releases on launch", icon: "bell") {
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.autoCheckForUpdates },
+                        set: { val in
+                            appState.settings.autoCheckForUpdates = val
+                            appState.updateSettings(appState.settings)
+                            appState.showToast(val ? "Auto-check for updates enabled" : "Auto-check for updates disabled")
+                        }
+                    ))
+                    .toggleStyle(.switch)
                 }
             }
         }
@@ -1586,6 +2155,15 @@ public struct SettingsView: View {
                     Text("Configured MCP Servers")
                         .font(.system(size: 12, weight: .semibold))
                     Spacer()
+
+                    Button("Restore Defaults") {
+                        appState.settings.mcpServers = AppSettings.defaultMCPServers
+                        appState.updateSettings(appState.settings)
+                        appState.showToast("Restored standard MCP servers")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
                     Button {
                         selectedMcpForEdit = nil
                         showingAddMcp = true
@@ -1774,8 +2352,10 @@ public struct SettingsView: View {
     private func tabTitle(for tab: String) -> String {
         switch tab {
         case "general": return "General Settings"
+        case "mlx": return "Apple Silicon MLX Engine"
         case "preferences": return "Preferences"
         case "permissions": return "Permissions & Authorized Folders"
+        case "watchFolders": return "Watch Folders & Ingestion Triggers"
         case "extensions": return "Extensions & Plugins"
         case "advanced": return "Advanced Multi-Agent Settings"
         case "ai": return "AI Model Providers"
@@ -1795,8 +2375,10 @@ public struct SettingsView: View {
     private func tabDescription(for tab: String) -> String {
         switch tab {
         case "general": return "Core application defaults and workspace directory"
+        case "mlx": return "Manage on-device MLX model discovery, Hugging Face caches, LM Studio weights, and GPU memory budgets"
         case "preferences": return "Model sampling, reasoning effort, and chat behavior"
         case "permissions": return "Authorized folders, terminal execution policies, and security"
+        case "watchFolders": return "Directory listeners, file debouncing, and automated Morning Brief artifact synthesis"
         case "extensions": return "Install, manage, configure, or remove custom plugins and MCP extensions"
         case "advanced": return "Sub-agent orchestration depth and collaboration room"
         case "ai": return "Configure local Ollama, LM Studio, and cloud API endpoints"

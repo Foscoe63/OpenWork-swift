@@ -235,6 +235,24 @@ public final class AnthropicService: LLMProviderClient, @unchecked Sendable {
                             ],
                             "required": ["content"]
                         ]
+                    case "mcp_call":
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "server": ["type": "string", "description": "Name or ID of the MCP server (e.g. 'macuse', 'filesystem')"],
+                                "tool": ["type": "string", "description": "Tool or action name to run on the MCP server"],
+                                "arguments": ["type": "object", "description": "Arguments for the tool"]
+                            ],
+                            "required": ["server", "tool"]
+                        ]
+                    case _ where t.category == .mcp || t.name.contains("_call"):
+                        parametersDict = [
+                            "type": "object",
+                            "properties": [
+                                "action": ["type": "string", "description": "Action or tool to execute on the MCP server"],
+                                "parameters": ["type": "object", "description": "Key-value parameters for the MCP action"]
+                            ]
+                        ]
                     default:
                         parametersDict = [
                             "type": "object",

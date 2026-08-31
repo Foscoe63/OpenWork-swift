@@ -65,6 +65,95 @@ public struct ChatView: View {
                 }
             }
 
+            // Quick Model Selector in Header
+            Menu {
+                let downloadedLocal = appState.localMLXModels.filter { $0.isDownloaded }
+                Section("⚡️ Local Apple Silicon (MLX)") {
+                    if !downloadedLocal.isEmpty {
+                        ForEach(downloadedLocal) { localModel in
+                            Button {
+                                appState.selectLocalMLXModel(localModel)
+                            } label: {
+                                HStack {
+                                    Text(localModel.name)
+                                    if let q = localModel.quantization {
+                                        Text("[\(q)]")
+                                    }
+                                    if localModel.id == appState.selectedModelId {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        ForEach(LocalMLXEngine.curatedModels.prefix(6)) { localModel in
+                            Button {
+                                appState.selectLocalMLXModel(localModel)
+                            } label: {
+                                HStack {
+                                    Text(localModel.name)
+                                    if let q = localModel.quantization {
+                                        Text("[\(q)]")
+                                    }
+                                    if localModel.id == appState.selectedModelId {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Button {
+                        appState.navigationDestination = .localModels
+                    } label: {
+                        Label("Manage Local Models...", systemImage: "cube.fill")
+                    }
+                }
+
+                ForEach(appState.providers.filter { $0.isEnabled && $0.kind != .omlx && $0.kind != .vmlx }) { prov in
+                    Section(prov.name) {
+                        ForEach(prov.models) { m in
+                            Button {
+                                appState.selectedProviderId = prov.id
+                                appState.selectedModelId = m.id
+                            } label: {
+                                HStack {
+                                    Text(m.name)
+                                    if m.id == appState.selectedModelId && prov.id == appState.selectedProviderId {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    let isMLX = appState.currentProvider.kind == .omlx || appState.currentProvider.kind == .vmlx || appState.localMLXModels.contains(where: { $0.id == appState.selectedModelId })
+                    Image(systemName: isMLX ? "cpu.fill" : appState.currentProvider.kind.icon)
+                        .font(.system(size: 10))
+                        .foregroundColor(isMLX ? Color(hex: "#C084FC") : ThemeColors.accent(for: appState.settings.accentColor))
+
+                    Text(appState.currentModel.name)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                        .lineLimit(1)
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8))
+                        .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(ThemeColors.sidebarBg(for: appState.settings.theme))
+                .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(ThemeColors.border(for: appState.settings.theme).opacity(0.8), lineWidth: 1)
+                )
+            }
+            .menuStyle(.borderlessButton)
+
             Spacer()
 
             // Header Toolbar Actions
@@ -99,6 +188,20 @@ public struct ChatView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Clear Session Messages")
+
+                // Open Interactive Terminal Button
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        appState.inspectorTab = .terminal
+                        appState.isInspectorOpen = true
+                    }
+                } label: {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 12))
+                        .foregroundColor(appState.isInspectorOpen && appState.inspectorTab == .terminal ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.textSecondary(for: appState.settings.theme))
+                }
+                .buttonStyle(.plain)
+                .help("Open Workspace Terminal")
 
                 // Toggle Side Inspector
                 Button {

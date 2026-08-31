@@ -3,14 +3,11 @@ import AppKit
 
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        // Try direct asset load, bundle resource url, or direct file path fallback
         if let image = NSImage(named: "AppIcon") {
             NSApplication.shared.applicationIconImage = image
         } else if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") ?? Bundle.main.url(forResource: "AppIcon.icns", withExtension: nil),
                   let image = NSImage(contentsOf: iconURL) {
             NSApplication.shared.applicationIconImage = image
-        } else if let directImage = NSImage(contentsOfFile: "/Volumes/Storage/Icons/OpenWork__Alt__8jJIgN0S63_icns-95b0064150.icns") {
-            NSApplication.shared.applicationIconImage = directImage
         }
     }
 }

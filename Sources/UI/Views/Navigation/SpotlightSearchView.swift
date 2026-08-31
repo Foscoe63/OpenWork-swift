@@ -11,7 +11,7 @@ public enum SpotlightResultType: String, CaseIterable {
     public var icon: String {
         switch self {
         case .session: return "bubble.left.and.bubble.right"
-        case .agent: return "person.badge.sparkles"
+        case .agent: return "person.crop.circle.badge.checkmark"
         case .provider: return "server.rack"
         case .file: return "doc.text"
         case .skill: return "sparkles"

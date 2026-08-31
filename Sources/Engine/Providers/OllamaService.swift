@@ -109,13 +109,18 @@ public final class OllamaService: LLMProviderClient, @unchecked Sendable {
         for msg in messages {
             if msg.role == .tool {
                 formattedMessages.append([
-                    "role": "tool",
-                    "content": msg.content
+                    "role": "user",
+                    "content": "[Tool Result]:\n\(msg.content)\n\nPlease continue your response incorporating the tool result above."
                 ])
             } else {
                 formattedMessages.append(["role": msg.role.rawValue, "content": msg.content])
             }
         }
+
+        let loadedSettings = PersistenceManager.shared.loadSettings()
+        let repPenalty = loadedSettings.autoAdjustPenaltiesForLocalModels ? max(1.20, loadedSettings.defaultRepeatPenalty) : loadedSettings.defaultRepeatPenalty
+        let presPenalty = loadedSettings.autoAdjustPenaltiesForLocalModels ? max(0.30, loadedSettings.defaultPresencePenalty) : loadedSettings.defaultPresencePenalty
+        let freqPenalty = loadedSettings.autoAdjustPenaltiesForLocalModels ? max(0.30, loadedSettings.defaultFrequencyPenalty) : loadedSettings.defaultFrequencyPenalty
 
         var body: [String: Any] = [
             "model": model.id,
@@ -123,7 +128,10 @@ public final class OllamaService: LLMProviderClient, @unchecked Sendable {
             "stream": true,
             "options": [
                 "temperature": temperature,
-                "num_predict": maxTokens
+                "num_predict": maxTokens,
+                "repeat_penalty": repPenalty,
+                "presence_penalty": presPenalty,
+                "frequency_penalty": freqPenalty
             ]
         ]
 

@@ -22,7 +22,7 @@ public enum WorkspaceCategory: String, Codable, CaseIterable, Identifiable, Send
         case .general: return "briefcase.fill"
         case .research: return "brain.head.profile"
         case .project: return "folder.fill"
-        case .agent: return "person.crop.circle.badge.sparkables"
+        case .agent: return "person.crop.circle.badge.checkmark"
         }
     }
 }

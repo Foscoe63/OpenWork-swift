@@ -2,16 +2,19 @@ import Foundation
 
 @MainActor
 public final class AgentStreamAccumulator {
-    private var message: ChatMessage
+    public private(set) var message: ChatMessage
     public private(set) var fullText: String = ""
     public private(set) var fullReasoning: String = ""
+    public private(set) var isLoopDetected: Bool = false
     private let startTime: CFAbsoluteTime
     private let onUpdate: (ChatMessage) -> Void
+    private let isLoopBreakerEnabled: Bool
 
     public init(initialMessage: ChatMessage, onUpdate: @escaping (ChatMessage) -> Void) {
         self.message = initialMessage
         self.startTime = CFAbsoluteTimeGetCurrent()
         self.onUpdate = onUpdate
+        self.isLoopBreakerEnabled = PersistenceManager.shared.loadSettings().autoLoopBreakerEnabled
     }
 
     public func applyChunk(_ chunk: LLMStreamChunk) {
@@ -23,6 +26,14 @@ public final class AgentStreamAccumulator {
         if !chunk.deltaText.isEmpty {
             fullText += chunk.deltaText
             message.content = fullText
+            
+            // Repetition / degenerative loop check on incoming stream (respects user settings)
+            if self.isLoopBreakerEnabled && checkRepetitionLoop(in: fullText) {
+                isLoopDetected = true
+                message.isStreaming = false
+                onUpdate(message)
+                return
+            }
         }
         if let promptTok = chunk.promptTokens {
             message.promptTokens = promptTok
@@ -34,6 +45,83 @@ public final class AgentStreamAccumulator {
             message.isStreaming = false
         }
         onUpdate(message)
+    }
+
+    private func checkRepetitionLoop(in text: String) -> Bool {
+        guard text.count >= 150 else { return false }
+        
+        // 1. Check for exact repeating sentences or phrase patterns (30-150 chars repeating 3+ times at tail)
+        for patternLen in [30, 40, 50, 60, 70, 80, 100, 120, 140] {
+            guard text.count >= patternLen * 3 else { continue }
+            let suffix3 = text.suffix(patternLen * 3)
+            let s1 = suffix3.prefix(patternLen)
+            let s2 = suffix3.dropFirst(patternLen).prefix(patternLen)
+            let s3 = suffix3.suffix(patternLen)
+            if s1 == s2 && s2 == s3 {
+                return true
+            }
+        }
+        
+        // 2. Exact line-level repetition (3+ identical non-empty trimmed lines)
+        let rawLines = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && $0.count > 15 }
+        
+        if rawLines.count >= 4 {
+            let last = rawLines.last!
+            let count = rawLines.suffix(5).filter { $0 == last }.count
+            if count >= 3 {
+                return true
+            }
+        }
+
+        // 3. Fuzzy / Semantic repetition check on recent lines
+        if rawLines.count >= 3 {
+            let recentLines = Array(rawLines.suffix(5))
+            for i in 0..<(recentLines.count - 1) {
+                let lineA = recentLines[i]
+                let lineB = recentLines[i + 1]
+                
+                // Compare normalized word overlap / Jaccard similarity
+                let wordsA = Set(lineA.lowercased().split(separator: " ").map { String($0) })
+                let wordsB = Set(lineB.lowercased().split(separator: " ").map { String($0) })
+                
+                guard wordsA.count >= 6 && wordsB.count >= 6 else { continue }
+                let commonWords = wordsA.intersection(wordsB)
+                let unionWords = wordsA.union(wordsB)
+                let similarity = Double(commonWords.count) / Double(unionWords.count)
+                
+                // If two consecutive generated lines share >85% of words, it's an autoregressive loop
+                if similarity >= 0.85 {
+                    return true
+                }
+                
+                // Common prefix check (e.g. "Now I have today's date...")
+                let prefixLen = zip(lineA.lowercased(), lineB.lowercased()).prefix(while: { $0 == $1 }).count
+                if prefixLen >= 45 && prefixLen >= min(lineA.count, lineB.count) * 3 / 4 {
+                    return true
+                }
+            }
+        }
+
+        // 4. Repeated N-gram phrases in trailing window (checks if identical 5-word sequence appears 3+ times in the tail)
+        let words = text.suffix(1000).lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        
+        if words.count >= 20 {
+            var ngrams: [String: Int] = [:]
+            for i in 0..<(words.count - 4) {
+                let gram = "\(words[i]) \(words[i+1]) \(words[i+2]) \(words[i+3]) \(words[i+4])"
+                let currentCount = (ngrams[gram] ?? 0) + 1
+                ngrams[gram] = currentCount
+                if currentCount >= 3 {
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     public func addToolCall(_ toolCall: ToolCallInfo) {
@@ -63,8 +151,50 @@ public final class AgentStreamAccumulator {
         onUpdate(message)
     }
 
+    public func cleanToolCallSyntax(from rawText: String) -> String {
+        var cleaned = rawText
+        
+        // Remove TOOL_CALL = { ... }
+        let assignPattern = "TOOL_CALL\\s*=\\s*\\{[\\s\\S]*?\\}"
+        if let regex = try? NSRegularExpression(pattern: assignPattern, options: []) {
+            let range = NSRange(location: 0, length: (cleaned as NSString).length)
+            cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
+        }
+        
+        // Remove ```tool_call ... ``` or ```json with tool definitions
+        let codeBlockPattern = "```(?:tool_call|json)?\\s*(?:\\r?\\n)?\\s*\\{\\s*\"(?:tool|name|mcp|server)\"[\\s\\S]*?\\}\\s*(?:\\r?\\n)?```"
+        if let regex = try? NSRegularExpression(pattern: codeBlockPattern, options: []) {
+            let range = NSRange(location: 0, length: (cleaned as NSString).length)
+            cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
+        }
+        
+        // Remove XML tool calls <tool_call>...</tool_call>
+        let xmlPattern = "<tool_call>[\\s\\S]*?(?:</tool_call>|$)"
+        if let regex = try? NSRegularExpression(pattern: xmlPattern, options: []) {
+            let range = NSRange(location: 0, length: (cleaned as NSString).length)
+            cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
+        }
+        
+        // Remove raw naked tool JSON if it was the entirety or beginning of a line
+        let nakedPattern = "(?m)^\\s*\\{\\s*\"(?:tool|name|mcp|server)\"\\s*:[\\s\\S]*?\\}\\s*$"
+        if let regex = try? NSRegularExpression(pattern: nakedPattern, options: []) {
+            let range = NSRange(location: 0, length: (cleaned as NSString).length)
+            cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
+        }
+        
+        // Remove conversational tool call intent filler lines that end abruptly (e.g. "Let me emit tool calls.", "---")
+        let fillerLinesPattern = "(?m)^\\s*(?:Let me emit tool calls\\.?|Let me call the tool\\.?|---\\s*)$\\s*"
+        if let regex = try? NSRegularExpression(pattern: fillerLinesPattern, options: []) {
+            let range = NSRange(location: 0, length: (cleaned as NSString).length)
+            cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
+        }
+
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public func finalize() {
         message.isStreaming = false
+        message.content = cleanToolCallSyntax(from: fullText)
         onUpdate(message)
     }
 }
@@ -240,7 +370,68 @@ public final class AgentRunner {
 
         let loadedSettings = PersistenceManager.shared.loadSettings()
         let maxIterations = max(1, loadedSettings.maxAutonomousIterations)
-        let availableTools = PersistenceManager.shared.loadTools()
+        var availableTools = PersistenceManager.shared.loadTools()
+
+        // Inject active MCP servers into available tools & prompt
+        let enabledMcpServers = loadedSettings.mcpServers.filter { $0.isEnabled }
+        var mcpPromptSummary = ""
+
+        if !enabledMcpServers.isEmpty {
+            var mcpDescriptions: [String] = []
+
+            for s in enabledMcpServers {
+                let cleanName = s.name.lowercased()
+                    .replacingOccurrences(of: " ", with: "_")
+                    .replacingOccurrences(of: "-", with: "_")
+
+                let tool = Tool(
+                    id: "mcp_\(s.id)",
+                    name: "\(cleanName)_call",
+                    displayName: "\(s.name) MCP Tool",
+                    description: "Execute tools and queries via the \(s.name) Model Context Protocol (MCP) server (\(s.transportType.displayName)).",
+                    category: .mcp
+                )
+                if !availableTools.contains(where: { $0.id == tool.id || $0.name == tool.name }) {
+                    availableTools.append(tool)
+                }
+
+                if s.transportType == .stdio {
+                    mcpDescriptions.append("- **\(s.name)** (tool: `\(cleanName)_call` or `mcp_call` with `server: \"\(s.name)\"`): stdio process `\(s.command) \(s.args.joined(separator: " "))`")
+                } else {
+                    mcpDescriptions.append("- **\(s.name)** (tool: `\(cleanName)_call` or `mcp_call` with `server: \"\(s.name)\"`): HTTP/SSE gateway `\(s.url)`")
+                }
+            }
+
+            if !availableTools.contains(where: { $0.name == "mcp_call" }) {
+                availableTools.append(Tool(
+                    id: "mcp_universal_call",
+                    name: "mcp_call",
+                    displayName: "Universal MCP Tool Invocation",
+                    description: "Invokes any tool on a configured MCP server. Parameters: {\"server\": \"server_name\", \"tool\": \"action_name\", \"arguments\": {...}}",
+                    category: .mcp
+                ))
+            }
+
+            mcpPromptSummary = """
+
+            ### Configured & Active Model Context Protocol (MCP) Servers:
+            \(mcpDescriptions.joined(separator: "\n"))
+
+            When you need external data or actions from an MCP server (e.g. web search, calendar, files, or external tools), output a tool call using ANY of these formats:
+            Format 1 (Simple):
+            TOOL_CALL = { "mcp": "ddg-search", "tool": "search", "arguments": {"query": "Swift 6 features"} }
+
+            Format 2 (Markdown block):
+            ```tool_call
+            {"tool": "mcp_call", "parameters": {"server": "ddg-search", "tool": "search", "arguments": {"query": "Swift 6 features"}}}
+            ```
+
+            Format 3 (Direct tool call):
+            ```tool_call
+            {"tool": "ddg_search_call", "parameters": {"query": "Swift 6 features"}}
+            ```
+            """
+        }
 
         var iteration = 0
         var workingMessages = session.messages
@@ -249,17 +440,53 @@ public final class AgentRunner {
         let systemPromptWithTools = """
         \(agent.systemPrompt)
 
-        You are an advanced, fully autonomous coding and research agent on par with Claude Code and Cursor.
-        You have direct access to system tools: file reading/writing, terminal execution, workspace semantic search (RAG), web search, PDF/image document extraction, agent spawning, and inter-agent communication.
+        You are an advanced, fully autonomous coding, systems, and research agent on par with Claude Code and Cursor.
+        You have direct access to execution tools:
+        - `file_read`: {"path": "..."}
+        - `file_write`: {"path": "...", "content": "..."}
+        - `file_list`: {"path": "..."}
+        - `file_copy`: {"source": "...", "destination": "..."}
+        - `file_move`: {"source": "...", "destination": "..."}
+        - `file_delete`: {"path": "..."}
+        - `terminal_command`: {"command": "...", "cwd": "..."}
+        - `web_search`: {"query": "..."}
+        - `calculator`: {"expression": "..."}
+        - `get_current_date`: {}
+        - `document_extract`: {"path": "..."}
+        - Live Model Context Protocol (MCP) servers
+        \(mcpPromptSummary)
 
-        When you need to perform an action, invoke the relevant tool natively or using structured tool blocks:
+        CRITICAL EXECUTION PROTOCOL:
+        1. When the user gives you tasks or asks you to perform actions, DO NOT write conversational excuses or say "I will do X". IMMEDIATELY emit the tool call to do X!
+        2. Execute actions by outputting standard tool call blocks:
         ```tool_call
-        {"tool": "file_read", "parameters": {"path": "Sources/App/OpenWorkSwiftApp.swift"}}
+        {"tool": "file_write", "parameters": {"path": "/Volumes/WorkSpaces/WorkSpace/IranNews-2026-08-31.md", "content": "# Iran News\\n..."}}
         ```
-        Always inspect tool results thoroughly before concluding your answer. Continue iterating autonomously until the user's objective is fully accomplished.
+        or
+        ```tool_call
+        {"tool": "file_list", "parameters": {"path": "/Volumes/WorkSpaces/WorkSpace"}}
+        ```
+        or
+        ```tool_call
+        {"tool": "terminal_command", "parameters": {"command": "date +%Y-%m-%d"}}
+        ```
+        or
+        ```tool_call
+        {"tool": "web_search", "parameters": {"query": "US-Israel Iran war news 2026"}}
+        ```
+        or
+        TOOL_CALL = { "mcp": "macuse", "tool": "get_calendar_events", "arguments": {} }
+
+        3. If you need multiple actions, output multiple tool calls in sequence.
+        4. After receiving tool results, continue with the remaining steps until ALL tasks are completely executed on disk.
+        5. Once all files are written and tasks finished, provide a clear, concise report listing the exact files created and actions performed.
         """
 
         while iteration < maxIterations {
+            if Task.isCancelled {
+                break
+            }
+
             iteration += 1
 
             // Track newly emitted native tool calls during this single turn
@@ -291,6 +518,10 @@ public final class AgentRunner {
                 break
             }
 
+            if accumulator.isLoopDetected {
+                break
+            }
+
             // Small yield to let any lingering stream callbacks process
             try? await Task.sleep(nanoseconds: 30_000_000)
 
@@ -303,15 +534,44 @@ public final class AgentRunner {
                 }
             } else {
                 let newlyGeneratedDelta = String(accumulator.fullText.dropFirst(turnTextBefore.count))
-                let parsedMarkdownCalls = parseToolCalls(from: newlyGeneratedDelta.isEmpty ? accumulator.fullText : newlyGeneratedDelta)
+                var parsedMarkdownCalls = parseToolCalls(from: newlyGeneratedDelta)
+                if parsedMarkdownCalls.isEmpty && !accumulator.fullText.isEmpty {
+                    parsedMarkdownCalls = parseToolCalls(from: accumulator.fullText)
+                }
                 for parsed in parsedMarkdownCalls {
                     pendingCallsToExecute.append((id: UUID().uuidString, tool: parsed.tool, args: parsed.args))
                 }
             }
 
-            // If no tool calls were requested, the agent has finished its autonomous cycle
+            // If no tool calls were requested from this turn:
             if pendingCallsToExecute.isEmpty {
-                break
+                // Check if the assistant ended with unfulfilled execution intent (common in local models that stop after saying "Let me...")
+                let newlyGeneratedDelta = String(accumulator.fullText.dropFirst(turnTextBefore.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                let lowercaseDelta = newlyGeneratedDelta.lowercased()
+                
+                let hasUnfulfilledActionIntent = (
+                    lowercaseDelta.contains("let me start") ||
+                    lowercaseDelta.contains("let me check") ||
+                    lowercaseDelta.contains("let me emit") ||
+                    lowercaseDelta.contains("let me search") ||
+                    lowercaseDelta.contains("let me proceed") ||
+                    lowercaseDelta.contains("i will start by") ||
+                    lowercaseDelta.contains("i will now check")
+                ) && newlyGeneratedDelta.count < 300 && iteration < 3
+
+                if hasUnfulfilledActionIntent {
+                    // Feed a direct continuation nudge to prompt the model to emit the tool call payload immediately
+                    let nudgeMsg = ChatMessage(
+                        sessionId: session.id,
+                        role: .user,
+                        content: "[System Command]: You expressed intent to perform an action. Do not wait for the user. Immediately output the structured tool call now (e.g. ```tool_call {\"tool\": \"...\", \"parameters\": {...}}```)."
+                    )
+                    workingMessages.append(nudgeMsg)
+                    continue
+                } else {
+                    // Agent has legitimately concluded its answer
+                    break
+                }
             }
 
             // Execute detected tool calls and feed results back into the conversation
@@ -354,6 +614,10 @@ public final class AgentRunner {
                 content: accumulator.fullText
             )
             workingMessages.append(intermediateAssistantMsg)
+
+            // Do not dump raw tool JSON/text into the user-facing chat bubble.
+            // The tool observations are already fed back to the LLM in workingMessages as role: .tool / user observation,
+            // allowing the LLM to read the result and write a clean, user-friendly natural language response.
         }
 
         accumulator.finalize()
@@ -361,24 +625,133 @@ public final class AgentRunner {
 
     private func parseToolCalls(from text: String) -> [(tool: String, args: String)] {
         var calls: [(tool: String, args: String)] = []
-        let pattern = "```(?:tool_call|json)\\s*\\n(\\{[\\s\\S]*?\\})\\s*\\n```"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
-        let nsString = text as NSString
-        let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+        
+        // Helper to normalize parsed dictionary into (tool, args)
+        func addCall(from dict: [String: Any]) {
+            // Case 1: GrizzyClaw / MCP style: {"mcp": "server_name", "tool": "tool_name", "arguments": {...}}
+            if let mcpServer = dict["mcp"] as? String ?? dict["server"] as? String {
+                let mcpTool = dict["tool"] as? String ?? dict["action"] as? String ?? dict["name"] as? String ?? "query"
+                let mcpArgs = (dict["arguments"] as? [String: Any]) ?? (dict["parameters"] as? [String: Any]) ?? (dict["args"] as? [String: Any]) ?? [:]
+                let wrapper: [String: Any] = [
+                    "server": mcpServer,
+                    "tool": mcpTool,
+                    "arguments": mcpArgs
+                ]
+                let paramsData = (try? JSONSerialization.data(withJSONObject: wrapper)) ?? Data()
+                let paramsStr = String(data: paramsData, encoding: .utf8) ?? "{}"
+                calls.append((tool: "mcp_call", args: paramsStr))
+                return
+            }
 
-        for match in matches {
-            if match.numberOfRanges > 1 {
-                let jsonString = nsString.substring(with: match.range(at: 1))
-                if let data = jsonString.data(using: .utf8),
-                   let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                   let tool = dict["tool"] as? String {
-                    let params = dict["parameters"] as? [String: Any] ?? [:]
-                    let paramsData = (try? JSONSerialization.data(withJSONObject: params)) ?? Data()
-                    let paramsStr = String(data: paramsData, encoding: .utf8) ?? "{}"
-                    calls.append((tool: tool, args: paramsStr))
+            // Case 2: Standard {"tool": "...", "parameters": {...}} or {"name": "...", "arguments": {...}}
+            if let tool = (dict["tool"] as? String) ?? (dict["name"] as? String) {
+                let params = (dict["parameters"] as? [String: Any]) ?? (dict["arguments"] as? [String: Any]) ?? (dict["args"] as? [String: Any]) ?? [:]
+                let paramsData = (try? JSONSerialization.data(withJSONObject: params)) ?? Data()
+                let paramsStr = String(data: paramsData, encoding: .utf8) ?? "{}"
+                calls.append((tool: tool, args: paramsStr))
+            }
+        }
+
+        // 1. Match TOOL_CALL = { ... } format (from GrizzyClaw)
+        let toolCallAssignPattern = "TOOL_CALL\\s*=\\s*(\\{[\\s\\S]*?\\})"
+        if let regex = try? NSRegularExpression(pattern: toolCallAssignPattern, options: []) {
+            let nsString = text as NSString
+            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+            for match in matches {
+                if match.numberOfRanges > 1 {
+                    let jsonString = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let data = jsonString.data(using: .utf8),
+                       let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                        addCall(from: dict)
+                    }
                 }
             }
         }
+
+        // 2. Match Markdown code blocks with JSON: ```tool_call {"tool": "...", "parameters": {...}} ``` or ```json or ```
+        let markdownPattern = "```(?:tool_call|json)?\\s*(?:\\r?\\n)?\\s*(\\{[\\s\\S]*?\\})(?:\\s*(?:\\r?\\n)?```|$)"
+        if let regex = try? NSRegularExpression(pattern: markdownPattern, options: []) {
+            let nsString = text as NSString
+            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+            for match in matches {
+                if match.numberOfRanges > 1 {
+                    let jsonString = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let data = jsonString.data(using: .utf8),
+                       let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                        addCall(from: dict)
+                    }
+                }
+            }
+        }
+        
+        // 3. Fallback: Match naked JSON containing {"tool": "...", "parameters": ...} or {"mcp": "...", "tool": ...}
+        if calls.isEmpty {
+            let nakedJsonPattern = "(\\{\\s*\"(?:tool|name|mcp|server)\"\\s*:\\s*\"[^\"]+\"[\\s\\S]*?\\})"
+            if let regex = try? NSRegularExpression(pattern: nakedJsonPattern, options: []) {
+                let nsString = text as NSString
+                let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+                for match in matches {
+                    if match.numberOfRanges > 1 {
+                        let jsonString = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let data = jsonString.data(using: .utf8),
+                           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                            addCall(from: dict)
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 4. Match Qwen / XML style tool calls: <tool_call>\n<function=name>\n<parameter=key>\nval\n</parameter>\n</tool_call>
+        let xmlPattern = "<tool_call>[\\s\\S]*?<function=([a-zA-Z0-9_-]+)>([\\s\\S]*?)(?:</tool_call>|$)"
+        if let xmlRegex = try? NSRegularExpression(pattern: xmlPattern, options: []) {
+            let nsString = text as NSString
+            let matches = xmlRegex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+            for match in matches {
+                guard match.numberOfRanges >= 3 else { continue }
+                let functionName = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                let paramsBody = nsString.substring(with: match.range(at: 2))
+                
+                var paramsDict: [String: Any] = [:]
+                let paramTagPattern = "<parameter=([a-zA-Z0-9_-]+)>([\\s\\S]*?)(?:</parameter>|$)"
+                if let paramRegex = try? NSRegularExpression(pattern: paramTagPattern, options: []) {
+                    let paramNs = paramsBody as NSString
+                    let paramMatches = paramRegex.matches(in: paramsBody, options: [], range: NSRange(location: 0, length: paramNs.length))
+                    for pMatch in paramMatches {
+                        if pMatch.numberOfRanges >= 3 {
+                            let pKey = paramNs.substring(with: pMatch.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                            var pVal = paramNs.substring(with: pMatch.range(at: 2))
+                            if pVal.hasPrefix("\n") { pVal.removeFirst() }
+                            if pVal.hasSuffix("\n") { pVal.removeLast() }
+                            paramsDict[pKey] = pVal
+                        }
+                    }
+                }
+                
+                let paramsData = (try? JSONSerialization.data(withJSONObject: paramsDict)) ?? Data()
+                let paramsStr = String(data: paramsData, encoding: .utf8) ?? "{}"
+                calls.append((tool: functionName, args: paramsStr))
+            }
+        }
+        
+        // 5. Match Loose / Inline tool invocations like `tool_name(param="value")` or `file_list(path="/Volumes/...")`
+        if calls.isEmpty {
+            let funcCallPattern = "([a-zA-Z0-9_-]+)\\s*\\(\\s*([a-zA-Z0-9_-]+)\\s*=\\s*[\"']([^\"']+)[\"']\\s*\\)"
+            if let regex = try? NSRegularExpression(pattern: funcCallPattern, options: []) {
+                let nsString = text as NSString
+                let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+                for match in matches {
+                    if match.numberOfRanges >= 4 {
+                        let tool = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        let key = nsString.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        let val = nsString.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        let dict: [String: Any] = ["tool": tool, "parameters": [key: val]]
+                        addCall(from: dict)
+                    }
+                }
+            }
+        }
+
         return calls
     }
 }

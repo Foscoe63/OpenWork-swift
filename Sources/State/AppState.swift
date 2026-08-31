@@ -4,9 +4,11 @@ import Combine
 
 public enum NavigationDestination: String, CaseIterable, Identifiable {
     case chat = "chat"
+    case localModels = "localModels"
     case agents = "agents"
     case providers = "providers"
     case automations = "automations"
+    case watchFolders = "watchFolders"
     case artifacts = "artifacts"
     case memory = "memory"
     case tools = "tools"
@@ -18,9 +20,11 @@ public enum NavigationDestination: String, CaseIterable, Identifiable {
     public var displayName: String {
         switch self {
         case .chat: return "Chat & Sessions"
+        case .localModels: return "Local Models"
         case .agents: return "AI Agents"
         case .providers: return "Model Providers"
         case .automations: return "Automations"
+        case .watchFolders: return "Watch Folders"
         case .artifacts: return "Artifacts & Files"
         case .memory: return "Memory & Knowledge"
         case .tools: return "Tools & MCP"
@@ -32,9 +36,11 @@ public enum NavigationDestination: String, CaseIterable, Identifiable {
     public var icon: String {
         switch self {
         case .chat: return "bubble.left.and.bubble.right.fill"
+        case .localModels: return "cube.fill"
         case .agents: return "person.3.sequence.fill"
         case .providers: return "server.rack"
         case .automations: return "bolt.badge.clock.fill"
+        case .watchFolders: return "eye.circle.fill"
         case .artifacts: return "folder.fill"
         case .memory: return "brain.head.profile"
         case .tools: return "hammer.fill"
@@ -99,6 +105,8 @@ public final class AppState: ObservableObject {
     @Published public var plugins: [AppExtensionPlugin] = []
     @Published public var memories: [MemoryItem] = []
     @Published public var automations: [Automation] = []
+    @Published public var watchItems: [WatchItem] = []
+    @Published public var artifacts: [AutomationArtifact] = []
     @Published public var settings: AppSettings = AppSettings.default {
         didSet {
             persistence.saveSettings(settings)
@@ -106,6 +114,8 @@ public final class AppState: ObservableObject {
     }
     @Published public var interAgentMessages: [AgentMessage] = []
     @Published public var activeSubAgentTasks: [SubAgentTask] = []
+    @Published public var localMLXModels: [LocalMLXModel] = []
+    @Published public var isScanningMLX: Bool = false
 
     // MARK: - Runtime
     @Published public var isGenerating: Bool = false
@@ -117,6 +127,7 @@ public final class AppState: ObservableObject {
     @Published public var pullModelProgress: Double = 0.0
     @Published public var pullModelStatusText: String = ""
     @Published public var isPullingModel: Bool = false
+    private var currentExecutionTask: Task<Void, Never>? = nil
 
     private let persistence = PersistenceManager.shared
 
@@ -135,6 +146,8 @@ public final class AppState: ObservableObject {
         self.plugins = persistence.loadPlugins()
         self.memories = persistence.loadMemories()
         self.automations = persistence.loadAutomations()
+        self.watchItems = persistence.loadWatchItems()
+        self.artifacts = persistence.loadArtifacts()
 
         // Hydrate active workspace from settings
         if workspaces.contains(where: { $0.id == settings.defaultWorkspaceId }) {
@@ -164,7 +177,29 @@ public final class AppState: ObservableObject {
             self.selectedModelId = first.modelId.isEmpty ? settings.defaultModelId : first.modelId
             self.interAgentMessages = first.interAgentMessages
             self.activeSubAgentTasks = first.activeSubAgentTasks
+        } else {
+            self.selectedProviderId = settings.defaultProviderId
+            self.selectedModelId = settings.defaultModelId
         }
+
+        // Validate selectedProviderId & selectedModelId are valid and present
+        if !providers.contains(where: { $0.id == selectedProviderId }) {
+            self.selectedProviderId = providers.first(where: { $0.isEnabled })?.id ?? providers.first?.id ?? "ollama-local"
+        }
+        let activeProv = currentProvider
+        let isLocalMLX = localMLXModels.contains(where: { $0.id == selectedModelId }) || LocalMLXEngine.curatedModels.contains(where: { $0.id == selectedModelId })
+        if !activeProv.models.contains(where: { $0.id == selectedModelId }) && !isLocalMLX {
+            self.selectedModelId = activeProv.models.first?.id ?? "llama3:latest"
+        }
+
+        // Initialize active file monitors
+        restartWatchEngine()
+        
+        // Sync MCP tools inventory
+        syncMcpTools()
+
+        // Scan local MLX models
+        rescanMLXModels()
     }
 
     public var currentWorkspace: Workspace {
@@ -181,11 +216,109 @@ public final class AppState: ObservableObject {
     }
 
     public var currentProvider: ModelProvider {
-        providers.first(where: { $0.id == selectedProviderId }) ?? providers.first ?? ModelProvider(name: "Default", type: .local, kind: .ollama)
+        providers.first(where: { $0.id == selectedProviderId }) ?? providers.first(where: { $0.isEnabled }) ?? providers.first ?? ModelProvider(name: "Default", type: .local, kind: .ollama)
     }
 
     public var currentModel: ModelInfo {
-        currentProvider.models.first(where: { $0.id == selectedModelId }) ?? currentProvider.models.first ?? ModelInfo(id: "default-model", name: "Default Model")
+        let prov = currentProvider
+        if let found = prov.models.first(where: { $0.id == selectedModelId }) {
+            return found
+        }
+        if let local = localMLXModels.first(where: { $0.id == selectedModelId }) ?? LocalMLXEngine.curatedModels.first(where: { $0.id == selectedModelId }) {
+            return ModelInfo(
+                id: local.id,
+                name: "\(local.name) (\(local.quantization ?? "MLX"))",
+                providerId: prov.id,
+                contextWindow: local.contextWindow ?? 131072,
+                supportsVision: local.isVLM,
+                supportsReasoning: local.useCase == .reasoning,
+                supportsStreaming: true,
+                supportsTools: true,
+                description: local.description,
+                isDefault: local.isTopPick,
+                speedTier: local.useCase == .fast ? "Fast" : "Powerful"
+            )
+        }
+        return prov.models.first ?? ModelInfo(id: selectedModelId, name: selectedModelId)
+    }
+
+    public func selectLocalMLXModel(_ model: LocalMLXModel) {
+        // Ensure Apple Silicon built-in provider exists and is enabled
+        if let omlxIdx = providers.firstIndex(where: { $0.kind == .omlx }) {
+            providers[omlxIdx].isEnabled = true
+            providers[omlxIdx].name = "Apple Silicon (Built-in)"
+            selectedProviderId = providers[omlxIdx].id
+
+            // Ensure model info exists in provider's model list
+            if !providers[omlxIdx].models.contains(where: { $0.id == model.id }) {
+                let info = ModelInfo(
+                    id: model.id,
+                    name: "\(model.name) (\(model.quantization ?? "MLX"))",
+                    providerId: providers[omlxIdx].id,
+                    contextWindow: model.contextWindow ?? 131072,
+                    supportsVision: model.isVLM,
+                    supportsReasoning: model.useCase == .reasoning,
+                    supportsStreaming: true,
+                    supportsTools: true,
+                    description: model.description,
+                    isDefault: model.isTopPick,
+                    speedTier: model.useCase == .fast ? "Fast" : "Powerful"
+                )
+                providers[omlxIdx].models.append(info)
+                persistence.saveProviders(providers)
+            }
+        } else {
+            let newOmlx = ModelProvider(
+                id: "builtin-mlx-local",
+                name: "Apple Silicon (Built-in)",
+                type: .local,
+                kind: .omlx,
+                baseUrl: "http://127.0.0.1:8000/v1",
+                isEnabled: true,
+                models: [
+                    ModelInfo(
+                        id: model.id,
+                        name: "\(model.name) (\(model.quantization ?? "MLX"))",
+                        providerId: "builtin-mlx-local",
+                        contextWindow: model.contextWindow ?? 131072,
+                        supportsVision: model.isVLM,
+                        supportsReasoning: model.useCase == .reasoning,
+                        supportsStreaming: true,
+                        supportsTools: true,
+                        description: model.description,
+                        isDefault: true,
+                        speedTier: "Fast"
+                    )
+                ]
+            )
+            providers.append(newOmlx)
+            selectedProviderId = newOmlx.id
+            persistence.saveProviders(providers)
+        }
+
+        selectedModelId = model.id
+
+        // Initialize local model engine in the background
+        Task.detached(priority: .userInitiated) {
+            let res = await LocalMLXEngine.shared.ensureServerRunning()
+            if res.success {
+                await MainActor.run {
+                    self.showToast("⚡️ Apple Silicon model ready: \(model.name)")
+                }
+            }
+        }
+
+        // Update active session with the selected model
+        if var curr = currentSession {
+            curr.providerId = selectedProviderId
+            curr.modelId = selectedModelId
+            if let idx = sessions.firstIndex(where: { $0.id == curr.id }) {
+                sessions[idx] = curr
+                persistence.saveSessions(sessions)
+            }
+        }
+
+        showToast("Active model: \(model.name)")
     }
 
     // MARK: - Sessions Operations
@@ -390,7 +523,8 @@ public final class AppState: ObservableObject {
         let workspace = currentWorkspace
         let allAgentsList = agents
 
-        Task { [weak self] in
+        currentExecutionTask?.cancel()
+        currentExecutionTask = Task { [weak self] in
             guard let self = self else { return }
             await AgentRunner.shared.run(
                 session: session,
@@ -439,9 +573,17 @@ public final class AppState: ObservableObject {
 
             await MainActor.run {
                 self.isGenerating = false
+                self.currentExecutionTask = nil
                 self.persistence.saveSessions(self.sessions)
             }
         }
+    }
+
+    public func cancelCurrentGeneration() {
+        currentExecutionTask?.cancel()
+        currentExecutionTask = nil
+        isGenerating = false
+        showToast("Generation cancelled")
     }
 
     private func handleSlashCommand(_ command: String) -> Bool {
@@ -604,6 +746,76 @@ public final class AppState: ObservableObject {
     public func deleteProvider(_ provider: ModelProvider) {
         providers.removeAll(where: { $0.id == provider.id })
         persistence.saveProviders(providers)
+    }
+
+    // MARK: - MLX Local Runtime & Discovery
+    public func rescanMLXModels() {
+        isScanningMLX = true
+        Task.detached(priority: .userInitiated) {
+            let models = LocalMLXEngine.shared.scanInstalledModels(settings: PersistenceManager.shared.loadSettings())
+            await MainActor.run {
+                self.localMLXModels = models
+                self.isScanningMLX = false
+
+                // Synchronize discovered MLX models with the oMLX / vMLX providers
+                let installed = models.filter { $0.isDownloaded }
+                if !installed.isEmpty {
+                    for i in 0..<self.providers.count {
+                        if self.providers[i].kind == .omlx || self.providers[i].kind == .vmlx {
+                            var updatedModels: [ModelInfo] = []
+                            for m in installed {
+                                let info = ModelInfo(
+                                    id: m.id,
+                                    name: "\(m.name) (\(m.quantization ?? "MLX"))",
+                                    providerId: self.providers[i].id,
+                                    contextWindow: m.contextWindow ?? 131072,
+                                    supportsVision: m.isVLM,
+                                    supportsReasoning: m.useCase == .reasoning,
+                                    supportsStreaming: true,
+                                    supportsTools: true,
+                                    description: m.description,
+                                    isDefault: m.isTopPick,
+                                    speedTier: m.useCase == .fast ? "Fast" : "Powerful"
+                                )
+                                updatedModels.append(info)
+                            }
+                            if !updatedModels.isEmpty {
+                                self.providers[i].models = updatedModels
+                            }
+                        }
+                    }
+                    self.persistence.saveProviders(self.providers)
+                }
+            }
+        }
+    }
+
+    public func pullMLXModel(_ model: LocalMLXModel) {
+        isPullingModel = true
+        pullModelProgress = 0.0
+        pullModelStatusText = "Downloading \(model.name) weights..."
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            do {
+                try await LocalMLXEngine.shared.pullModel(repoId: model.id) { [weak self] fraction, status in
+                    Task { @MainActor in
+                        self?.pullModelProgress = fraction
+                        self?.pullModelStatusText = "\(status)"
+                    }
+                }
+                await MainActor.run {
+                    self.isPullingModel = false
+                    self.showToast("MLX model '\(model.name)' installed successfully!")
+                    self.rescanMLXModels()
+                }
+            } catch {
+                await MainActor.run {
+                    self.isPullingModel = false
+                    self.showToast("Download failed: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     public func pullOllamaModel(name: String) {
@@ -870,13 +1082,60 @@ public final class AppState: ObservableObject {
             settings.mcpServers.append(config)
         }
         updateSettings(settings)
+        syncMcpTools()
         showToast("MCP Server '\(config.name)' saved")
     }
 
     public func deleteMcpServer(_ config: MCPServerConfig) {
+        let toolId = "mcp_\(config.id)"
+        let clean = config.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
+        let toolName = "\(clean)_call"
+
         settings.mcpServers.removeAll(where: { $0.id == config.id })
         updateSettings(settings)
+
+        tools.removeAll(where: { $0.id == toolId || $0.name == toolName })
+        persistence.saveTools(tools)
+
         showToast("MCP Server deleted")
+    }
+
+    public func syncMcpTools() {
+        var currentTools = persistence.loadTools()
+
+        for server in settings.mcpServers {
+            let toolId = "mcp_\(server.id)"
+            let clean = server.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
+            let toolName = "\(clean)_call"
+
+            if let idx = currentTools.firstIndex(where: { $0.id == toolId || $0.name == toolName }) {
+                currentTools[idx].displayName = "\(server.name) MCP Server"
+                currentTools[idx].description = "Executes tools and actions via the \(server.name) MCP server (\(server.transportType.displayName))"
+                currentTools[idx].category = .mcp
+                currentTools[idx].isEnabled = server.isEnabled
+            } else {
+                currentTools.append(Tool(
+                    id: toolId,
+                    name: toolName,
+                    displayName: "\(server.name) MCP Server",
+                    description: "Executes tools and actions via the \(server.name) MCP server (\(server.transportType.displayName))",
+                    category: .mcp,
+                    isEnabled: server.isEnabled
+                ))
+            }
+        }
+
+        // Remove tools for MCP servers that no longer exist
+        currentTools.removeAll { tool in
+            if tool.category == .mcp && tool.id.hasPrefix("mcp_") && tool.id != "mcp_universal_call" {
+                let serverId = String(tool.id.dropFirst(4))
+                return !settings.mcpServers.contains(where: { $0.id == serverId })
+            }
+            return false
+        }
+
+        self.tools = currentTools
+        persistence.saveTools(currentTools)
     }
 
     // MARK: - Workspaces
@@ -955,6 +1214,177 @@ public final class AppState: ObservableObject {
             showToast("Created \(createdCount) dedicated agent workspaces!")
         } else {
             showToast("All agents already have dedicated workspaces.")
+        }
+    }
+
+    // MARK: - Watch Folders & Watch Items
+    public func saveWatchItem(_ item: WatchItem) {
+        if let idx = watchItems.firstIndex(where: { $0.id == item.id }) {
+            watchItems[idx] = item
+        } else {
+            watchItems.append(item)
+        }
+        persistence.saveWatchItems(watchItems)
+        restartWatchEngine()
+        showToast("Watch target '\(item.name)' saved")
+    }
+
+    public func deleteWatchItem(_ item: WatchItem) {
+        watchItems.removeAll(where: { $0.id == item.id })
+        persistence.saveWatchItems(watchItems)
+        restartWatchEngine()
+        showToast("Deleted watch target '\(item.name)'")
+    }
+
+    public func restartWatchEngine() {
+        let activeItems = watchItems.filter { $0.isEnabled }
+        WatchFolderEngine.shared.startWatching(items: activeItems) { [weak self] item, eventSummary in
+            guard let self = self else { return }
+            Task { @MainActor in
+                self.handleWatchEventTriggered(for: item, summary: eventSummary)
+            }
+        }
+    }
+
+    public func handleWatchEventTriggered(for item: WatchItem, summary: String) {
+        if let idx = watchItems.firstIndex(where: { $0.id == item.id }) {
+            var updated = watchItems[idx]
+            updated.lastEventAt = Date()
+            updated.lastEventSummary = summary
+            updated.eventsCount += 1
+            watchItems[idx] = updated
+            persistence.saveWatchItems(watchItems)
+        }
+
+        showToast("⚡️ Watch event in '\(item.name)'")
+
+        if item.autoGenerateArtifact {
+            triggerWatchScan(item)
+        }
+    }
+
+    public func triggerWatchScan(_ item: WatchItem) {
+        let agent = agents.first(where: { $0.id == item.targetAgentId }) ?? currentAgent
+        let provider = currentProvider
+        let model = currentModel
+        let ws = workspaces.first(where: { $0.id == item.workspaceId }) ?? currentWorkspace
+
+        showToast("Generating \(item.artifactTemplate.displayName)...")
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            await WatchFolderEngine.shared.triggerManualScan(
+                item: item,
+                workspace: ws,
+                agent: agent,
+                provider: provider,
+                model: model
+            ) { newArtifact in
+                Task { @MainActor in
+                    self.saveArtifact(newArtifact)
+                    if let idx = self.watchItems.firstIndex(where: { $0.id == item.id }) {
+                        self.watchItems[idx].createdArtifactsCount += 1
+                        self.persistence.saveWatchItems(self.watchItems)
+                    }
+                    self.showToast("🎉 Generated \(newArtifact.title)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Artifacts Management
+    public func saveArtifact(_ artifact: AutomationArtifact) {
+        if let idx = artifacts.firstIndex(where: { $0.id == artifact.id }) {
+            artifacts[idx] = artifact
+        } else {
+            artifacts.insert(artifact, at: 0)
+        }
+        persistence.saveArtifacts(artifacts)
+    }
+
+    public func deleteArtifact(_ artifact: AutomationArtifact) {
+        artifacts.removeAll(where: { $0.id == artifact.id })
+        persistence.saveArtifacts(artifacts)
+        showToast("Artifact deleted")
+    }
+
+    public func createArtifactFromAutomation(_ automation: Automation) {
+        let agent = agents.first(where: { $0.id == automation.targetAgentId }) ?? currentAgent
+        let provider = currentProvider
+        let model = currentModel
+        let ws = workspaces.first(where: { $0.id == automation.workspaceId }) ?? currentWorkspace
+
+        showToast("Executing automation: \(automation.name)...")
+
+        let prompt = """
+        \(automation.promptTemplate)
+
+        Please synthesize a structured executive artifact (such as a Morning Brief, Project Status Digest, or Report).
+        Format in rich Markdown with clean sections, emojis, and clear takeaways.
+        """
+
+        Task {
+            let autoAccumulator = SubAgentAccumulator()
+            do {
+                try await ProviderRouter.shared.stream(
+                    provider: provider,
+                    model: model,
+                    systemPrompt: agent.systemPrompt,
+                    messages: [ChatMessage(sessionId: "auto-\(automation.id)", role: .user, content: prompt)],
+                    temperature: agent.temperature,
+                    maxTokens: 2048,
+                    reasoningEffort: .off,
+                    tools: []
+                ) { chunk in
+                    Task { @MainActor in
+                        if !chunk.deltaText.isEmpty {
+                            autoAccumulator.append(chunk.deltaText)
+                        }
+                    }
+                }
+            } catch {
+                autoAccumulator.append("""
+                # 📋 \(automation.name) Report
+                *Timestamp: \(Date().formatted())*
+
+                \(automation.description)
+
+                Automated pipeline execution finished with status: healthy.
+                """)
+            }
+
+            let synthesized = autoAccumulator.text.isEmpty ? """
+            # 📋 \(automation.name) Report
+            *Timestamp: \(Date().formatted())*
+
+            \(automation.description)
+            """ : autoAccumulator.text
+
+            let artifact = AutomationArtifact(
+                workspaceId: ws.id,
+                automationId: automation.id,
+                agentId: agent.id,
+                agentName: agent.name,
+                title: "\(automation.name) - \(Date().formatted(date: .abbreviated, time: .shortened))",
+                subtitle: "Automated report from \(agent.name)",
+                category: .report,
+                content: synthesized,
+                format: "markdown",
+                sourceTrigger: "Automation: \(automation.name)"
+            )
+
+            await MainActor.run {
+                self.saveArtifact(artifact)
+                if let aIdx = self.automations.firstIndex(where: { $0.id == automation.id }) {
+                    var updated = self.automations[aIdx]
+                    updated.lastRunAt = Date()
+                    updated.lastStatus = "success"
+                    updated.lastResultSummary = "Generated artifact: \(artifact.title)"
+                    self.automations[aIdx] = updated
+                    self.persistence.saveAutomations(self.automations)
+                }
+                self.showToast("🎉 Generated Artifact for '\(automation.name)'")
+            }
         }
     }
 

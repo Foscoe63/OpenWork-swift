@@ -21,10 +21,10 @@ public struct MainView: View {
 
                     // Center Content Area
                     centerContent
-                        .frame(minWidth: 500, maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
 
                     // Right Side Inspector (collapsible for chat session)
-                    if appState.isInspectorOpen && appState.navigationDestination == .chat {
+                    if appState.isInspectorOpen && (appState.navigationDestination == .chat || appState.navigationDestination == .tools) {
                         SideInspectorView(appState: appState)
                     }
                 }
@@ -74,12 +74,16 @@ public struct MainView: View {
         switch appState.navigationDestination {
         case .chat:
             ChatView(appState: appState)
+        case .localModels:
+            LocalModelsView(appState: appState)
         case .agents:
             AgentsView(appState: appState)
         case .providers:
             ProvidersView(appState: appState)
         case .automations:
             AutomationsView(appState: appState)
+        case .watchFolders:
+            WatchFoldersView(appState: appState)
         case .artifacts:
             ArtifactsView(appState: appState)
         case .memory:

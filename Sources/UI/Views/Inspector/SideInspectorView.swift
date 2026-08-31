@@ -29,7 +29,7 @@ public struct SideInspectorView: View {
                 terminalView
             }
         }
-        .frame(minWidth: 260, idealWidth: 300, maxWidth: 360)
+        .frame(minWidth: 260, idealWidth: 320, maxWidth: 650)
         .background(ThemeColors.sidebarBg(for: appState.settings.theme))
     }
 
@@ -69,19 +69,83 @@ public struct IntegratedTerminalView: View {
     @ObservedObject var appState: AppState
     @ObservedObject var terminalSession = WorkspaceTerminalSession.shared
     @State private var inputCommand: String = ""
+    @FocusState private var isInputFocused: Bool
+    @State private var historyIndex: Int = -1
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header Bar
-            HStack {
+            HStack(spacing: 8) {
                 HStack(spacing: 5) {
                     Circle().fill(terminalSession.isRunning ? Color.orange : Color.green).frame(width: 7, height: 7)
                     Text(terminalSession.isRunning ? "RUNNING" : "READY")
-                        .font(.system(size: 9.5, weight: .bold))
+                        .font(.system(size: 9, weight: .bold))
                         .foregroundColor(terminalSession.isRunning ? .orange : .green)
                 }
 
+                // Shell badge / selector
+                Menu {
+                    Button("Zsh (/bin/zsh)") {
+                        appState.settings.terminalShell = "/bin/zsh"
+                        appState.updateSettings(appState.settings)
+                        WorkspaceTerminalSession.shared.activeShellName = "zsh"
+                    }
+                    Button("Bash (/bin/bash)") {
+                        appState.settings.terminalShell = "/bin/bash"
+                        appState.updateSettings(appState.settings)
+                        WorkspaceTerminalSession.shared.activeShellName = "bash"
+                    }
+                    Button("POSIX sh (/bin/sh)") {
+                        appState.settings.terminalShell = "/bin/sh"
+                        appState.updateSettings(appState.settings)
+                        WorkspaceTerminalSession.shared.activeShellName = "sh"
+                    }
+                    Button("Fish (/opt/homebrew/bin/fish)") {
+                        appState.settings.terminalShell = "/opt/homebrew/bin/fish"
+                        appState.updateSettings(appState.settings)
+                        WorkspaceTerminalSession.shared.activeShellName = "fish"
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "terminal")
+                            .font(.system(size: 9))
+                        Text(terminalSession.activeShellName)
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 7))
+                    }
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(ThemeColors.border(for: appState.settings.theme))
+                    .cornerRadius(4)
+                }
+                .menuStyle(.borderlessButton)
+
                 Spacer()
+
+                // Quick command presets
+                HStack(spacing: 4) {
+                    Button("ls") {
+                        terminalSession.execute(command: "ls -la", in: appState.currentWorkspace.folderPath)
+                    }
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+
+                    Button("git") {
+                        terminalSession.execute(command: "git status", in: appState.currentWorkspace.folderPath)
+                    }
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+
+                    Button("pwd") {
+                        terminalSession.execute(command: "pwd", in: appState.currentWorkspace.folderPath)
+                    }
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                }
 
                 Button("Clear") {
                     terminalSession.clear()
@@ -99,64 +163,126 @@ public struct IntegratedTerminalView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .background(ThemeColors.sidebarBg(for: appState.settings.theme))
 
             Divider()
 
-            // Console Output ScrollView
+            // Console Output ScrollView (Clicking anywhere focuses the terminal input)
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(terminalSession.lines) { line in
                             Text(line.text)
                                 .font(.system(size: 11, design: .monospaced))
-                                .foregroundColor(line.isError ? Color.red.opacity(0.9) : (line.text.hasPrefix("$") ? Color.green : Color.white.opacity(0.85)))
+                                .foregroundColor(line.isError ? Color.red.opacity(0.9) : (line.text.hasPrefix("$") || line.text.contains(" $ ") ? Color.green : Color.white.opacity(0.85)))
                                 .textSelection(.enabled)
                                 .id(line.id)
                         }
+
+                        // Live interactive active prompt line in the terminal body
+                        HStack(spacing: 6) {
+                            Text("[\((appState.currentWorkspace.folderPath as NSString).lastPathComponent)] $")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundColor(.green)
+
+                            if !inputCommand.isEmpty {
+                                Text(inputCommand)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.white)
+                            }
+
+                            // Blinking Terminal Cursor indicator
+                            Rectangle()
+                                .fill(terminalSession.isRunning ? Color.orange : Color.green)
+                                .frame(width: 7, height: 13)
+                                .opacity(terminalSession.isRunning ? 0.4 : 0.9)
+                        }
+                        .padding(.top, 4)
+                        .id("active-terminal-prompt")
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .background(Color.black.opacity(0.8))
+                .background(Color.black.opacity(0.88))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    isInputFocused = true
+                }
                 .onMessageCountChanged(count: terminalSession.lines.count) {
-                    if let last = terminalSession.lines.last {
-                        withAnimation {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
+                    withAnimation {
+                        proxy.scrollTo("active-terminal-prompt", anchor: .bottom)
                     }
                 }
             }
 
             Divider()
 
-            // Command Prompt Input
+            // Working directory indicator
+            HStack(spacing: 4) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 9))
+                    .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                Text(appState.currentWorkspace.name)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundColor(.secondary)
+                Text("•")
+                    .font(.system(size: 8))
+                    .foregroundColor(.secondary)
+                Text(appState.currentWorkspace.folderPath)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(Color.black.opacity(0.4))
+
+            Divider()
+
+            // Prominent Command Prompt Input Bar
             HStack(spacing: 6) {
-                Text("$")
+                Text("[\((appState.currentWorkspace.folderPath as NSString).lastPathComponent)] $")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundColor(.green)
 
-                TextField("Run zsh command...", text: $inputCommand)
+                TextField("Type shell command (e.g. ls, git, cargo, swift, python3)...", text: $inputCommand)
                     .textFieldStyle(.plain)
                     .font(.system(size: 11, design: .monospaced))
+                    .focused($isInputFocused)
                     .onSubmit {
                         executeCurrentCommand()
                     }
+
+                if !inputCommand.isEmpty {
+                    Button {
+                        inputCommand = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 Button {
                     executeCurrentCommand()
                 } label: {
                     Image(systemName: "return")
-                        .font(.system(size: 10))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(inputCommand.trimmingCharacters(in: .whitespaces).isEmpty ? .secondary : ThemeColors.accent(for: appState.settings.accentColor))
                 }
                 .buttonStyle(.plain)
                 .disabled(inputCommand.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.vertical, 7)
             .background(ThemeColors.cardBg(for: appState.settings.theme))
+        }
+        .onAppear {
+            isInputFocused = true
         }
     }
 
@@ -165,5 +291,6 @@ public struct IntegratedTerminalView: View {
         let cmd = inputCommand
         inputCommand = ""
         terminalSession.execute(command: cmd, in: appState.currentWorkspace.folderPath)
+        isInputFocused = true
     }
 }

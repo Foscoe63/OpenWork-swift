@@ -6,7 +6,7 @@ public final class StorageService: @unchecked Sendable {
     private let fileManager = FileManager.default
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
-    private let queue = DispatchQueue(label: "ai.openwork.storage", qos: .utility)
+    private let lock = NSLock()
 
     public var baseDirectory: URL {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -33,18 +33,20 @@ public final class StorageService: @unchecked Sendable {
     }
 
     public func save<T: Encodable>(_ object: T, to filename: String) {
-        queue.async {
-            do {
-                let data = try self.encoder.encode(object)
-                let url = self.fileURL(for: filename)
-                try data.write(to: url, options: .atomic)
-            } catch {
-                print("[StorageService] Error saving \(filename): \(error.localizedDescription)")
-            }
+        lock.lock()
+        defer { lock.unlock() }
+        do {
+            let data = try encoder.encode(object)
+            let url = fileURL(for: filename)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            print("[StorageService] Error saving \(filename): \(error.localizedDescription)")
         }
     }
 
     public func load<T: Decodable>(_ type: T.Type, from filename: String) -> T? {
+        lock.lock()
+        defer { lock.unlock() }
         let url = fileURL(for: filename)
         guard fileManager.fileExists(atPath: url.path) else { return nil }
         do {
@@ -69,6 +71,8 @@ public final class StorageService: @unchecked Sendable {
     }
 
     public func clearAllData() {
+        lock.lock()
+        defer { lock.unlock() }
         let files = (try? fileManager.contentsOfDirectory(at: baseDirectory, includingPropertiesForKeys: nil)) ?? []
         for file in files {
             try? fileManager.removeItem(at: file)
