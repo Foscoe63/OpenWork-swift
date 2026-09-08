@@ -12,7 +12,14 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     public static let shared = NativeMLXService()
 
     private var loadedContainers: [String: ModelContainer] = [:]
+    private var recentLoadFailures: [String: Date] = [:]
     private let lock = NSLock()
+
+    /// A model with no local weights on disk yet requires a Hugging Face download, which can be
+    /// multiple gigabytes. Bound that attempt so a slow/offline network fails a chat turn quickly
+    /// instead of hanging it, and don't retry the same doomed download on every subsequent message.
+    private static let loadTimeoutSeconds: TimeInterval = 180
+    private static let failureCooldown: TimeInterval = 300
 
     public init() {}
 
@@ -100,7 +107,11 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         maxTokens: Int,
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws {
-        let container = try await getOrLoadContainer(modelId: model.id) { _ in }
+        let container = try await getOrLoadContainer(modelId: model.id) { status in
+            // Surface download/load progress as reasoning so a first-run model fetch is visible
+            // instead of looking like a hang; it never pollutes the final answer text.
+            onChunk(LLMStreamChunk(deltaReasoning: status + "\n"))
+        }
         let sanitizedInstructions = sanitizeForHFChatTemplate(systemPrompt)
         let preparedMessages = mergeToolMessagesIntoFollowingUser(messages)
         var mlxMessages: [Chat.Message] = preparedMessages.map { m in
@@ -171,6 +182,49 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             return existing
         }
 
+        if let failedAt = lock.withLock({ recentLoadFailures[modelId] }),
+           Date().timeIntervalSince(failedAt) < Self.failureCooldown {
+            throw NSError(
+                domain: "NativeMLXService",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Skipping in-process MLX for '\(modelId)': a load attempt failed or timed out recently. Download it from the Local Models tab, or wait a few minutes before retrying."]
+            )
+        }
+
+        do {
+            let container = try await withThrowingTaskGroup(of: ModelContainer.self) { group in
+                group.addTask {
+                    try await self.loadContainerFromDiskOrDownload(modelId: modelId, onProgress: onProgress)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(Self.loadTimeoutSeconds * 1_000_000_000))
+                    throw NSError(
+                        domain: "NativeMLXService",
+                        code: 3,
+                        userInfo: [NSLocalizedDescriptionKey: "Loading '\(modelId)' in-process took longer than \(Int(Self.loadTimeoutSeconds))s (likely still downloading weights). Falling back for this turn."]
+                    )
+                }
+                guard let result = try await group.next() else {
+                    throw CancellationError()
+                }
+                group.cancelAll()
+                return result
+            }
+            lock.withLock {
+                loadedContainers[modelId] = container
+                recentLoadFailures[modelId] = nil
+            }
+            return container
+        } catch {
+            lock.withLock { recentLoadFailures[modelId] = Date() }
+            throw error
+        }
+    }
+
+    private func loadContainerFromDiskOrDownload(
+        modelId: String,
+        onProgress: @Sendable @escaping (String) -> Void
+    ) async throws -> ModelContainer {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let searchDirs = [
             home.appendingPathComponent(".openwork/mlx_models", isDirectory: true),
@@ -226,8 +280,6 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                 }
             )
         }
-
-        lock.withLock { loadedContainers[modelId] = container }
 
         return container
     }
