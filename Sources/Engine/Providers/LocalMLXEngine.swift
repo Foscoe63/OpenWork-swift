@@ -534,18 +534,32 @@ public final class LocalMLXEngine: @unchecked Sendable {
         process.standardOutput = pipe
         process.standardError = pipe
 
+        // huggingface-cli prints a live tqdm progress bar for the whole download, which easily
+        // exceeds the pipe's kernel buffer on a multi-gigabyte model. Nothing was draining that
+        // pipe here, so waitUntilExit() below would deadlock forever the first time that happened
+        // — the same Process/Pipe bug fixed elsewhere in this codebase, but with no timeout to
+        // even bound the damage since a real download can legitimately run a long time.
+        let state = ShellOutputState(maxBytes: 20_000)
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty { state.append(chunk) }
+        }
+
         try process.run()
-        
+
         onProgress(0.4, "Downloading model weights & tokenizer...")
         process.waitUntilExit()
+        pipe.fileHandleForReading.readabilityHandler = nil
 
         if process.terminationStatus == 0 {
             onProgress(1.0, "Completed!")
         } else {
+            let (output, _) = state.finalize()
+            let detail = output.isEmpty ? "" : " (\(output.suffix(300)))"
             throw NSError(
                 domain: "LocalMLXEngine",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Download failed. Please ensure 'huggingface-cli' is installed or clone to ~/.cache/huggingface."]
+                userInfo: [NSLocalizedDescriptionKey: "Download failed. Please ensure 'huggingface-cli' is installed or clone to ~/.cache/huggingface.\(detail)"]
             )
         }
     }
