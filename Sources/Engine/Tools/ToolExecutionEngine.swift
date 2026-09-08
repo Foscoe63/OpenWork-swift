@@ -600,7 +600,6 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 
                 // Parse search result snippets using regex
                 let snippetPattern = "<a class=\"result__snippet[^\"]*\"[^>]*>([\\s\\S]*?)</a>"
-                let titlePattern = "<a class=\"result__url\"[^>]*href=\"([^\"]+)\"[^>]*>([\\s\\S]*?)</a>"
                 
                 var snippets: [String] = []
                 if let regex = try? NSRegularExpression(pattern: snippetPattern, options: []) {

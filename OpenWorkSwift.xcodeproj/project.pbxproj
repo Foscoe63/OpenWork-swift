@@ -180,7 +180,7 @@
 			path = Tools;
 			sourceTree = "<group>";
 		};
-		1143A7AEBC2AED9764B345D7 = {
+		1143A7AEBC2AED9764B345D7 /* Project Root */ = {
 			isa = PBXGroup;
 			children = (
 				512A4C12ABD843A92AA3F7C7 /* Resources */,
@@ -560,10 +560,9 @@
 				Base,
 				en,
 			);
-			mainGroup = 1143A7AEBC2AED9764B345D7;
+			mainGroup = 1143A7AEBC2AED9764B345D7 /* Project Root */;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				E7E7E7E7E7E7E7E7E7E7E7E7 /* XCLocalSwiftPackageReference "." */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8CC678F416FECE9E650A3F2A /* Products */;
