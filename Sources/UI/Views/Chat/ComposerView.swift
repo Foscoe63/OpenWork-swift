@@ -473,6 +473,9 @@ public struct ComposerView: View {
                     .cornerRadius(4)
                 }
                 .buttonStyle(.plain)
+                .help(appState.isReasoningEnabled
+                    ? "Reasoning is on for this chat — models that support it will think before answering. Click to disable."
+                    : "Reasoning is off for this chat — models will answer directly without a thinking step. Click to enable.")
 
                 Spacer()
 

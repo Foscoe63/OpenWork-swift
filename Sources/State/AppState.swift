@@ -522,6 +522,11 @@ public final class AppState: ObservableObject {
         let model = currentModel
         let workspace = currentWorkspace
         let allAgentsList = agents
+        // "Reasoning" composer pill: off forces no reasoning for this turn regardless of the
+        // agent's own setting; on guarantees some reasoning even if the agent defaults to off.
+        let reasoningOverride: ReasoningEffort = isReasoningEnabled
+            ? (agent.reasoningEffort == .off ? .medium : agent.reasoningEffort)
+            : .off
 
         currentExecutionTask?.cancel()
         currentExecutionTask = Task { [weak self] in
@@ -533,6 +538,7 @@ public final class AppState: ObservableObject {
                 model: model,
                 workspace: workspace,
                 allAgents: allAgentsList,
+                reasoningOverride: reasoningOverride,
                 onMessageUpdated: { [weak self] updatedMsg in
                     guard let self = self else { return }
                     if let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) {

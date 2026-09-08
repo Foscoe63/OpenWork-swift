@@ -221,11 +221,15 @@ public final class AgentRunner {
         model: ModelInfo,
         workspace: Workspace,
         allAgents: [Agent],
+        reasoningOverride: ReasoningEffort? = nil,
         onMessageUpdated: @escaping (ChatMessage) -> Void,
         onSubAgentTaskCreated: @escaping (SubAgentTask) -> Void,
         onSubAgentTaskUpdated: @escaping (SubAgentTask) -> Void,
         onInterAgentMessage: @escaping (AgentMessage) -> Void
     ) async {
+        // The chat composer's "Reasoning" pill overrides the agent's own configured effort for
+        // this turn when set; nil (no override) preserves the agent's own setting.
+        let effectiveReasoningEffort = reasoningOverride ?? agent.reasoningEffort
         let assistantMsgId = UUID().uuidString
         var assistantMsg = ChatMessage(
             id: assistantMsgId,
@@ -505,7 +509,7 @@ public final class AgentRunner {
                     messages: workingMessages,
                     temperature: agent.temperature,
                     maxTokens: agent.maxTokens,
-                    reasoningEffort: agent.reasoningEffort,
+                    reasoningEffort: effectiveReasoningEffort,
                     tools: availableTools
                 ) { chunk in
                     Task { @MainActor in
