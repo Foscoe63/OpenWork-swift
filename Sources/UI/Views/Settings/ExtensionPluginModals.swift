@@ -95,6 +95,28 @@ public struct AddExtensionModalView: View {
             version: "1.0.2",
             icon: "server.rack",
             permissions: ["network:outbound", "postgres:query"]
+        ),
+        ExtensionPreset(
+            id: "preset-gmail",
+            name: "Gmail",
+            description: "Read and search Gmail. Add your Google Client ID, API Key, and OAuth Access Token in Extensions → Google Integrations.",
+            type: .workspaceTool,
+            command: "gmail_list",
+            author: "Google / OpenWork",
+            version: "1.0.0",
+            icon: "envelope.fill",
+            permissions: ["network:outbound", "google:gmail.readonly"]
+        ),
+        ExtensionPreset(
+            id: "preset-google-calendar",
+            name: "Google Calendar",
+            description: "List upcoming Google Calendar events. Configure credentials in Extensions → Google Integrations.",
+            type: .workspaceTool,
+            command: "google_calendar_list",
+            author: "Google / OpenWork",
+            version: "1.0.0",
+            icon: "calendar",
+            permissions: ["network:outbound", "google:calendar.readonly"]
         )
     ]
 

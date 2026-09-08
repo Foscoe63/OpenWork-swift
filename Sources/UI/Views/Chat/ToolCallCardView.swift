@@ -48,6 +48,10 @@ public struct ToolCallCardView: View {
             }
             .buttonStyle(.plain)
 
+            if toolCall.status == .waitingApproval || toolCall.status == .pendingApproval {
+                approvalPrompt
+            }
+
             if isExpanded, let output = toolCall.resultOutput {
                 Text(output)
                     .font(.system(size: 11, design: .monospaced))
@@ -58,6 +62,39 @@ public struct ToolCallCardView: View {
                     .cornerRadius(6)
             }
         }
+    }
+
+    private var approvalPrompt: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let reason = toolCall.approvalReason, !reason.isEmpty {
+                Text(reason)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            HStack(spacing: 8) {
+                Button {
+                    ToolApprovalManager.shared.resolve(callId: toolCall.id, approved: true)
+                } label: {
+                    Label("Approve", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+
+                Button {
+                    ToolApprovalManager.shared.resolve(callId: toolCall.id, approved: false)
+                } label: {
+                    Label("Reject", systemImage: "xmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .cornerRadius(6)
     }
 
     private var statusColor: Color {

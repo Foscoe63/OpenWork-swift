@@ -199,6 +199,11 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var speechVoiceIdentifier: String
     public var imageGenerationEnabled: Bool
 
+    // Google Integrations (secrets live in Keychain; these are non-secret toggles/metadata)
+    public var googleAccountEmail: String
+    public var gmailExtensionEnabled: Bool
+    public var googleCalendarExtensionEnabled: Bool
+
     // MLX Local Runtime & External Models (GrizzyClaw & Osaurus Parity)
     public var customMLXModelsDirectory: String
     public var scanHuggingFaceCache: Bool
@@ -313,6 +318,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         voiceSynthesisEnabled: Bool = false,
         speechVoiceIdentifier: String = "com.apple.speech.synthesis.voice.Alex",
         imageGenerationEnabled: Bool = true,
+        googleAccountEmail: String = "",
+        gmailExtensionEnabled: Bool = false,
+        googleCalendarExtensionEnabled: Bool = false,
         customMLXModelsDirectory: String = "",
         scanHuggingFaceCache: Bool = true,
         scanLMStudioModels: Bool = true,
@@ -369,6 +377,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.voiceSynthesisEnabled = voiceSynthesisEnabled
         self.speechVoiceIdentifier = speechVoiceIdentifier
         self.imageGenerationEnabled = imageGenerationEnabled
+        self.googleAccountEmail = googleAccountEmail
+        self.gmailExtensionEnabled = gmailExtensionEnabled
+        self.googleCalendarExtensionEnabled = googleCalendarExtensionEnabled
         self.customMLXModelsDirectory = customMLXModelsDirectory
         self.scanHuggingFaceCache = scanHuggingFaceCache
         self.scanLMStudioModels = scanLMStudioModels
@@ -437,6 +448,10 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.voiceSynthesisEnabled = try container.decodeIfPresent(Bool.self, forKey: .voiceSynthesisEnabled) ?? def.voiceSynthesisEnabled
         self.speechVoiceIdentifier = try container.decodeIfPresent(String.self, forKey: .speechVoiceIdentifier) ?? def.speechVoiceIdentifier
         self.imageGenerationEnabled = try container.decodeIfPresent(Bool.self, forKey: .imageGenerationEnabled) ?? def.imageGenerationEnabled
+
+        self.googleAccountEmail = try container.decodeIfPresent(String.self, forKey: .googleAccountEmail) ?? def.googleAccountEmail
+        self.gmailExtensionEnabled = try container.decodeIfPresent(Bool.self, forKey: .gmailExtensionEnabled) ?? def.gmailExtensionEnabled
+        self.googleCalendarExtensionEnabled = try container.decodeIfPresent(Bool.self, forKey: .googleCalendarExtensionEnabled) ?? def.googleCalendarExtensionEnabled
 
         self.customMLXModelsDirectory = try container.decodeIfPresent(String.self, forKey: .customMLXModelsDirectory) ?? def.customMLXModelsDirectory
         self.scanHuggingFaceCache = try container.decodeIfPresent(Bool.self, forKey: .scanHuggingFaceCache) ?? def.scanHuggingFaceCache

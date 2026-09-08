@@ -453,6 +453,10 @@ public final class AgentRunner {
         - `calculator`: {"expression": "..."}
         - `get_current_date`: {}
         - `document_extract`: {"path": "..."}
+        - `gmail_list`: {"query": "is:unread newer_than:1d", "max_results": 10}
+        - `gmail_search`: {"query": "from:example@gmail.com"}
+        - `google_calendar_list`: {"days": 7, "max_results": 15}
+        - `google_calendar_upcoming`: {"days": 7}
         - Live Model Context Protocol (MCP) servers
         \(mcpPromptSummary)
 
@@ -460,11 +464,11 @@ public final class AgentRunner {
         1. When the user gives you tasks or asks you to perform actions, DO NOT write conversational excuses or say "I will do X". IMMEDIATELY emit the tool call to do X!
         2. Execute actions by outputting standard tool call blocks:
         ```tool_call
-        {"tool": "file_write", "parameters": {"path": "/Volumes/WorkSpaces/WorkSpace/IranNews-2026-08-31.md", "content": "# Iran News\\n..."}}
+        {"tool": "file_write", "parameters": {"path": "notes/summary.md", "content": "# Summary\\n..."}}
         ```
         or
         ```tool_call
-        {"tool": "file_list", "parameters": {"path": "/Volumes/WorkSpaces/WorkSpace"}}
+        {"tool": "file_list", "parameters": {"path": "."}}
         ```
         or
         ```tool_call
@@ -472,7 +476,7 @@ public final class AgentRunner {
         ```
         or
         ```tool_call
-        {"tool": "web_search", "parameters": {"query": "US-Israel Iran war news 2026"}}
+        {"tool": "web_search", "parameters": {"query": "current stable Swift release"}}
         ```
         or
         TOOL_CALL = { "mcp": "macuse", "tool": "get_calendar_events", "arguments": {} }
@@ -582,7 +586,40 @@ public final class AgentRunner {
                     argumentsJson: argsJson,
                     status: .running
                 )
-                accumulator.addToolCall(callInfo)
+
+                // Sensitive actions (deleting a file, or shell commands under an "always ask"
+                // safety policy) are paused for a real user decision before they touch disk.
+                if let reason = AgentRunner.approvalReason(toolName: toolName, settings: loadedSettings) {
+                    callInfo.status = .waitingApproval
+                    callInfo.approvalReason = reason
+                    accumulator.addToolCall(callInfo)
+
+                    let approved = await ToolApprovalManager.shared.requestApproval(
+                        callId: callId,
+                        toolName: toolName,
+                        argumentsJson: argsJson,
+                        reason: reason
+                    )
+
+                    if !approved {
+                        callInfo.status = .error
+                        callInfo.errorMessage = "Blocked: the user did not approve this action."
+                        accumulator.updateToolCall(callInfo)
+                        let toolMsg = ChatMessage(
+                            id: callId,
+                            sessionId: session.id,
+                            role: .tool,
+                            content: "Action rejected by the user (\(reason)). Do not retry this exact call; explain the situation or propose an alternative."
+                        )
+                        workingMessages.append(toolMsg)
+                        continue
+                    }
+
+                    callInfo.status = .running
+                    accumulator.updateToolCall(callInfo)
+                } else {
+                    accumulator.addToolCall(callInfo)
+                }
 
                 let result = await ToolExecutionEngine.shared.execute(
                     toolName: toolName,
@@ -621,6 +658,23 @@ public final class AgentRunner {
         }
 
         accumulator.finalize()
+    }
+
+    /// Returns a human-readable reason the call must be interactively approved before it runs,
+    /// or nil if it can proceed immediately. Deleting a file is always irreversible enough to ask;
+    /// shell commands are gated by the user's configured Terminal Safety Level.
+    private static func approvalReason(toolName: String, settings: AppSettings) -> String? {
+        switch toolName {
+        case "file_delete", "delete_file", "rm":
+            return "This permanently deletes a file from disk."
+        case "terminal_command":
+            if settings.terminalSafetyLevel == .alwaysAsk {
+                return "Runs a shell command on your Mac (Terminal Safety Level: Always Ask Confirmation)."
+            }
+            return nil
+        default:
+            return nil
+        }
     }
 
     private func parseToolCalls(from text: String) -> [(tool: String, args: String)] {

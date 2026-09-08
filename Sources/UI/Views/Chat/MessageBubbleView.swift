@@ -143,12 +143,9 @@ public struct MessageBubbleView: View {
                     }
                 }
 
-                // Interactive Plan Confirmation Preview (Golden Rule #1: "Always review the plan before approval")
-                if message.content.contains("Proposed Execution Plan:") || message.content.contains("Plan:") && message.role == .assistant && !message.toolCalls.isEmpty {
-                    PlanApprovalCardView(appState: appState, proposedPlanText: "1. Scan staged workspace files\n2. Execute autonomous tool operations\n3. Format clean output artifacts")
-                }
-
-                // Tool Calls (if any)
+                // Tool Calls (if any). Sensitive calls (file deletion, or shell commands under an
+                // "always ask" safety policy) render their own real Approve/Reject prompt via
+                // ToolCallCardView + ToolApprovalManager instead of a separate, non-binding plan card.
                 if !message.toolCalls.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(message.toolCalls) { toolCall in

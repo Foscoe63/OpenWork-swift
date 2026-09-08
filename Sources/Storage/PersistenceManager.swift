@@ -706,7 +706,11 @@ public final class PersistenceManager: @unchecked Sendable {
             Tool(id: "agent_spawn", name: "agent_spawn", displayName: "Spawn Sub-Agent", description: "Launches a specialized child sub-agent to execute a sub-task autonomously", category: .agents),
             Tool(id: "agent_message", name: "agent_message", displayName: "Message Agent", description: "Sends an inter-agent message or query to another agent in the network", category: .agents),
             Tool(id: "memory_store", name: "memory_store", displayName: "Save to Memory", description: "Saves a persistent fact, preference, or context item to the workspace memory", category: .system),
-            Tool(id: "memory_recall", name: "memory_recall", displayName: "Recall Memory", description: "Retrieves stored memories by search term or category", category: .system)
+            Tool(id: "memory_recall", name: "memory_recall", displayName: "Recall Memory", description: "Retrieves stored memories by search term or category", category: .system),
+            Tool(id: "gmail_list", name: "gmail_list", displayName: "List Gmail Messages", description: "Lists recent Gmail messages matching a search query (requires Google OAuth credentials in Settings → Extensions)", category: .web, isEnabled: false, requiresApproval: false),
+            Tool(id: "gmail_search", name: "gmail_search", displayName: "Search Gmail", description: "Searches Gmail with a Gmail query string (e.g. from:boss newer_than:7d)", category: .web, isEnabled: false, requiresApproval: false),
+            Tool(id: "google_calendar_list", name: "google_calendar_list", displayName: "List Google Calendar", description: "Lists upcoming events from the primary Google Calendar", category: .web, isEnabled: false, requiresApproval: false),
+            Tool(id: "google_calendar_upcoming", name: "google_calendar_upcoming", displayName: "Upcoming Google Calendar", description: "Lists Google Calendar events for the next N days", category: .web, isEnabled: false, requiresApproval: false)
         ]
     }
 
@@ -942,17 +946,53 @@ public final class PersistenceManager: @unchecked Sendable {
                 isEnabled: true,
                 command: "git status --porcelain",
                 permissions: ["shell:exec"]
+            ),
+            AppExtensionPlugin(
+                id: "plugin-gmail",
+                name: "Gmail",
+                description: "Read and search Gmail via Google APIs. Configure Client ID, API Key, and OAuth Access Token under Extensions → Google Integrations.",
+                version: "1.0.0",
+                author: "Google / OpenWork",
+                pluginType: .workspaceTool,
+                source: .builtIn,
+                isEnabled: false,
+                permissions: ["network:outbound", "google:gmail.readonly"]
+            ),
+            AppExtensionPlugin(
+                id: "plugin-google-calendar",
+                name: "Google Calendar",
+                description: "List upcoming Google Calendar events. Configure Client ID, API Key, and OAuth Access Token under Extensions → Google Integrations.",
+                version: "1.0.0",
+                author: "Google / OpenWork",
+                pluginType: .workspaceTool,
+                source: .builtIn,
+                isEnabled: false,
+                permissions: ["network:outbound", "google:calendar.readonly"]
             )
         ]
     }
 
     public func loadPlugins() -> [AppExtensionPlugin] {
-        if let items = storage.load([AppExtensionPlugin].self, from: "plugins.json"), !items.isEmpty {
-            return items
+        var items: [AppExtensionPlugin] = []
+        if let loaded = storage.load([AppExtensionPlugin].self, from: "plugins.json"), !loaded.isEmpty {
+            items = loaded
+        } else {
+            let defaults = defaultPlugins
+            savePlugins(defaults)
+            return defaults
         }
-        let defaults = defaultPlugins
-        savePlugins(defaults)
-        return defaults
+
+        var modified = false
+        for def in defaultPlugins {
+            if !items.contains(where: { $0.id == def.id }) {
+                items.append(def)
+                modified = true
+            }
+        }
+        if modified {
+            savePlugins(items)
+        }
+        return items
     }
 
     public func savePlugins(_ plugins: [AppExtensionPlugin]) {

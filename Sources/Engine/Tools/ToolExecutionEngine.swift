@@ -85,16 +85,24 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             )
         }
 
+        let settings = PersistenceManager.shared.loadSettings()
+
         switch toolName {
         case "file_read", "read_file":
             let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? (dict["filepath"] as? String) ?? (dict["file"] as? String) ?? ""
             let fullPath = path.hasPrefix("/") ? path : (workspace.folderPath as NSString).appendingPathComponent(path)
+            if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
             return readFile(path: fullPath, startTime: startTime)
 
         case "file_write", "write_file", "create_file", "save_file":
             let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? (dict["filepath"] as? String) ?? (dict["file"] as? String) ?? (dict["title"] as? String) ?? ""
             let content = (dict["content"] as? String) ?? (dict["text"] as? String) ?? (dict["body"] as? String) ?? (dict["data"] as? String) ?? ""
             let fullPath = path.hasPrefix("/") ? path : (workspace.folderPath as NSString).appendingPathComponent(path)
+            if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
             return writeFile(path: fullPath, content: content, startTime: startTime)
 
         case "file_list", "list_files", "list_directory", "ls", "dir":
@@ -107,6 +115,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             let to = (dict["destination"] as? String) ?? (dict["to"] as? String) ?? (dict["target"] as? String) ?? ""
             let fullFrom = from.hasPrefix("/") ? from : (workspace.folderPath as NSString).appendingPathComponent(from)
             let fullTo = to.hasPrefix("/") ? to : (workspace.folderPath as NSString).appendingPathComponent(to)
+            if let denial = sandboxDenial(for: fullFrom, workspace: workspace, settings: settings, startTime: startTime)
+                ?? sandboxDenial(for: fullTo, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
             do {
                 let toDir = (fullTo as NSString).deletingLastPathComponent
                 try fileManager.createDirectory(atPath: toDir, withIntermediateDirectories: true)
@@ -133,6 +145,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             let to = (dict["destination"] as? String) ?? (dict["to"] as? String) ?? (dict["target"] as? String) ?? ""
             let fullFrom = from.hasPrefix("/") ? from : (workspace.folderPath as NSString).appendingPathComponent(from)
             let fullTo = to.hasPrefix("/") ? to : (workspace.folderPath as NSString).appendingPathComponent(to)
+            if let denial = sandboxDenial(for: fullFrom, workspace: workspace, settings: settings, startTime: startTime)
+                ?? sandboxDenial(for: fullTo, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
             do {
                 let toDir = (fullTo as NSString).deletingLastPathComponent
                 try fileManager.createDirectory(atPath: toDir, withIntermediateDirectories: true)
@@ -157,6 +173,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         case "file_delete", "delete_file", "rm":
             let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? ""
             let fullPath = path.hasPrefix("/") ? path : (workspace.folderPath as NSString).appendingPathComponent(path)
+            if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
             do {
                 if fileManager.fileExists(atPath: fullPath) {
                     try fileManager.removeItem(atPath: fullPath)
@@ -184,6 +203,28 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         case "terminal_command":
             let command = dict["command"] as? String ?? ""
             let cwd = dict["cwd"] as? String ?? workspace.folderPath
+            switch settings.terminalSafetyLevel {
+            case .allowAll:
+                break
+            case .safeOnly:
+                if !ToolExecutionEngine.isSafeReadOnlyCommand(command) {
+                    return ToolExecutionResult(
+                        success: false,
+                        output: "",
+                        error: "Blocked by Terminal Safety Level (\"Allow Safe Read-Only Commands\"): '\(command)' is not on the read-only allowlist. Switch to \"Always Ask\" or \"Unrestricted\" under Settings → Advanced to run it.",
+                        durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                    )
+                }
+            case .alwaysAsk:
+                // The agent loop must obtain interactive user approval before a call reaches
+                // execute() under this policy; treat one that arrives here anyway as unapproved.
+                return ToolExecutionResult(
+                    success: false,
+                    output: "",
+                    error: "Blocked: Terminal Safety Level is \"Always Ask Confirmation\" but no user approval was recorded for this command.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
             return executeShell(command: command, cwd: cwd, startTime: startTime)
 
         case "calculator":
@@ -201,12 +242,23 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             )
 
         case "web_search":
+            guard settings.allowWebAccess else {
+                return ToolExecutionResult(
+                    success: false,
+                    output: "",
+                    error: "Web search is disabled. Enable \"Web Search Access\" under Settings → Advanced to let agents query the web.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
             let query = dict["query"] as? String ?? ""
-            return executeWebSearch(query: query, startTime: startTime)
+            return await executeWebSearch(query: query, startTime: startTime)
 
         case "document_extract", "extract_document", "read_pdf_or_image":
             let rawPath = dict["path"] as? String ?? ""
             let fullPath = rawPath.hasPrefix("/") ? rawPath : (workspace.folderPath as NSString).appendingPathComponent(rawPath)
+            if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
             let ext = (fullPath as NSString).pathExtension.lowercased()
 
             if ext == "pdf" {
@@ -406,6 +458,57 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
 
+        case "gmail_list", "gmail_search":
+            let settings = PersistenceManager.shared.loadSettings()
+            guard settings.gmailExtensionEnabled else {
+                return ToolExecutionResult(
+                    success: false,
+                    output: "",
+                    error: "Gmail extension is disabled. Enable it in Settings → Extensions → Google Integrations.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            let query = dict["query"] as? String
+                ?? dict["q"] as? String
+                ?? (toolName == "gmail_search" ? "in:inbox" : "is:unread newer_than:1d")
+            let maxResults = dict["max_results"] as? Int
+                ?? dict["maxResults"] as? Int
+                ?? 10
+            let output = await GoogleIntegrationsService.shared.listGmailMessages(query: query, maxResults: maxResults)
+            let ok = !output.lowercased().hasPrefix("gmail error") && !output.contains("requires a Google OAuth")
+            return ToolExecutionResult(
+                success: ok,
+                output: output,
+                error: ok ? nil : output,
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
+        case "google_calendar_list", "google_calendar_upcoming":
+            let settings = PersistenceManager.shared.loadSettings()
+            guard settings.googleCalendarExtensionEnabled else {
+                return ToolExecutionResult(
+                    success: false,
+                    output: "",
+                    error: "Google Calendar extension is disabled. Enable it in Settings → Extensions → Google Integrations.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            let days = dict["days"] as? Int
+                ?? dict["days_ahead"] as? Int
+                ?? dict["daysAhead"] as? Int
+                ?? 7
+            let maxResults = dict["max_results"] as? Int
+                ?? dict["maxResults"] as? Int
+                ?? 15
+            let output = await GoogleIntegrationsService.shared.listCalendarEvents(daysAhead: days, maxResults: maxResults)
+            let ok = !output.lowercased().hasPrefix("google calendar error") && !output.contains("requires a Google OAuth")
+            return ToolExecutionResult(
+                success: ok,
+                output: output,
+                error: ok ? nil : output,
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
         default:
             // Check if this tool uses dot notation like server.tool_name
             let dotComponents = toolName.components(separatedBy: ".")
@@ -444,7 +547,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     output: output,
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
-            } else if toolName.hasPrefix("mcp_") || toolName.contains("macuse") || toolName.contains("calendar") || toolName.contains("reminder") {
+            } else if toolName.hasPrefix("mcp_") || toolName.contains("macuse") || ((toolName.contains("calendar") || toolName.contains("reminder")) && !toolName.hasPrefix("google_")) {
                 let output = await MCPClientManager.shared.dispatchToolCall(
                     serverIdentifier: "macuse",
                     toolName: toolName,
@@ -464,6 +567,81 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
         }
+    }
+
+    /// When "Sandbox Agent File System" is on, file tools may only touch the active workspace
+    /// folder or a folder the user has explicitly authorized. Returns a failure result if the
+    /// resolved path falls outside that set, or nil to allow the call to proceed.
+    private func sandboxDenial(for rawPath: String, workspace: Workspace, settings: AppSettings, startTime: Double) -> ToolExecutionResult? {
+        guard settings.sandboxAgentFileSystem else { return nil }
+
+        let cleanPath = rawPath.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        let standardized = (cleanPath as NSString).expandingTildeInPath as NSString
+        let standardizedPath = standardized.standardizingPath
+
+        var authorizedRoots = settings.authorizedFolders.map { (($0 as NSString).expandingTildeInPath as NSString).standardizingPath }
+        authorizedRoots.append((workspace.folderPath as NSString).standardizingPath)
+
+        let isAuthorized = authorizedRoots.contains { root in
+            standardizedPath == root || standardizedPath.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+        }
+
+        if isAuthorized {
+            return nil
+        }
+
+        return ToolExecutionResult(
+            success: false,
+            output: "",
+            error: "Blocked by Sandbox Agent File System: '\(cleanPath)' is outside the workspace and authorized folders. Add it under Settings → Advanced → Authorized Workspace Directories, or disable sandboxing.",
+            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        )
+    }
+
+    /// A conservative allowlist for Terminal Safety Level "Allow Safe Read-Only Commands". This is
+    /// not a full shell parser — it rejects anything containing redirection, substitution, or
+    /// privilege-escalation syntax outright, then requires every `;`/`&&`/`||`/`|`-separated segment
+    /// to start with a recognized read-only command (with extra checks for `git` and `find`, whose
+    /// subcommands/flags can otherwise mutate or delete).
+    static func isSafeReadOnlyCommand(_ command: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+
+        let dangerousSubstrings = [">", ">>", "<(", "$(", "`", "sudo", "chmod", "chown", "kill", "curl", "wget", "nc ", "ssh", "scp", "eval", "xargs", "rm ", "mv ", ":(){"]
+        let lowered = trimmed.lowercased()
+        for marker in dangerousSubstrings where lowered.contains(marker) {
+            return false
+        }
+
+        let readOnlyCommands: Set<String> = [
+            "ls", "cat", "head", "tail", "wc", "pwd", "echo", "date", "whoami", "which",
+            "file", "du", "df", "ps", "grep", "rg", "sort", "uniq", "uname", "sw_vers",
+            "hostname", "env", "printenv", "stat", "tree", "less", "more", "diff"
+        ]
+        let readOnlyGitSubcommands: Set<String> = ["status", "log", "diff", "show", "branch", "remote", "blame", "describe", "rev-parse"]
+
+        let segments = trimmed.components(separatedBy: CharacterSet(charactersIn: ";|&"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        guard !segments.isEmpty else { return false }
+
+        for segment in segments {
+            let tokens = segment.split(separator: " ").map(String.init)
+            guard let head = tokens.first else { return false }
+
+            if head == "git" {
+                guard tokens.count > 1, readOnlyGitSubcommands.contains(tokens[1]) else { return false }
+                continue
+            }
+            if head == "find" {
+                if segment.contains("-delete") || segment.contains("-exec") { return false }
+                continue
+            }
+            guard readOnlyCommands.contains(head) else { return false }
+        }
+
+        return true
     }
 
     private func readFile(path: String, startTime: Double) -> ToolExecutionResult {
@@ -539,16 +717,54 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         process.arguments = ["-c", command]
         process.environment = ToolExecutionEngine.defaultEnvironment(custom: settings.customEnvironmentVariables)
         process.currentDirectoryURL = URL(fileURLWithPath: (cwd as NSString).expandingTildeInPath)
-        
+
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
 
+        // Drain the pipe as data arrives instead of reading only after waitUntilExit(): once a
+        // command's combined stdout/stderr exceeds the kernel pipe buffer, an unread pipe makes
+        // the child block on write() and never exit, which deadlocks waitUntilExit() forever.
+        let state = ShellOutputState(maxBytes: 200_000)
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty {
+                state.append(chunk)
+            }
+        }
+
+        let maxRuntimeSeconds: TimeInterval = 120
+        let timeoutTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timeoutTimer.schedule(deadline: .now() + maxRuntimeSeconds)
+        timeoutTimer.setEventHandler {
+            if process.isRunning {
+                state.markTimedOut()
+                process.terminate()
+            }
+        }
+        timeoutTimer.resume()
+
         do {
             try process.run()
             process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
+            timeoutTimer.cancel()
+            pipe.fileHandleForReading.readabilityHandler = nil
+            // Drain any bytes written between the last readabilityHandler callback and exit.
+            let remainder = pipe.fileHandleForReading.readDataToEndOfFile()
+            if !remainder.isEmpty {
+                state.append(remainder)
+            }
+
+            let (output, didTimeOut) = state.finalize()
+            if didTimeOut {
+                return ToolExecutionResult(
+                    success: false,
+                    output: output,
+                    error: "Command timed out after \(Int(maxRuntimeSeconds))s and was terminated.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+
             return ToolExecutionResult(
                 success: process.terminationStatus == 0,
                 output: output,
@@ -556,6 +772,8 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
         } catch {
+            timeoutTimer.cancel()
+            pipe.fileHandleForReading.readabilityHandler = nil
             return ToolExecutionResult(
                 success: false,
                 output: "",
@@ -583,72 +801,123 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         )
     }
 
-    private func executeWebSearch(query: String, startTime: Double) -> ToolExecutionResult {
-        // Check if ddg-search or search MCP server is available first
+    private func executeWebSearch(query: String, startTime: Double) async -> ToolExecutionResult {
         let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        if let url = URL(string: "https://html.duckduckgo.com/html/?q=\(encodedQuery)") {
-            var request = URLRequest(url: url)
-            request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
-            request.timeoutInterval = 6.0
-            
-            let semaphore = DispatchSemaphore(value: 0)
-            var fetchedResult: String? = nil
-            
-            let task = URLSession.shared.dataTask(with: request) { data, response, error in
-                defer { semaphore.signal() }
-                guard let data = data, let html = String(data: data, encoding: .utf8) else { return }
-                
-                // Parse search result snippets using regex
-                let snippetPattern = "<a class=\"result__snippet[^\"]*\"[^>]*>([\\s\\S]*?)</a>"
-                
-                var snippets: [String] = []
-                if let regex = try? NSRegularExpression(pattern: snippetPattern, options: []) {
-                    let nsHtml = html as NSString
-                    let matches = regex.matches(in: html, options: [], range: NSRange(location: 0, length: nsHtml.length))
-                    for m in matches.prefix(5) {
-                        if m.numberOfRanges > 1 {
-                            let rawSnippet = nsHtml.substring(with: m.range(at: 1))
-                                .replacingOccurrences(of: "<b>", with: "")
-                                .replacingOccurrences(of: "</b>", with: "")
-                                .replacingOccurrences(of: "&quot;", with: "\"")
-                                .replacingOccurrences(of: "&#x27;", with: "'")
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !rawSnippet.isEmpty {
-                                snippets.append(rawSnippet)
-                            }
-                        }
-                    }
-                }
-                
-                if !snippets.isEmpty {
-                    var out = "### Live Web Search Results for \"\(query)\":\n\n"
-                    for (idx, snip) in snippets.enumerated() {
-                        out += "\(idx + 1). \(snip)\n\n"
-                    }
-                    fetchedResult = out
-                }
-            }
-            task.resume()
-            _ = semaphore.wait(timeout: .now() + 6.0)
-            
-            if let result = fetchedResult, !result.isEmpty {
+        guard let url = URL(string: "https://html.duckduckgo.com/html/?q=\(encodedQuery)") else {
+            return ToolExecutionResult(
+                success: false,
+                output: "",
+                error: "Web search for \"\(query)\" failed: could not build a request URL.",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 6.0
+
+        let html: String
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            guard let decoded = String(data: data, encoding: .utf8) else {
                 return ToolExecutionResult(
-                    success: true,
-                    output: result,
+                    success: false,
+                    output: "",
+                    error: "Web search for \"\(query)\" failed: the search provider returned an undecodable response.",
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
             }
+            html = decoded
+        } catch {
+            return ToolExecutionResult(
+                success: false,
+                output: "",
+                error: "Web search for \"\(query)\" failed: \(error.localizedDescription). Configure a search MCP server (e.g. ddg-search) in Settings → Tools & MCP for more reliable results.",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
         }
 
-        let fallbackResults = """
-        ### Web Search Findings for "\(query)":
-        - Top reporting confirms ongoing developments covered by Reuters, BBC, AP News, Al Jazeera, and official briefings.
-        - Detailed regional impact assessments and official ministerial statements published within the last 48 hours.
-        """
+        // Parse search result snippets using regex
+        let snippetPattern = "<a class=\"result__snippet[^\"]*\"[^>]*>([\\s\\S]*?)</a>"
+        var snippets: [String] = []
+        if let regex = try? NSRegularExpression(pattern: snippetPattern, options: []) {
+            let nsHtml = html as NSString
+            let matches = regex.matches(in: html, options: [], range: NSRange(location: 0, length: nsHtml.length))
+            for m in matches.prefix(5) {
+                if m.numberOfRanges > 1 {
+                    let rawSnippet = nsHtml.substring(with: m.range(at: 1))
+                        .replacingOccurrences(of: "<b>", with: "")
+                        .replacingOccurrences(of: "</b>", with: "")
+                        .replacingOccurrences(of: "&quot;", with: "\"")
+                        .replacingOccurrences(of: "&#x27;", with: "'")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !rawSnippet.isEmpty {
+                        snippets.append(rawSnippet)
+                    }
+                }
+            }
+        }
+
+        guard !snippets.isEmpty else {
+            return ToolExecutionResult(
+                success: false,
+                output: "",
+                error: "Web search for \"\(query)\" returned no parseable results. Do not fabricate search findings — tell the user the search failed or configure a search MCP server in Settings → Tools & MCP.",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+        }
+
+        var out = "### Live Web Search Results for \"\(query)\":\n\n"
+        for (idx, snip) in snippets.enumerated() {
+            out += "\(idx + 1). \(snip)\n\n"
+        }
         return ToolExecutionResult(
             success: true,
-            output: fallbackResults,
+            output: out,
             durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
         )
+    }
+}
+
+/// Thread-safe accumulator for a running `Process`'s piped output, capping memory use on runaway
+/// commands and recording whether the process was killed for exceeding its time budget.
+private final class ShellOutputState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private var timedOut = false
+    private var wasTruncated = false
+    private let maxBytes: Int
+
+    init(maxBytes: Int) {
+        self.maxBytes = maxBytes
+    }
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard data.count < maxBytes else {
+            wasTruncated = true
+            return
+        }
+        data.append(chunk)
+        if data.count > maxBytes {
+            wasTruncated = true
+        }
+    }
+
+    func markTimedOut() {
+        lock.lock()
+        timedOut = true
+        lock.unlock()
+    }
+
+    func finalize() -> (output: String, didTimeOut: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        var text = String(data: data, encoding: .utf8) ?? ""
+        if wasTruncated {
+            text += "\n...[output truncated after \(maxBytes) bytes]"
+        }
+        return (text, timedOut)
     }
 }

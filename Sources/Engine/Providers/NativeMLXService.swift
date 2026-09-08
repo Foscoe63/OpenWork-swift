@@ -167,12 +167,9 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         modelId: String,
         onProgress: @Sendable @escaping (String) -> Void
     ) async throws -> ModelContainer {
-        lock.lock()
-        if let existing = loadedContainers[modelId] {
-            lock.unlock()
+        if let existing = lock.withLock({ loadedContainers[modelId] }) {
             return existing
         }
-        lock.unlock()
 
         let home = FileManager.default.homeDirectoryForCurrentUser
         let searchDirs = [
@@ -230,9 +227,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             )
         }
 
-        lock.lock()
-        loadedContainers[modelId] = container
-        lock.unlock()
+        lock.withLock { loadedContainers[modelId] = container }
 
         return container
     }
