@@ -12,6 +12,30 @@ settings:
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     PRODUCT_NAME: "OpenWork"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    CLANG_CXX_LANGUAGE_STANDARD: "c++17"
+
+packages:
+  Yams:
+    url: https://github.com/jpsim/Yams.git
+    from: 5.0.0
+  swift-sdk:
+    url: https://github.com/modelcontextprotocol/swift-sdk.git
+    from: 0.10.0
+  swift-nio:
+    url: https://github.com/apple/swift-nio.git
+    from: 2.81.0
+  mlx-swift-lm:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    from: 3.31.4
+  swift-huggingface:
+    url: https://github.com/huggingface/swift-huggingface.git
+    from: 0.9.0
+  swift-transformers:
+    url: https://github.com/huggingface/swift-transformers.git
+    from: 1.3.0
+  swift-jinja:
+    url: https://github.com/huggingface/swift-jinja.git
+    version: ["2.0.0", "2.4.0"]
 
 targets:
   OpenWorkSwift:
@@ -21,6 +45,27 @@ targets:
     sources:
       - path: Sources
       - path: Resources
+    dependencies:
+      - package: Yams
+        product: Yams
+      - package: swift-sdk
+        product: MCP
+      - package: swift-nio
+        product: NIOCore
+      - package: swift-nio
+        product: NIOHTTP1
+      - package: swift-nio
+        product: NIOPosix
+      - package: mlx-swift-lm
+        product: MLXLLM
+      - package: mlx-swift-lm
+        product: MLXLMCommon
+      - package: mlx-swift-lm
+        product: MLXHuggingFace
+      - package: swift-huggingface
+        product: HuggingFace
+      - package: swift-transformers
+        product: Tokenizers
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.openwork.OpenWorkSwift
@@ -33,3 +78,5 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
         COMBINE_HIDPI_IMAGES: YES
         CODE_SIGN_STYLE: Automatic
+        OTHER_SWIFT_FLAGS: "$(inherited) -strict-concurrency=minimal"
+        OTHER_CPLUSPLUSFLAGS: "$(inherited) -std=c++17 -Wno-c++17-extensions"

@@ -35,24 +35,71 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         tools: [Tool],
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws {
-        // If an external server is running, route to it
-        if await LocalMLXEngine.shared.isServerRunning(port: 1337) {
-            var fb = provider
-            fb.baseUrl = "http://127.0.0.1:1337/v1"
-            try await OpenAIService.shared.streamChat(
-                provider: fb,
+        // Built-in path: run MLX in-process first (same as Osaurus / GrizzyClaw).
+        // External HTTP servers are only a secondary option — never required.
+        do {
+            try await streamInProcess(
                 model: model,
                 systemPrompt: systemPrompt,
                 messages: messages,
                 temperature: temperature,
                 maxTokens: maxTokens,
-                reasoningEffort: reasoningEffort,
-                tools: tools,
                 onChunk: onChunk
             )
             return
+        } catch {
+            // Fall through to optional local servers, then mock.
         }
 
+        for port in [1337, 8000, 8080, 11434, 1234, 5243] {
+            if await LocalMLXEngine.shared.isServerRunning(port: port) {
+                var fb = provider
+                fb.baseUrl = port == 11434
+                    ? "http://127.0.0.1:11434"
+                    : "http://127.0.0.1:\(port)/v1"
+                let client: LLMProviderClient = port == 11434
+                    ? OllamaService.shared
+                    : OpenAIService.shared
+                do {
+                    try await client.streamChat(
+                        provider: fb,
+                        model: model,
+                        systemPrompt: systemPrompt,
+                        messages: messages,
+                        temperature: temperature,
+                        maxTokens: maxTokens,
+                        reasoningEffort: reasoningEffort,
+                        tools: tools,
+                        onChunk: onChunk
+                    )
+                    return
+                } catch {
+                    continue
+                }
+            }
+        }
+
+        try await MockLLMService.shared.streamChat(
+            provider: provider,
+            model: model,
+            systemPrompt: systemPrompt,
+            messages: messages,
+            temperature: temperature,
+            maxTokens: maxTokens,
+            reasoningEffort: reasoningEffort,
+            tools: tools,
+            onChunk: onChunk
+        )
+    }
+
+    private func streamInProcess(
+        model: ModelInfo,
+        systemPrompt: String,
+        messages: [ChatMessage],
+        temperature: Double,
+        maxTokens: Int,
+        onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
+    ) async throws {
         let container = try await getOrLoadContainer(modelId: model.id) { _ in }
         let sanitizedInstructions = sanitizeForHFChatTemplate(systemPrompt)
         let preparedMessages = mergeToolMessagesIntoFollowingUser(messages)
@@ -226,7 +273,9 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     }
 }
 #else
-/// Fallback client when MLX SPM packages are not linked in Xcode direct target.
+/// Fallback client when MLX SPM packages are not linked in the Xcode app target.
+/// Prefers any already-running local OpenAI-compatible server; otherwise uses MockLLMService
+/// so prompts still complete (tools/automations) instead of failing with a connection error.
 public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     public static let shared = NativeMLXService()
     public init() {}
@@ -243,7 +292,35 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         tools: [Tool],
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws {
-        try await OpenAIService.shared.streamChat(
+        // 1) Prefer an already-running local server (Osaurus / oMLX / Ollama / LM Studio / vMLX)
+        let probePorts = [1337, 8000, 11434, 1234, 8080, 5243]
+        for port in probePorts {
+            if await LocalMLXEngine.shared.isServerRunning(port: port) {
+                var fb = provider
+                fb.baseUrl = port == 11434
+                    ? "http://127.0.0.1:11434"
+                    : "http://127.0.0.1:\(port)/v1"
+                let client: LLMProviderClient = port == 11434
+                    ? OllamaService.shared
+                    : OpenAIService.shared
+                try await client.streamChat(
+                    provider: fb,
+                    model: model,
+                    systemPrompt: systemPrompt,
+                    messages: messages,
+                    temperature: temperature,
+                    maxTokens: maxTokens,
+                    reasoningEffort: reasoningEffort,
+                    tools: tools,
+                    onChunk: onChunk
+                )
+                return
+            }
+        }
+
+        // 2) No reachable local server and no in-process MLX (packages not linked in Xcode).
+        //    Keep chat usable instead of failing with "Could not connect to the server."
+        try await MockLLMService.shared.streamChat(
             provider: provider,
             model: model,
             systemPrompt: systemPrompt,

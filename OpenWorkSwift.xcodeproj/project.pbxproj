@@ -534,6 +534,16 @@
 			);
 			name = OpenWorkSwift;
 			packageProductDependencies = (
+				C1D2E3F405060708090A0B01 /* Yams */,
+				C1D2E3F405060708090A0B02 /* MCP */,
+				C1D2E3F405060708090A0B03 /* NIOCore */,
+				C1D2E3F405060708090A0B04 /* NIOHTTP1 */,
+				C1D2E3F405060708090A0B05 /* NIOPosix */,
+				C1D2E3F405060708090A0B06 /* MLXLLM */,
+				C1D2E3F405060708090A0B07 /* MLXLMCommon */,
+				C1D2E3F405060708090A0B08 /* MLXHuggingFace */,
+				C1D2E3F405060708090A0B09 /* HuggingFace */,
+				C1D2E3F405060708090A0B0A /* Tokenizers */,
 			);
 			productName = OpenWorkSwift;
 			productReference = 42F571F271D102A05526EB7F /* OpenWorkSwift.app */;
@@ -563,6 +573,13 @@
 			mainGroup = 1143A7AEBC2AED9764B345D7 /* Project Root */;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				A1B2C3D4E5F60708090A0B01 /* XCRemoteSwiftPackageReference "Yams" */,
+				A1B2C3D4E5F60708090A0B02 /* XCRemoteSwiftPackageReference "swift-sdk" */,
+				A1B2C3D4E5F60708090A0B03 /* XCRemoteSwiftPackageReference "swift-nio" */,
+				A1B2C3D4E5F60708090A0B04 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				A1B2C3D4E5F60708090A0B05 /* XCRemoteSwiftPackageReference "swift-huggingface" */,
+				A1B2C3D4E5F60708090A0B06 /* XCRemoteSwiftPackageReference "swift-transformers" */,
+				A1B2C3D4E5F60708090A0B07 /* XCRemoteSwiftPackageReference "swift-jinja" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8CC678F416FECE9E650A3F2A /* Products */;
@@ -685,7 +702,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.openwork.OpenWorkSwift;
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -698,7 +715,7 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CLANG_CXX_LIBRARY = "libc++";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -828,7 +845,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.openwork.OpenWorkSwift;
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -857,6 +874,119 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A1B2C3D4E5F60708090A0B01 /* XCRemoteSwiftPackageReference "Yams" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/jpsim/Yams.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.0.0;
+			};
+		};
+		A1B2C3D4E5F60708090A0B02 /* XCRemoteSwiftPackageReference "swift-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/modelcontextprotocol/swift-sdk.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.10.0;
+			};
+		};
+		A1B2C3D4E5F60708090A0B03 /* XCRemoteSwiftPackageReference "swift-nio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-nio.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.81.0;
+			};
+		};
+		A1B2C3D4E5F60708090A0B04 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.31.4;
+			};
+		};
+		A1B2C3D4E5F60708090A0B05 /* XCRemoteSwiftPackageReference "swift-huggingface" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-huggingface.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.0;
+			};
+		};
+		A1B2C3D4E5F60708090A0B06 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-transformers.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.3.0;
+			};
+		};
+		A1B2C3D4E5F60708090A0B07 /* XCRemoteSwiftPackageReference "swift-jinja" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-jinja.git";
+			requirement = {
+				kind = versionRange;
+				minimumVersion = 2.0.0;
+				maximumVersion = 2.4.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C1D2E3F405060708090A0B01 /* Yams */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60708090A0B01 /* XCRemoteSwiftPackageReference "Yams" */;
+			productName = Yams;
+		};
+		C1D2E3F405060708090A0B02 /* MCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60708090A0B02 /* XCRemoteSwiftPackageReference "swift-sdk" */;
+			productName = MCP;
+		};
+		C1D2E3F405060708090A0B03 /* NIOCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60708090A0B03 /* XCRemoteSwiftPackageReference "swift-nio" */;
+			productName = NIOCore;
+		};
+		C1D2E3F405060708090A0B04 /* NIOHTTP1 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60708090A0B03 /* XCRemoteSwiftPackageReference "swift-nio" */;
+			productName = NIOHTTP1;
+		};
+		C1D2E3F405060708090A0B05 /* NIOPosix */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60708090A0B03 /* XCRemoteSwiftPackageReference "swift-nio" */;
+			productName = NIOPosix;
+		};
+		C1D2E3F405060708090A0B06 /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60708090A0B04 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLLM;
+		};
+		C1D2E3F405060708090A0B07 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60708090A0B04 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLMCommon;
+		};
+		C1D2E3F405060708090A0B08 /* MLXHuggingFace */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60708090A0B04 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXHuggingFace;
+		};
+		C1D2E3F405060708090A0B09 /* HuggingFace */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60708090A0B05 /* XCRemoteSwiftPackageReference "swift-huggingface" */;
+			productName = HuggingFace;
+		};
+		C1D2E3F405060708090A0B0A /* Tokenizers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F60708090A0B06 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 4902679CC682E18C9550569E /* Project object */;
 }
