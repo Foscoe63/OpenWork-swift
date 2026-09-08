@@ -176,13 +176,16 @@ public final class PersistenceManager: @unchecked Sendable {
                 isEnabled: true,
                 isDefault: true,
                 models: [
-                    ModelInfo(id: "mlx-community/Ornith-1.5-35B-A3B-8bit", name: "Ornith 1.5 35B A3B 8bit", providerId: "builtin-mlx-local", contextWindow: 262144, supportsReasoning: true, supportsTools: true, isDefault: true, speedTier: "Powerful"),
-                    ModelInfo(id: "mlx-community/Qwen3-Coder-Next-REAP-48B-A3B-mlx-8Bit", name: "Qwen3 Coder Next REAP 48B (8-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsTools: true, speedTier: "Powerful"),
-                    ModelInfo(id: "mlx-community/Qwen3.6-35B-A3B-8bit", name: "Qwen3.6 35B (8-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, speedTier: "Fast"),
+                    // Smallest model first and marked as default: a fresh install shouldn't
+                    // silently kick off a 30-70GB download the first time someone sends a chat
+                    // message. Larger models remain selectable from the model picker.
+                    ModelInfo(id: "mlx-community/DeepSeek-R1-Distill-Qwen-14B-4bit", name: "DeepSeek R1 Distill 14B (MLX)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsReasoning: true, isDefault: true, speedTier: "Fast"),
+                    ModelInfo(id: "mlx-community/Qwen2.5-Coder-32B-Instruct-4bit", name: "Qwen 2.5 Coder 32B (MLX 4-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsTools: true, speedTier: "Fast"),
                     ModelInfo(id: "mlx-community/Qwen3.8-27B-8bit", name: "Qwen3.8 27B (8-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, speedTier: "Balanced"),
                     ModelInfo(id: "mlx-community/Qwen3.8-27B-MLX-8bit", name: "Qwen3.8 27B MLX (Vision 8-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsVision: true, speedTier: "Balanced"),
-                    ModelInfo(id: "mlx-community/Qwen2.5-Coder-32B-Instruct-4bit", name: "Qwen 2.5 Coder 32B (MLX 4-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsTools: true, speedTier: "Fast"),
-                    ModelInfo(id: "mlx-community/DeepSeek-R1-Distill-Qwen-14B-4bit", name: "DeepSeek R1 Distill 14B (MLX)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsReasoning: true, speedTier: "Fast")
+                    ModelInfo(id: "mlx-community/Qwen3.6-35B-A3B-8bit", name: "Qwen3.6 35B (8-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, speedTier: "Powerful"),
+                    ModelInfo(id: "mlx-community/Ornith-1.5-35B-A3B-8bit", name: "Ornith 1.5 35B A3B 8bit", providerId: "builtin-mlx-local", contextWindow: 262144, supportsReasoning: true, supportsTools: true, speedTier: "Powerful"),
+                    ModelInfo(id: "mlx-community/Qwen3-Coder-Next-REAP-48B-A3B-mlx-8Bit", name: "Qwen3 Coder Next REAP 48B (8-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, supportsTools: true, speedTier: "Powerful")
                 ]
             ),
             ModelProvider(
@@ -199,20 +202,6 @@ public final class PersistenceManager: @unchecked Sendable {
                     ModelInfo(id: "mistral:latest", name: "Mistral 7B", providerId: "ollama-local", contextWindow: 32768, supportsVision: false, supportsReasoning: false, speedTier: "Fast"),
                     ModelInfo(id: "deepseek-r1:8b", name: "DeepSeek R1 (8B Reasoning)", providerId: "ollama-local", contextWindow: 65536, supportsVision: false, supportsReasoning: true, speedTier: "Balanced"),
                     ModelInfo(id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder (7B)", providerId: "ollama-local", contextWindow: 32768, supportsVision: false, supportsReasoning: false, speedTier: "Fast")
-                ]
-            ),
-            ModelProvider(
-                id: "builtin-mlx-local",
-                name: "Apple Silicon (Built-in)",
-                type: .local,
-                kind: .omlx,
-                baseUrl: "http://127.0.0.1:8000/v1",
-                apiKey: "",
-                isEnabled: true,
-                models: [
-                    ModelInfo(id: "mlx-community/Qwen2.5-Coder-32B-Instruct-4bit", name: "Qwen 2.5 Coder 32B (MLX 4-bit)", providerId: "builtin-mlx-local", contextWindow: 65536, supportsTools: true, isDefault: true, speedTier: "Fast"),
-                    ModelInfo(id: "mlx-community/DeepSeek-R1-Distill-Qwen-14B-4bit", name: "DeepSeek R1 Distill 14B (MLX)", providerId: "builtin-mlx-local", contextWindow: 65536, supportsReasoning: true, speedTier: "Fast"),
-                    ModelInfo(id: "mlx-community/Llama-3.3-70B-Instruct-4bit", name: "Llama 3.3 70B (MLX 4-bit)", providerId: "builtin-mlx-local", contextWindow: 131072, speedTier: "Balanced")
                 ]
             ),
             ModelProvider(
