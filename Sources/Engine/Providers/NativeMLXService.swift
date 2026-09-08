@@ -242,15 +242,15 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             let directSanitized = base.appendingPathComponent(sanitizedId)
             let snapshotDir = base.appendingPathComponent(hubFolder).appendingPathComponent("snapshots")
 
-            if FileManager.default.fileExists(atPath: direct.appendingPathComponent("config.json").path) {
+            if Self.isModelDirectoryComplete(direct) {
                 foundLocalDirectory = direct
                 break
-            } else if FileManager.default.fileExists(atPath: directSanitized.appendingPathComponent("config.json").path) {
+            } else if Self.isModelDirectoryComplete(directSanitized) {
                 foundLocalDirectory = directSanitized
                 break
             } else if FileManager.default.fileExists(atPath: snapshotDir.path),
                       let snaps = try? FileManager.default.contentsOfDirectory(at: snapshotDir, includingPropertiesForKeys: nil),
-                      let first = snaps.first(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("config.json").path) }) {
+                      let first = snaps.first(where: { Self.isModelDirectoryComplete($0) }) {
                 foundLocalDirectory = first
                 break
             }
@@ -282,6 +282,39 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         }
 
         return container
+    }
+
+    /// `config.json` alone is not proof a model is usable — an interrupted or cancelled download
+    /// (including one killed by our own load timeout) can leave config.json and a handful of small
+    /// metadata files on disk while most or all of the multi-gigabyte weight shards are missing.
+    /// Treating that as "found locally" makes loadContainer fail on missing files instead of
+    /// falling through to the downloader, which would otherwise resume the incomplete cache.
+    static func isModelDirectoryComplete(_ dir: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.appendingPathComponent("config.json").path) else { return false }
+
+        func nonEmptyFileExists(_ path: String) -> Bool {
+            guard let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int else { return false }
+            return size > 0
+        }
+
+        let indexURL = dir.appendingPathComponent("model.safetensors.index.json")
+        if fm.fileExists(atPath: indexURL.path) {
+            guard let data = try? Data(contentsOf: indexURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let weightMap = json["weight_map"] as? [String: String] else {
+                return false
+            }
+            let requiredShards = Set(weightMap.values)
+            guard !requiredShards.isEmpty else { return false }
+            return requiredShards.allSatisfy { nonEmptyFileExists(dir.appendingPathComponent($0).path) }
+        }
+
+        // No shard index: expect a single-file checkpoint alongside config.json.
+        guard let contents = try? fm.contentsOfDirectory(atPath: dir.path) else { return false }
+        let weightFiles = contents.filter { $0.hasSuffix(".safetensors") }
+        guard !weightFiles.isEmpty else { return false }
+        return weightFiles.allSatisfy { nonEmptyFileExists(dir.appendingPathComponent($0).path) }
     }
 
     private func sanitizeForHFChatTemplate(_ text: String) -> String {

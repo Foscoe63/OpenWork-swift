@@ -715,20 +715,52 @@ public actor MCPClientManager {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
+        // Drain both pipes as data arrives rather than reading only after waitUntilExit(): besides
+        // the usual deadlock once output exceeds the pipe buffer, a first-time Calendar/Reminders
+        // access prompt can leave osascript blocked on a system permission dialog indefinitely, so
+        // this also needs a hard timeout rather than an unbounded wait.
+        let outState = ShellOutputState(maxBytes: 50_000)
+        let errState = ShellOutputState(maxBytes: 50_000)
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty { outState.append(chunk) }
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty { errState.append(chunk) }
+        }
+
+        let timeoutSeconds: TimeInterval = 15
+        let timeoutTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timeoutTimer.schedule(deadline: .now() + timeoutSeconds)
+        timeoutTimer.setEventHandler {
+            if process.isRunning {
+                outState.markTimedOut()
+                process.terminate()
+            }
+        }
+        timeoutTimer.resume()
+
         do {
             try process.run()
             process.waitUntilExit()
+            timeoutTimer.cancel()
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            errPipe.fileHandleForReading.readabilityHandler = nil
 
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            let (output, didTimeOut) = outState.finalize()
+            let (error, _) = errState.finalize()
 
-            let output = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let error = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
+            if didTimeOut {
+                return "AppleScript Note: timed out after \(Int(timeoutSeconds))s — this usually means macOS is waiting on a permission prompt (System Settings → Privacy & Security → Calendars/Reminders/Automation) that needs a response."
+            }
             if !output.isEmpty { return output }
             if !error.isEmpty { return "AppleScript Note: \(error)" }
             return "Script executed successfully."
         } catch {
+            timeoutTimer.cancel()
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            errPipe.fileHandleForReading.readabilityHandler = nil
             return "AppleScript Error: \(error.localizedDescription)"
         }
     }

@@ -880,8 +880,11 @@ public final class ToolExecutionEngine: @unchecked Sendable {
 }
 
 /// Thread-safe accumulator for a running `Process`'s piped output, capping memory use on runaway
-/// commands and recording whether the process was killed for exceeding its time budget.
-private final class ShellOutputState: @unchecked Sendable {
+/// commands and recording whether the process was killed for exceeding its time budget. Shared by
+/// ToolExecutionEngine's terminal_command and MCPProtocol's executeAppleScript, both of which drain
+/// output incrementally to avoid the classic Process/Pipe deadlock (reading only after
+/// waitUntilExit() blocks forever once output exceeds the pipe buffer).
+final class ShellOutputState: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
     private var timedOut = false
