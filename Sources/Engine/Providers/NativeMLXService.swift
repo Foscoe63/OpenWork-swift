@@ -237,22 +237,27 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         let sanitizedId = modelId.replacingOccurrences(of: "/", with: "--")
         let hubFolder = "models--" + sanitizedId
 
-        for base in searchDirs {
-            let direct = base.appendingPathComponent(modelId)
-            let directSanitized = base.appendingPathComponent(sanitizedId)
-            let snapshotDir = base.appendingPathComponent(hubFolder).appendingPathComponent("snapshots")
+        searchLoop: for base in searchDirs {
+            let candidates = [
+                base.appendingPathComponent(modelId),
+                base.appendingPathComponent(sanitizedId),
+                // GrizzyClaw's on-disk layout nests an extra "models" segment before the repo id
+                // (e.g. ~/.grizzyclaw/mlx_models/models/mlx-community/<repo>) instead of putting it
+                // directly under the base directory like our own downloads do.
+                base.appendingPathComponent("models").appendingPathComponent(modelId),
+                base.appendingPathComponent("models").appendingPathComponent(sanitizedId)
+            ]
+            if let complete = candidates.first(where: { Self.isModelDirectoryComplete($0) }) {
+                foundLocalDirectory = complete
+                break searchLoop
+            }
 
-            if Self.isModelDirectoryComplete(direct) {
-                foundLocalDirectory = direct
-                break
-            } else if Self.isModelDirectoryComplete(directSanitized) {
-                foundLocalDirectory = directSanitized
-                break
-            } else if FileManager.default.fileExists(atPath: snapshotDir.path),
-                      let snaps = try? FileManager.default.contentsOfDirectory(at: snapshotDir, includingPropertiesForKeys: nil),
-                      let first = snaps.first(where: { Self.isModelDirectoryComplete($0) }) {
+            let snapshotDir = base.appendingPathComponent(hubFolder).appendingPathComponent("snapshots")
+            if FileManager.default.fileExists(atPath: snapshotDir.path),
+               let snaps = try? FileManager.default.contentsOfDirectory(at: snapshotDir, includingPropertiesForKeys: nil),
+               let first = snaps.first(where: { Self.isModelDirectoryComplete($0) }) {
                 foundLocalDirectory = first
-                break
+                break searchLoop
             }
         }
 
