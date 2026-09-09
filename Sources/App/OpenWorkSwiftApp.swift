@@ -3,6 +3,9 @@ import AppKit
 
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        // Writing to a dead MCP child stdin must not abort the process (EPIPE).
+        signal(SIGPIPE, SIG_IGN)
+
         if let image = NSImage(named: "AppIcon") {
             NSApplication.shared.applicationIconImage = image
         } else if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") ?? Bundle.main.url(forResource: "AppIcon.icns", withExtension: nil),

@@ -868,7 +868,7 @@ public struct SettingsView: View {
 
                 SettingsRow(title: "Custom MLX Models Directory", subtitle: "Specific folder on external SSD or hard drive", icon: "externaldrive.fill") {
                     HStack(spacing: 6) {
-                        TextField("~/.openwork/mlx_models", text: $appState.settings.customMLXModelsDirectory)
+                        TextField("/Volumes/Storage/Models", text: $appState.settings.customMLXModelsDirectory)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 220)
                         Button("Browse...") {
@@ -1953,6 +1953,15 @@ public struct SettingsView: View {
             SettingsCard(title: "Autonomous ReAct Loop & Hierarchy", description: "Multi-agent hierarchy limits and deep ReAct execution cycles", icon: "point.3.connected.trianglepath.dotted") {
                 SettingsRow(title: "Max Autonomous Iteration Loop (\(appState.settings.maxAutonomousIterations) turns)", subtitle: "Maximum iterative ReAct tool calls per agent turn (1 - 50)", icon: "arrow.triangle.2.circlepath") {
                     Stepper("", value: $appState.settings.maxAutonomousIterations, in: 1...50)
+                }
+
+                SettingsRow(title: "Plan Mode", subtitle: "Block writes/shell/mutating MCP until exit_plan_mode (Radiant parity)", icon: "list.clipboard") {
+                    Toggle("", isOn: $appState.settings.planModeEnabled)
+                        .toggleStyle(.switch)
+                }
+
+                SettingsRow(title: "Max Turn Tokens (\(appState.settings.maxTurnTokens / 1000)k)", subtitle: "Halt a single turn when estimated token use exceeds this budget", icon: "gauge.with.dots.needle.67percent") {
+                    Stepper("", value: $appState.settings.maxTurnTokens, in: 100_000...5_000_000, step: 100_000)
                 }
 
                 SettingsRow(title: "Allow Sub-Agent Spawning", subtitle: "Enable lead agents to launch child agents", icon: "person.2.fill") {

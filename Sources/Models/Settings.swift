@@ -168,6 +168,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var streamResponses: Bool
     public var autoCompactContext: Bool
     public var contextCompactionThresholdTokens: Int
+    public var planModeEnabled: Bool
+    public var maxTurnTokens: Int
     public var playNotificationSounds: Bool
 
     // Permissions & Shell
@@ -296,6 +298,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         streamResponses: Bool = true,
         autoCompactContext: Bool = true,
         contextCompactionThresholdTokens: Int = 32000,
+        planModeEnabled: Bool = false,
+        maxTurnTokens: Int = 2_000_000,
         playNotificationSounds: Bool = true,
         authorizedFolders: [String] = [FileManager.default.homeDirectoryForCurrentUser.path],
         terminalSafetyLevel: TerminalSafetyLevel = .safeOnly,
@@ -321,7 +325,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         googleAccountEmail: String = "",
         gmailExtensionEnabled: Bool = false,
         googleCalendarExtensionEnabled: Bool = false,
-        customMLXModelsDirectory: String = "",
+        customMLXModelsDirectory: String = FileManager.default.fileExists(atPath: "/Volumes/Storage/Models")
+            ? "/Volumes/Storage/Models"
+            : "",
         scanHuggingFaceCache: Bool = true,
         scanLMStudioModels: Bool = true,
         customHFCachePath: String = "",
@@ -355,6 +361,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.streamResponses = streamResponses
         self.autoCompactContext = autoCompactContext
         self.contextCompactionThresholdTokens = contextCompactionThresholdTokens
+        self.planModeEnabled = planModeEnabled
+        self.maxTurnTokens = maxTurnTokens
         self.playNotificationSounds = playNotificationSounds
         self.authorizedFolders = authorizedFolders
         self.terminalSafetyLevel = terminalSafetyLevel
@@ -420,6 +428,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.streamResponses = try container.decodeIfPresent(Bool.self, forKey: .streamResponses) ?? def.streamResponses
         self.autoCompactContext = try container.decodeIfPresent(Bool.self, forKey: .autoCompactContext) ?? def.autoCompactContext
         self.contextCompactionThresholdTokens = try container.decodeIfPresent(Int.self, forKey: .contextCompactionThresholdTokens) ?? def.contextCompactionThresholdTokens
+        self.planModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .planModeEnabled) ?? false
+        self.maxTurnTokens = try container.decodeIfPresent(Int.self, forKey: .maxTurnTokens) ?? 2_000_000
         self.playNotificationSounds = try container.decodeIfPresent(Bool.self, forKey: .playNotificationSounds) ?? def.playNotificationSounds
 
         self.authorizedFolders = try container.decodeIfPresent([String].self, forKey: .authorizedFolders) ?? def.authorizedFolders

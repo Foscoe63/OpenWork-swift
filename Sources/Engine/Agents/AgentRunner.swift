@@ -144,6 +144,42 @@ public final class AgentStreamAccumulator {
         onUpdate(message)
     }
 
+    public func appendNotice(_ notice: String) {
+        guard !notice.isEmpty else { return }
+        message.notices.append(notice)
+        onUpdate(message)
+    }
+
+    /// Recover stream text if fire-and-forget MainActor chunk tasks lagged behind the provider.
+    public func reconcileFromBridge(text: String, reasoning: String, promptTokens: Int, completionTokens: Int) {
+        if text.count > fullText.count {
+            fullText = text
+            message.content = fullText
+        }
+        if reasoning.count > fullReasoning.count {
+            fullReasoning = reasoning
+            message.reasoning = fullReasoning
+        }
+        if promptTokens > 0 {
+            message.promptTokens = promptTokens
+        }
+        if completionTokens > 0 {
+            message.completionTokens = completionTokens
+        }
+        onUpdate(message)
+    }
+
+    public func setHalt(reason: String, text: String) {
+        message.haltReason = reason
+        message.haltText = text
+        message.isStreaming = false
+        if !text.isEmpty {
+            fullText += (fullText.isEmpty ? "" : "\n\n") + text
+            message.content = fullText
+        }
+        onUpdate(message)
+    }
+
     public func handleError(_ error: Error) {
         message.isStreaming = false
         message.isError = true
@@ -205,6 +241,59 @@ public final class SubAgentAccumulator {
     public init() {}
     public func append(_ delta: String) {
         text += delta
+    }
+}
+
+/// Thread-safe collector for native tool calls emitted from provider stream callbacks
+/// (which often run off the MainActor).
+private final class AgentToolCallCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [ToolCallInfo] = []
+
+    func add(_ tc: ToolCallInfo) {
+        lock.lock()
+        defer { lock.unlock() }
+        if !items.contains(where: { $0.id == tc.id || ($0.toolName == tc.toolName && $0.argumentsJson == tc.argumentsJson) }) {
+            items.append(tc)
+        }
+    }
+
+    func snapshot() -> [ToolCallInfo] {
+        lock.lock()
+        defer { lock.unlock() }
+        return items
+    }
+}
+
+/// Aggregates stream text off the MainActor so a delayed UI Task cannot lose the turn.
+private final class AgentStreamTextBridge: @unchecked Sendable {
+    private let lock = NSLock()
+    private var text = ""
+    private var reasoning = ""
+    private var completionTokens = 0
+    private var promptTokens = 0
+
+    func ingest(_ chunk: LLMStreamChunk) {
+        lock.lock()
+        defer { lock.unlock() }
+        if !chunk.deltaText.isEmpty {
+            text += chunk.deltaText
+        }
+        if let r = chunk.deltaReasoning, !r.isEmpty {
+            reasoning += r
+        }
+        if let c = chunk.completionTokens {
+            completionTokens = c
+        }
+        if let p = chunk.promptTokens {
+            promptTokens = p
+        }
+    }
+
+    func snapshot() -> (text: String, reasoning: String, promptTokens: Int, completionTokens: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (text, reasoning, promptTokens, completionTokens)
     }
 }
 
@@ -374,86 +463,126 @@ public final class AgentRunner {
 
         let loadedSettings = PersistenceManager.shared.loadSettings()
         let maxIterations = max(1, loadedSettings.maxAutonomousIterations)
-        var availableTools = PersistenceManager.shared.loadTools()
+        let maxTurnTokens = max(1, loadedSettings.maxTurnTokens)
+        var planModeActive = loadedSettings.planModeEnabled
+        var availableTools = PersistenceManager.shared.loadTools().filter { $0.isEnabled }
+        _ = ToolSchemaCatalog.ensureParityTools(in: &availableTools)
 
-        // Inject active MCP servers into available tools & prompt
-        let enabledMcpServers = loadedSettings.mcpServers.filter { $0.isEnabled }
+        // Radiant parity: discover real MCP tools with schemas and inject as first-class
+        // namespaced tools (`mcp__{serverId}__{toolName}`) — not a single vague `*_call` stub.
+        // Prefer MacUse (etc.) when the prompt asks for it so we do not hang the empty
+        // "Generating response…" bubble waiting on every unrelated `npx` MCP cold start.
+        let preferMCP = MCPClientManager.preferredServerIds(
+            forPrompt: lastPrompt,
+            servers: loadedSettings.mcpServers
+        )
+        if !loadedSettings.mcpServers.filter(\.isEnabled).isEmpty {
+            if preferMCP.isEmpty {
+                accumulator.appendNotice("Connecting MCP servers…")
+            } else {
+                let names = loadedSettings.mcpServers
+                    .filter { preferMCP.contains($0.id) }
+                    .map(\.name)
+                    .joined(separator: ", ")
+                accumulator.appendNotice("Connecting \(names.isEmpty ? "required MCP" : names)…")
+            }
+        }
+        let mcpTools = await MCPClientManager.shared.mcpToolDefs(
+            preferServerIds: preferMCP,
+            perServerTimeout: .seconds(12)
+        )
         var mcpPromptSummary = ""
-
-        if !enabledMcpServers.isEmpty {
-            var mcpDescriptions: [String] = []
-
-            for s in enabledMcpServers {
-                let cleanName = s.name.lowercased()
-                    .replacingOccurrences(of: " ", with: "_")
-                    .replacingOccurrences(of: "-", with: "_")
-
-                let tool = Tool(
-                    id: "mcp_\(s.id)",
-                    name: "\(cleanName)_call",
-                    displayName: "\(s.name) MCP Tool",
-                    description: "Execute tools and queries via the \(s.name) Model Context Protocol (MCP) server (\(s.transportType.displayName)).",
-                    category: .mcp
-                )
-                if !availableTools.contains(where: { $0.id == tool.id || $0.name == tool.name }) {
-                    availableTools.append(tool)
-                }
-
-                if s.transportType == .stdio {
-                    mcpDescriptions.append("- **\(s.name)** (tool: `\(cleanName)_call` or `mcp_call` with `server: \"\(s.name)\"`): stdio process `\(s.command) \(s.args.joined(separator: " "))`")
-                } else {
-                    mcpDescriptions.append("- **\(s.name)** (tool: `\(cleanName)_call` or `mcp_call` with `server: \"\(s.name)\"`): HTTP/SSE gateway `\(s.url)`")
+        if !mcpTools.isEmpty {
+            accumulator.appendNotice("MCP ready (\(mcpTools.count) tools).")
+            for t in mcpTools {
+                if !availableTools.contains(where: { $0.id == t.id || $0.name == t.name }) {
+                    availableTools.append(t)
                 }
             }
-
-            if !availableTools.contains(where: { $0.name == "mcp_call" }) {
-                availableTools.append(Tool(
-                    id: "mcp_universal_call",
-                    name: "mcp_call",
-                    displayName: "Universal MCP Tool Invocation",
-                    description: "Invokes any tool on a configured MCP server. Parameters: {\"server\": \"server_name\", \"tool\": \"action_name\", \"arguments\": {...}}",
-                    category: .mcp
-                ))
+            let byServer = Dictionary(grouping: mcpTools) { tool -> String in
+                MCPNamespacedTool.parse(tool.name)?.serverId ?? "mcp"
             }
-
+            let lines = byServer.map { serverId, tools -> String in
+                let serverName = loadedSettings.mcpServers.first(where: { $0.id == serverId })?.name ?? serverId
+                let names = tools.map(\.name).sorted().joined(separator: ", ")
+                return "- **\(serverName)**: \(names)"
+            }.sorted()
             mcpPromptSummary = """
 
-            ### Configured & Active Model Context Protocol (MCP) Servers:
-            \(mcpDescriptions.joined(separator: "\n"))
+            ### Live Model Context Protocol (MCP) tools (call these by exact name):
+            \(lines.joined(separator: "\n"))
 
-            When you need external data or actions from an MCP server (e.g. web search, calendar, files, or external tools), output a tool call using ANY of these formats:
-            Format 1 (Simple):
-            TOOL_CALL = { "mcp": "ddg-search", "tool": "search", "arguments": {"query": "Swift 6 features"} }
-
-            Format 2 (Markdown block):
+            Prefer native function/tool calling with these exact names.
+            For MacUse mail/calendar: first call `…__get_tool_definitions` with `{"names":["*"]}`, then `…__call_tool_by_name`.
+            Markdown fallback (only if native tools are unavailable):
             ```tool_call
-            {"tool": "mcp_call", "parameters": {"server": "ddg-search", "tool": "search", "arguments": {"query": "Swift 6 features"}}}
+            {"tool": "mcp__SERVER_ID__TOOL_NAME", "parameters": {...}}
             ```
+            """
+        } else if !loadedSettings.mcpServers.filter(\.isEnabled).isEmpty {
+            accumulator.appendNotice("MCP discovery returned no tools (timed out or failed).")
+            mcpPromptSummary = """
 
-            Format 3 (Direct tool call):
-            ```tool_call
-            {"tool": "ddg_search_call", "parameters": {"query": "Swift 6 features"}}
-            ```
+            ### MCP servers are enabled but tool discovery returned no tools.
+            Fix or restart the MCP servers; do not invent stub tool names.
+            """
+        }
+
+        if planModeActive {
+            availableTools = Self.filterToolsForPlanMode(availableTools)
+        }
+
+        let enabledSkills = PersistenceManager.shared.loadSkills().filter(\.isEnabled)
+        var skillsSection = ""
+        if !enabledSkills.isEmpty {
+            let skillLines = enabledSkills.map { skill -> String in
+                let body = skill.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                let preview = body.isEmpty ? skill.description : body
+                return "- **\(skill.name)**: \(preview)"
+            }
+            skillsSection = """
+
+            ### Active Skills
+            \(skillLines.joined(separator: "\n"))
             """
         }
 
         var iteration = 0
         var workingMessages = session.messages
+        var turnPromptTokens = 0
+        var turnCompletionTokens = 0
+        var identicalToolCounts: [String: Int] = [:]
+        var askUserStreak = 0
+        var halted = false
+        var finishedNaturally = false
+        var macUseDefsFetched = false
+        var macUseMailListed = false
+        var macUseMailSearched = false
+        var macUseMailCheckComplete = false
+        var macUseForcedSteps = 0
+        var macUseAccountsJSON = ""
+        var macUseSearchJSON = ""
+        var macUseMessageJSON = ""
 
         // System prompt with modern tool-calling instructions (supports both native API tools & markdown ReAct schemas)
         let systemPromptWithTools = """
         \(agent.systemPrompt)
 
         You are an advanced, fully autonomous coding, systems, and research agent on par with Claude Code and Cursor.
-        You have direct access to execution tools:
+        You have direct access to execution tools (use native function/tool calling when the runtime provides it):
         - `file_read`: {"path": "..."}
         - `file_write`: {"path": "...", "content": "..."}
+        - `edit_file`: {"path": "...", "old_string": "...", "new_string": "..."}
         - `file_list`: {"path": "..."}
         - `file_copy`: {"source": "...", "destination": "..."}
         - `file_move`: {"source": "...", "destination": "..."}
         - `file_delete`: {"path": "..."}
-        - `terminal_command`: {"command": "...", "cwd": "..."}
+        - `terminal_command` / `run_command`: {"command": "...", "cwd": "..."}
+        - `fetch_url`: {"url": "..."}
         - `web_search`: {"query": "..."}
+        - `ask_user`: {"question": "...", "options": ["..."]}
+        - `exit_plan_mode`: {"summary": "..."}
+        - `todo_write`: {"items": [{"content": "...", "status": "pending"}]}
         - `calculator`: {"expression": "..."}
         - `get_current_date`: {}
         - `document_extract`: {"path": "..."}
@@ -461,44 +590,48 @@ public final class AgentRunner {
         - `gmail_search`: {"query": "from:example@gmail.com"}
         - `google_calendar_list`: {"days": 7, "max_results": 15}
         - `google_calendar_upcoming`: {"days": 7}
-        - Live Model Context Protocol (MCP) servers
         \(mcpPromptSummary)
+        \(skillsSection)
 
         CRITICAL EXECUTION PROTOCOL:
-        1. When the user gives you tasks or asks you to perform actions, DO NOT write conversational excuses or say "I will do X". IMMEDIATELY emit the tool call to do X!
-        2. Execute actions by outputting standard tool call blocks:
-        ```tool_call
-        {"tool": "file_write", "parameters": {"path": "notes/summary.md", "content": "# Summary\\n..."}}
-        ```
-        or
+        1. When the user asks you to perform actions, DO NOT narrate ("I will check…" / "Let me try…"). IMMEDIATELY call the tool.
+        2. Prefer native tool/function calls. If you must use text, emit:
         ```tool_call
         {"tool": "file_list", "parameters": {"path": "."}}
         ```
-        or
-        ```tool_call
-        {"tool": "terminal_command", "parameters": {"command": "date +%Y-%m-%d"}}
-        ```
-        or
-        ```tool_call
-        {"tool": "web_search", "parameters": {"query": "current stable Swift release"}}
-        ```
-        or
-        TOOL_CALL = { "mcp": "macuse", "tool": "get_calendar_events", "arguments": {} }
-
-        3. If you need multiple actions, output multiple tool calls in sequence.
-        4. After receiving tool results, continue with the remaining steps until ALL tasks are completely executed on disk.
-        5. Once all files are written and tasks finished, provide a clear, concise report listing the exact files created and actions performed.
+        3. If you need multiple actions, emit multiple tool calls, then continue after results until the task is done.
+        4. Once finished, give a clear concise report of what you found or changed.
+        5. MacUse mail: after `get_tool_definitions`, you MUST call `call_tool_by_name` with `mail_list_accounts` then `mail_search_messages` before writing a summary. Never stop after definitions alone.
+        \(planModeActive ? "\n6. PLAN MODE is active: do not mutate files or run shell commands. Propose a plan, then call `exit_plan_mode` after the user approves." : "")
         """
 
         while iteration < maxIterations {
             if Task.isCancelled {
+                accumulator.setHalt(reason: "stopped", text: "Generation stopped.")
+                halted = true
                 break
             }
 
             iteration += 1
 
-            // Track newly emitted native tool calls during this single turn
-            var nativeEmittedToolCalls: [ToolCallInfo] = []
+            workingMessages = ContextCompactor.foldOldToolResults(workingMessages)
+            if loadedSettings.autoCompactContext {
+                let compacted = ContextCompactor.compactIfNeeded(
+                    workingMessages,
+                    thresholdTokens: loadedSettings.contextCompactionThresholdTokens
+                )
+                workingMessages = compacted.messages
+                if compacted.didCompact {
+                    accumulator.appendNotice("Context compacted to free tokens.")
+                }
+            }
+
+            // Track newly emitted native tool calls during this single turn.
+            // Use a lock-backed collector: onChunk runs off the MainActor, and the previous
+            // `Task { @MainActor in nativeEmittedToolCalls.append }` raced so tool calls were
+            // often lost — the model looked "stuck" narrating without ever executing.
+            let toolCallCollector = AgentToolCallCollector()
+            let textBridge = AgentStreamTextBridge()
             let turnTextBefore = accumulator.fullText
 
             do {
@@ -512,29 +645,54 @@ public final class AgentRunner {
                     reasoningEffort: effectiveReasoningEffort,
                     tools: availableTools
                 ) { chunk in
+                    for tc in chunk.toolCalls {
+                        toolCallCollector.add(tc)
+                    }
+                    textBridge.ingest(chunk)
                     Task { @MainActor in
                         accumulator.applyChunk(chunk)
-                        for tc in chunk.toolCalls {
-                            if !nativeEmittedToolCalls.contains(where: { $0.id == tc.id || ($0.toolName == tc.toolName && $0.argumentsJson == tc.argumentsJson) }) {
-                                nativeEmittedToolCalls.append(tc)
-                            }
-                        }
                     }
                 }
             } catch {
+                let snap = textBridge.snapshot()
+                accumulator.reconcileFromBridge(
+                    text: snap.text,
+                    reasoning: snap.reasoning,
+                    promptTokens: snap.promptTokens,
+                    completionTokens: snap.completionTokens
+                )
                 accumulator.handleError(error)
                 break
             }
+
+            // Flush / recover MainActor UI updates from stream callbacks
+            let snap = textBridge.snapshot()
+            accumulator.reconcileFromBridge(
+                text: snap.text,
+                reasoning: snap.reasoning,
+                promptTokens: snap.promptTokens,
+                completionTokens: snap.completionTokens
+            )
+            await Task.yield()
 
             if accumulator.isLoopDetected {
                 break
             }
 
-            // Small yield to let any lingering stream callbacks process
-            try? await Task.sleep(nanoseconds: 30_000_000)
+            turnPromptTokens += accumulator.message.promptTokens
+            turnCompletionTokens += accumulator.message.completionTokens
+            if turnPromptTokens + turnCompletionTokens > maxTurnTokens {
+                accumulator.setHalt(
+                    reason: "token_budget",
+                    text: "Turn token budget exceeded (\(turnPromptTokens + turnCompletionTokens) > \(maxTurnTokens)). Press Continue to resume."
+                )
+                halted = true
+                break
+            }
 
             // Gather tool calls from either native API streaming or Markdown ReAct fallbacks
             var pendingCallsToExecute: [(id: String, tool: String, args: String)] = []
+            let nativeEmittedToolCalls = toolCallCollector.snapshot()
 
             if !nativeEmittedToolCalls.isEmpty {
                 for tc in nativeEmittedToolCalls {
@@ -553,37 +711,159 @@ public final class AgentRunner {
 
             // If no tool calls were requested from this turn:
             if pendingCallsToExecute.isEmpty {
-                // Check if the assistant ended with unfulfilled execution intent (common in local models that stop after saying "Let me...")
                 let newlyGeneratedDelta = String(accumulator.fullText.dropFirst(turnTextBefore.count)).trimmingCharacters(in: .whitespacesAndNewlines)
                 let lowercaseDelta = newlyGeneratedDelta.lowercased()
-                
-                let hasUnfulfilledActionIntent = (
-                    lowercaseDelta.contains("let me start") ||
-                    lowercaseDelta.contains("let me check") ||
-                    lowercaseDelta.contains("let me emit") ||
-                    lowercaseDelta.contains("let me search") ||
-                    lowercaseDelta.contains("let me proceed") ||
-                    lowercaseDelta.contains("i will start by") ||
-                    lowercaseDelta.contains("i will now check")
-                ) && newlyGeneratedDelta.count < 300 && iteration < 3
+                let userAsk = lastPrompt.lowercased()
+                let wantsMacUse = userAsk.contains("macuse") || userAsk.contains("mac use")
+                    || ((userAsk.contains("mail") || userAsk.contains("email") || userAsk.contains("inbox"))
+                        && (userAsk.contains("mcp") || userAsk.contains("computer") || userAsk.contains("this computer")))
 
-                if hasUnfulfilledActionIntent {
-                    // Feed a direct continuation nudge to prompt the model to emit the tool call payload immediately
-                    let nudgeMsg = ChatMessage(
-                        sessionId: session.id,
-                        role: .user,
-                        content: "[System Command]: You expressed intent to perform an action. Do not wait for the user. Immediately output the structured tool call now (e.g. ```tool_call {\"tool\": \"...\", \"parameters\": {...}}```)."
-                    )
-                    workingMessages.append(nudgeMsg)
-                    continue
-                } else {
-                    // Agent has legitimately concluded its answer
-                    break
+                // Force MacUse chain: defs → list accounts → search messages.
+                // Local models routinely stop after narrating the first step.
+                if macUseForcedSteps < 6,
+                   !macUseMailCheckComplete,
+                   let forced = Self.macUseForcedFollowUp(
+                    userPrompt: lastPrompt,
+                    availableTools: availableTools,
+                    defsFetched: macUseDefsFetched,
+                    mailListed: macUseMailListed,
+                    mailSearched: macUseMailSearched
+                   ) {
+                    macUseForcedSteps += 1
+                    pendingCallsToExecute.append((
+                        id: UUID().uuidString,
+                        tool: forced.tool,
+                        args: forced.args
+                    ))
+                    accumulator.appendContent("\n\n\(forced.notice)\n")
+                    accumulator.appendNotice(forced.notice)
                 }
+
+                if pendingCallsToExecute.isEmpty {
+                if wantsMacUse,
+                   !macUseDefsFetched,
+                   availableTools.first(where: {
+                       let n = $0.name.lowercased()
+                       return n.contains("get_tool_definitions") || n.hasSuffix("__get_tool_definitions")
+                   }) == nil {
+                    accumulator.setHalt(
+                        reason: "mcp_unavailable",
+                        text: "MacUse MCP tools were not available (server timed out or failed to start). Open MacUse.app, confirm Accessibility permissions, then press Continue."
+                    )
+                    halted = true
+                    break
+                } else if newlyGeneratedDelta.isEmpty && nativeEmittedToolCalls.isEmpty {
+                    // Empty model turn — do not silently finalize an blank streaming bubble.
+                    if iteration < 2 {
+                        accumulator.appendNotice("Model returned no tokens; retrying…")
+                        continue
+                    }
+                    accumulator.setHalt(
+                        reason: "empty_response",
+                        text: "The model returned an empty response. Press Continue to try again."
+                    )
+                    halted = true
+                    break
+                } else {
+                    let hasUnfulfilledActionIntent = (
+                        lowercaseDelta.contains("let me start") ||
+                        lowercaseDelta.contains("let me check") ||
+                        lowercaseDelta.contains("let me get") ||
+                        lowercaseDelta.contains("let me list") ||
+                        lowercaseDelta.contains("let me emit") ||
+                        lowercaseDelta.contains("let me search") ||
+                        lowercaseDelta.contains("let me proceed") ||
+                        lowercaseDelta.contains("let me call") ||
+                        lowercaseDelta.contains("i will start by") ||
+                        lowercaseDelta.contains("i will now check") ||
+                        lowercaseDelta.contains("now let me") ||
+                        lowercaseDelta.contains("tools are loaded") ||
+                        lowercaseDelta.contains("tool definitions") ||
+                        lowercaseDelta.contains("first, let me")
+                    ) && newlyGeneratedDelta.count < 1200 && iteration < 6
+
+                    if hasUnfulfilledActionIntent {
+                        let toolHint: String = {
+                            if let t = availableTools.first(where: { $0.name.contains("call_tool_by_name") }) {
+                                return t.name
+                            }
+                            if let t = availableTools.first(where: { $0.name.contains("get_tool_definitions") }) {
+                                return t.name
+                            }
+                            return availableTools.first(where: { $0.category == .mcp })?.name ?? "mcp_call"
+                        }()
+                        let nudgeMsg = ChatMessage(
+                            sessionId: session.id,
+                            role: .user,
+                            content: """
+                            [System Command]: Stop narrating. Immediately emit a native tool call for `\(toolHint)`.
+                            For MacUse mail use:
+                            ```tool_call
+                            {"tool": "\(toolHint)", "parameters": {"name": "mail_search_messages", "arguments": {"limit": 20}}}
+                            ```
+                            Do not write more prose before the tool call.
+                            """
+                        )
+                        workingMessages.append(nudgeMsg)
+                        continue
+                    } else if wantsMacUse && !(macUseMailListed && macUseMailSearched) && macUseForcedSteps < 6 {
+                        // Refuse to end a MacUse mail task after prose-only turns.
+                        accumulator.appendNotice("MacUse mail steps incomplete — continuing…")
+                        continue
+                    } else if wantsMacUse && !(macUseMailListed && macUseMailSearched) {
+                        accumulator.setHalt(
+                            reason: "macuse_incomplete",
+                            text: "Stopped before MacUse finished listing/searching mail. Press Continue to retry."
+                        )
+                        halted = true
+                        break
+                    } else {
+                        finishedNaturally = true
+                        break
+                    }
+                }
+                } // pendingCallsToExecute.isEmpty (inner)
             }
 
-            // Execute detected tool calls and feed results back into the conversation
-            for (callId, toolName, argsJson) in pendingCallsToExecute {
+            // Execute detected tool calls and feed results back into the conversation.
+            // Radiant keeps calling tools until the model stops; local models often stop
+            // early, so we also queue MacUse `actions[]` follow-ups in-process (mail search).
+            var stopToolLoop = false
+            var toolQueue = pendingCallsToExecute
+            var queueIndex = 0
+            var macUseNestedDone = Set<String>()
+            let macUseCallToolName = availableTools.first(where: {
+                let n = $0.name.lowercased()
+                return n.hasSuffix("__call_tool_by_name") || n.contains("call_tool_by_name")
+            })?.name
+
+            while queueIndex < toolQueue.count {
+                let callId = toolQueue[queueIndex].id
+                let toolName = toolQueue[queueIndex].tool
+                var argsJson = Self.sanitizeToolArgumentsJson(
+                    toolName: toolName,
+                    argumentsJson: toolQueue[queueIndex].args
+                )
+                queueIndex += 1
+
+                // Drop duplicate MacUse nested calls (model loves repeating mail_list_accounts).
+                let leafName = (MCPNamespacedTool.parse(toolName)?.toolName ?? toolName).lowercased()
+                if leafName.contains("call_tool_by_name") || leafName == "call_tool",
+                   let nested = Self.macUseNestedToolName(from: argsJson)?.lowercased(),
+                   macUseNestedDone.contains(nested) {
+                    accumulator.appendNotice("Skipping duplicate MacUse `\(nested)`.")
+                    continue
+                }
+
+                do {
+                    try Task.checkCancellation()
+                } catch {
+                    accumulator.setHalt(reason: "stopped", text: "Generation stopped.")
+                    halted = true
+                    stopToolLoop = true
+                    break
+                }
+
                 var callInfo = ToolCallInfo(
                     id: callId,
                     toolName: toolName,
@@ -593,7 +873,11 @@ public final class AgentRunner {
 
                 // Sensitive actions (deleting a file, or shell commands under an "always ask"
                 // safety policy) are paused for a real user decision before they touch disk.
-                if let reason = AgentRunner.approvalReason(toolName: toolName, settings: loadedSettings) {
+                if let reason = AgentRunner.approvalReason(
+                    toolName: toolName,
+                    argumentsJson: argsJson,
+                    settings: loadedSettings
+                ) {
                     callInfo.status = .waitingApproval
                     callInfo.approvalReason = reason
                     accumulator.addToolCall(callInfo)
@@ -625,27 +909,254 @@ public final class AgentRunner {
                     accumulator.addToolCall(callInfo)
                 }
 
-                let result = await ToolExecutionEngine.shared.execute(
-                    toolName: toolName,
-                    argumentsJson: argsJson,
-                    workspace: workspace,
-                    currentAgent: agent
-                )
+                let signature = toolName + argsJson
+                let repeatCount = (identicalToolCounts[signature] ?? 0) + 1
+                identicalToolCounts[signature] = repeatCount
 
-                callInfo.status = result.success ? .success : .error
-                callInfo.resultOutput = result.output
-                callInfo.errorMessage = result.error
-                callInfo.durationMs = result.durationMs
+                if repeatCount >= 12 {
+                    accumulator.setHalt(
+                        reason: "stuck_breaker",
+                        text: "Identical tool call repeated 12 times (\(toolName)). Press Continue to resume with a new approach."
+                    )
+                    halted = true
+                    stopToolLoop = true
+                    break
+                }
+
+                var stuckNudge = ""
+                if repeatCount >= 8 {
+                    stuckNudge = "\n\n[Stuck breaker] Identical call repeated \(repeatCount) times. Stop looping; change strategy or finish."
+                } else if repeatCount >= 5 {
+                    stuckNudge = "\n\n[Stuck breaker] You've repeated this identical tool call \(repeatCount) times. Try a different approach."
+                } else if repeatCount >= 3 {
+                    stuckNudge = "\n\n[Stuck breaker] Identical tool+args seen \(repeatCount) times — avoid repeating without progress."
+                }
+
+                let startTool = CFAbsoluteTimeGetCurrent()
+                var resultOutput: String
+                var resultSuccess = true
+                var resultError: String?
+
+                if toolName == "ask_user" {
+                    askUserStreak += 1
+                    if askUserStreak > 5 {
+                        resultSuccess = false
+                        resultError = "ask_user streak capped at 5. Stop asking and proceed with best judgment or finish."
+                        resultOutput = resultError!
+                    } else {
+                        let parsed = Self.parseAskUserArgs(argsJson)
+                        let answer = await UserChoiceManager.shared.request(
+                            question: parsed.question,
+                            options: parsed.options,
+                            callId: callId
+                        )
+                        resultOutput = answer
+                    }
+                } else {
+                    askUserStreak = 0
+
+                    if toolName == "exit_plan_mode" {
+                        planModeActive = false
+                        var settings = PersistenceManager.shared.loadSettings()
+                        settings.planModeEnabled = false
+                        PersistenceManager.shared.saveSettings(settings)
+                        availableTools = PersistenceManager.shared.loadTools().filter(\.isEnabled)
+                        _ = ToolSchemaCatalog.ensureParityTools(in: &availableTools)
+                        for t in mcpTools {
+                            if !availableTools.contains(where: { $0.id == t.id || $0.name == t.name }) {
+                                availableTools.append(t)
+                            }
+                        }
+                        accumulator.appendNotice("Plan mode exited.")
+                        var liveSettings = AppState.shared.settings
+                        liveSettings.planModeEnabled = false
+                        AppState.shared.settings = liveSettings
+                        AppState.shared.showToast("Plan mode exited")
+                        resultOutput = "Plan mode exited."
+                    } else {
+                        let result = await ToolExecutionEngine.shared.execute(
+                            toolName: toolName,
+                            argumentsJson: argsJson,
+                            workspace: workspace,
+                            currentAgent: agent
+                        )
+                        resultSuccess = result.success
+                        resultOutput = result.success ? result.output : "Error: \(result.error ?? "unknown error")"
+                        resultError = result.error
+
+                        // MacUse rejects `"arguments":"{}"` (string). Retry once with a real map.
+                        if !resultSuccess,
+                           toolName.lowercased().contains("call_tool_by_name"),
+                           (resultOutput + (resultError ?? "")).localizedCaseInsensitiveContains("expected a map")
+                            || (resultOutput + (resultError ?? "")).localizedCaseInsensitiveContains("invalid type: string") {
+                            let nested = Self.macUseNestedToolName(from: argsJson) ?? "mail_list_accounts"
+                            let repaired = MCPToolArgumentDefaults.macUseCallArgsJSON(toolName: nested)
+                            argsJson = repaired
+                            callInfo.argumentsJson = repaired
+                            accumulator.updateToolCall(callInfo)
+                            accumulator.appendNotice("Retrying MacUse call with object `arguments`…")
+                            let retry = await ToolExecutionEngine.shared.execute(
+                                toolName: toolName,
+                                argumentsJson: repaired,
+                                workspace: workspace,
+                                currentAgent: agent
+                            )
+                            resultSuccess = retry.success
+                            resultOutput = retry.success ? retry.output : "Error: \(retry.error ?? "unknown error")"
+                            resultError = retry.error
+                        }
+                    }
+                }
+
+                let bounded = ToolBounds.boundResult(resultOutput + stuckNudge)
+                if let notice = bounded.notice {
+                    accumulator.appendNotice(notice)
+                }
+
+                callInfo.status = resultSuccess ? .success : .error
+                callInfo.resultOutput = bounded.text
+                callInfo.errorMessage = resultError
+                callInfo.durationMs = (CFAbsoluteTimeGetCurrent() - startTool) * 1000
                 accumulator.updateToolCall(callInfo)
 
-                // Inject structured tool output back into message context for the next autonomous iteration
+                if resultSuccess {
+                    let leaf = MCPNamespacedTool.parse(toolName)?.toolName ?? toolName
+                    if leaf.contains("get_tool_definitions") {
+                        macUseDefsFetched = true
+                    }
+                    var nestedForFollowUp = ""
+                    if leaf.contains("call_tool_by_name") || leaf == "call_tool" {
+                        let nested = Self.macUseNestedToolName(from: argsJson)?.lowercased() ?? ""
+                        nestedForFollowUp = nested
+                        if !nested.isEmpty {
+                            macUseNestedDone.insert(nested)
+                        }
+                        if nested == "mail_list_accounts" {
+                            macUseMailListed = true
+                            macUseAccountsJSON = bounded.text
+                        }
+                        if nested == "mail_search_messages" || nested.hasPrefix("mail_search_") {
+                            macUseMailSearched = true
+                            macUseMailListed = true
+                            macUseSearchJSON = bounded.text
+                        }
+                        if nested == "mail_get_messages" || nested == "mail_get_thread" {
+                            macUseMailSearched = true
+                            macUseMessageJSON = bounded.text
+                        }
+                    }
+
+                    // Radiant does NOT auto-drive MacUse `actions[]` (the model chooses).
+                    // For local models we only auto-chain READ steps for a mail check, then stop
+                    // and publish a real summary — never reply/forward/mark-read.
+                    if let callTool = macUseCallToolName,
+                       !macUseMailCheckComplete,
+                       leaf.contains("get_tool_definitions")
+                        || leaf.contains("call_tool_by_name")
+                        || leaf == "call_tool" {
+                        let userAsk = lastPrompt.lowercased()
+                        let wantsMail = userAsk.contains("mail") || userAsk.contains("email") || userAsk.contains("inbox")
+
+                        if leaf.contains("get_tool_definitions"),
+                           wantsMail,
+                           !macUseMailListed,
+                           !macUseNestedDone.contains("mail_list_accounts"),
+                           !toolQueue.suffix(from: queueIndex).contains(where: {
+                               $0.args.lowercased().contains("mail_list_accounts")
+                           }) {
+                            let args = MCPToolArgumentDefaults.macUseCallArgsJSON(toolName: "mail_list_accounts")
+                            toolQueue.append((id: UUID().uuidString, tool: callTool, args: args))
+                            accumulator.appendNotice("Calling MacUse `mail_list_accounts`…")
+                        }
+
+                        if wantsMail,
+                           macUseMailListed,
+                           !macUseMailSearched,
+                           !macUseNestedDone.contains("mail_search_messages"),
+                           !toolQueue.suffix(from: queueIndex).contains(where: {
+                               $0.args.lowercased().contains("mail_search_messages")
+                           }) {
+                            let args = MCPToolArgumentDefaults.macUseCallArgsJSON(
+                                toolName: "mail_search_messages",
+                                arguments: ["limit": 50]
+                            )
+                            toolQueue.append((id: UUID().uuidString, tool: callTool, args: args))
+                            accumulator.appendNotice("Calling MacUse `mail_search_messages`…")
+                        }
+
+                        // Only follow explicit READ suggestions (never mutate).
+                        if wantsMail, !macUseMailSearched {
+                            for suggestion in MCPToolArgumentDefaults.suggestedCalls(fromToolResult: bounded.text) {
+                                let nested = suggestion.nestedTool.lowercased()
+                                guard Self.isMacUseMailReadTool(nested) else { continue }
+                                if macUseNestedDone.contains(nested) { continue }
+                                if nested == "mail_list_accounts" { continue }
+                                if nested != "mail_search_messages" && !nested.hasPrefix("mail_search_") {
+                                    continue
+                                }
+                                let args = MCPToolArgumentDefaults.macUseCallArgsJSON(
+                                    toolName: suggestion.nestedTool,
+                                    arguments: suggestion.arguments
+                                )
+                                toolQueue.append((id: UUID().uuidString, tool: callTool, args: args))
+                                accumulator.appendNotice("Calling MacUse `\(suggestion.nestedTool)`…")
+                                break
+                            }
+                        }
+
+                        // After a successful search (or message read), finish the mail check.
+                        if wantsMail,
+                           (nestedForFollowUp == "mail_search_messages"
+                            || nestedForFollowUp.hasPrefix("mail_search_")
+                            || nestedForFollowUp == "mail_get_messages") {
+                            let summary = Self.formatMacUseMailSummary(
+                                accountsJSON: macUseAccountsJSON,
+                                searchJSON: macUseSearchJSON.isEmpty ? bounded.text : macUseSearchJSON,
+                                messageJSON: macUseMessageJSON
+                            )
+                            if !summary.isEmpty {
+                                accumulator.appendContent("\n\n" + summary + "\n")
+                            }
+                            macUseMailCheckComplete = true
+                            macUseMailSearched = true
+                            // Drop any queued mutate/extra MacUse calls (reply/forward/mark-read/etc).
+                            if queueIndex < toolQueue.count {
+                                toolQueue.removeSubrange(queueIndex..<toolQueue.count)
+                            }
+                            accumulator.appendNotice("Mail check complete.")
+                        }
+                    }
+                }
+
                 let toolMsg = ChatMessage(
                     id: callId,
                     sessionId: session.id,
                     role: .tool,
-                    content: result.success ? result.output : "Error: \(result.error ?? "unknown error")"
+                    content: bounded.text
                 )
                 workingMessages.append(toolMsg)
+            }
+
+            if stopToolLoop {
+                break
+            }
+
+            // Mail check already wrote a deterministic summary — don't keep looping the model.
+            if macUseMailCheckComplete {
+                finishedNaturally = true
+                break
+            }
+
+            if macUseMailSearched {
+                workingMessages.append(ChatMessage(
+                    sessionId: session.id,
+                    role: .user,
+                    content: """
+                    [System Command]: MacUse mail tools finished (accounts + search). \
+                    Write a clear, concise inbox summary for the user from the tool results above. \
+                    Include account names and notable recent/unread messages. Do not call more tools unless opening one specific message is required.
+                    """
+                ))
             }
 
             // Append assistant intermediate progress to context so next turn is fully continuous
@@ -661,24 +1172,324 @@ public final class AgentRunner {
             // allowing the LLM to read the result and write a clean, user-friendly natural language response.
         }
 
+        if !halted && !finishedNaturally && iteration >= maxIterations {
+            accumulator.setHalt(
+                reason: "round_cap",
+                text: "Reached the autonomous round cap (\(maxIterations)). Press Continue to keep going from here."
+            )
+        }
+
         accumulator.finalize()
+    }
+
+    private static func filterToolsForPlanMode(_ tools: [Tool]) -> [Tool] {
+        let blocked: Set<String> = [
+            "file_write", "write_file", "create_file", "save_file",
+            "file_delete", "delete_file", "rm",
+            "file_move", "move_file", "mv",
+            "file_copy", "copy_file", "cp",
+            "edit_file", "file_edit",
+            "terminal_command", "run_command"
+        ]
+        var filtered = tools.filter { tool in
+            if tool.name == "exit_plan_mode" || tool.name == "ask_user" { return true }
+            if blocked.contains(tool.name) { return false }
+            if MCPNamespacedTool.isNamespaced(tool.name) {
+                let leaf = MCPNamespacedTool.parse(tool.name)?.toolName ?? tool.name
+                return MCPClientManager.isReadOnlyMCPTool(leaf)
+            }
+            if tool.name == "mcp_call" || tool.name == "call_mcp_tool" { return false }
+            return true
+        }
+        if !filtered.contains(where: { $0.name == "exit_plan_mode" }) {
+            if let exitTool = ToolSchemaCatalog.parityDefaults.first(where: { $0.name == "exit_plan_mode" }) {
+                filtered.append(exitTool)
+            }
+        }
+        return filtered
+    }
+
+    private static func parseAskUserArgs(_ argsJson: String) -> (question: String, options: [String]) {
+        guard let data = argsJson.data(using: .utf8),
+              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return ("Please choose how to proceed.", [])
+        }
+        let question = (dict["question"] as? String)
+            ?? (dict["prompt"] as? String)
+            ?? (dict["message"] as? String)
+            ?? "Please choose how to proceed."
+        var options: [String] = []
+        if let arr = dict["options"] as? [String] {
+            options = arr
+        } else if let arr = dict["options"] as? [Any] {
+            options = arr.compactMap { $0 as? String }
+        } else if let choices = dict["choices"] as? [String] {
+            options = choices
+        }
+        return (question, options)
     }
 
     /// Returns a human-readable reason the call must be interactively approved before it runs,
     /// or nil if it can proceed immediately. Deleting a file is always irreversible enough to ask;
     /// shell commands are gated by the user's configured Terminal Safety Level.
-    private static func approvalReason(toolName: String, settings: AppSettings) -> String? {
+    private static func approvalReason(
+        toolName: String,
+        argumentsJson: String = "{}",
+        settings: AppSettings
+    ) -> String? {
         switch toolName {
+        case "ask_user":
+            return nil
+        case "file_write", "write_file", "create_file", "save_file",
+             "edit_file", "file_edit",
+             "file_move", "move_file", "mv",
+             "file_copy", "copy_file", "cp":
+            return "This modifies files on disk."
         case "file_delete", "delete_file", "rm":
             return "This permanently deletes a file from disk."
-        case "terminal_command":
+        case "terminal_command", "run_command":
             if settings.terminalSafetyLevel == .alwaysAsk {
                 return "Runs a shell command on your Mac (Terminal Safety Level: Always Ask Confirmation)."
             }
             return nil
         default:
+            // MCP read/list/search tools auto-run; mutating ones still ask.
+            if MCPNamespacedTool.isNamespaced(toolName) {
+                let leaf = MCPNamespacedTool.parse(toolName)?.toolName ?? toolName
+                if MCPClientManager.isReadOnlyMCPTool(leaf) {
+                    return nil
+                }
+                // MacUse meta-tool: decide from the nested target name.
+                if leaf == "call_tool_by_name" || leaf == "call_tool" {
+                    if let nested = macUseNestedToolName(from: argumentsJson),
+                       MCPClientManager.isReadOnlyMCPTool(nested)
+                        || nested.hasPrefix("mail_list_")
+                        || nested.hasPrefix("mail_search_")
+                        || nested.hasPrefix("mail_get_")
+                        || nested == "mail_list_accounts"
+                        || nested == "mail_list_mailboxes"
+                        || nested == "mail_search_messages"
+                        || nested == "mail_get_messages"
+                        || nested == "mail_get_thread"
+                        || nested == "mail_get_attachment" {
+                        return nil
+                    }
+                }
+                return "Runs a Model Context Protocol (MCP) tool that may change apps or data on this Mac."
+            }
+            if toolName == "mcp_call" {
+                return "Runs a Model Context Protocol (MCP) tool."
+            }
             return nil
         }
+    }
+
+    private static func isMacUseMailReadTool(_ nested: String) -> Bool {
+        let n = nested.lowercased()
+        if n == "mail_list_accounts" || n == "mail_list_mailboxes" { return true }
+        if n == "mail_search_messages" || n.hasPrefix("mail_search_") { return true }
+        if n == "mail_get_messages" || n == "mail_get_thread" || n == "mail_get_attachment" { return true }
+        return false
+    }
+
+    /// Deterministic inbox summary so a local model cannot "finish" with only narration.
+    private static func formatMacUseMailSummary(
+        accountsJSON: String,
+        searchJSON: String,
+        messageJSON: String
+    ) -> String {
+        var lines: [String] = ["### Mail check (MacUse)", ""]
+
+        if let data = accountsJSON.data(using: .utf8),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let accounts = (root["data"] as? [[String: Any]]) ?? []
+            if !accounts.isEmpty {
+                lines.append("**Accounts (\(accounts.count)):**")
+                for a in accounts {
+                    let name = a["name"] as? String ?? "Account"
+                    let email = a["email"] as? String ?? ""
+                    let type = a["type"] as? String ?? ""
+                    let enabled = a["enabled"] as? Bool ?? true
+                    let status = enabled ? "" : " (disabled)"
+                    if email.isEmpty || email == (a["uuid"] as? String) {
+                        lines.append("- \(name)\(type.isEmpty ? "" : " · \(type)")\(status)")
+                    } else {
+                        lines.append("- \(name): \(email)\(type.isEmpty ? "" : " · \(type)")\(status)")
+                    }
+                }
+                lines.append("")
+            }
+        }
+
+        var messages: [[String: Any]] = []
+        if let data = searchJSON.data(using: .utf8),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let summary = root["summary"] as? String, !summary.isEmpty {
+                lines.append("**Search:** \(summary)")
+                lines.append("")
+            }
+            if let dataObj = root["data"] as? [String: Any],
+               let msgs = dataObj["messages"] as? [[String: Any]] {
+                messages = msgs
+            } else if let msgs = root["data"] as? [[String: Any]],
+                      msgs.first?["subject"] != nil {
+                messages = msgs
+            }
+        }
+
+        if messages.isEmpty,
+           let data = messageJSON.data(using: .utf8),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let dataObj = root["data"] as? [String: Any],
+           let msgs = dataObj["messages"] as? [[String: Any]] {
+            messages = msgs
+        }
+
+        if messages.isEmpty {
+            lines.append("No recent messages matched the search window.")
+        } else {
+            let unread = messages.filter { ($0["is_read"] as? Bool) == false }
+            lines.append("**Messages (\(messages.count)" + (unread.isEmpty ? "" : ", \(unread.count) unread") + "):**")
+            for (idx, msg) in messages.prefix(25).enumerated() {
+                let subject = (msg["subject"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let sender = msg["sender"] as? String ?? ""
+                let date = msg["date_received"] as? String ?? (msg["date"] as? String ?? "")
+                let account = msg["account"] as? String ?? ""
+                let mailbox = msg["mailbox"] as? String ?? ""
+                let read = (msg["is_read"] as? Bool) ?? true
+                let flag = read ? "" : " · unread"
+                let subj = (subject?.isEmpty == false) ? subject! : "(no subject)"
+                var meta: [String] = []
+                if !sender.isEmpty { meta.append(sender) }
+                if !date.isEmpty { meta.append(date) }
+                if !account.isEmpty { meta.append(account) }
+                if !mailbox.isEmpty { meta.append(mailbox) }
+                lines.append("\(idx + 1). **\(subj)**\(flag)")
+                if !meta.isEmpty {
+                    lines.append("   \(meta.joined(separator: " · "))")
+                }
+                if let content = msg["content"] as? String {
+                    let clipped = content
+                        .replacingOccurrences(of: "\r", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !clipped.isEmpty {
+                        let preview = clipped.prefix(280)
+                        lines.append("   \(preview)\(clipped.count > 280 ? "…" : "")")
+                    }
+                }
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private static func macUseNestedToolName(from argumentsJson: String) -> String? {
+        guard let data = argumentsJson.data(using: .utf8),
+              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        if let name = dict["name"] as? String { return name }
+        if let name = dict["tool"] as? String { return name }
+        if let name = dict["tool_name"] as? String { return name }
+        if let inner = dict["arguments"] as? [String: Any], let name = inner["name"] as? String {
+            return name
+        }
+        return nil
+    }
+
+    /// Coerce MLX/stringified nested JSON so MacUse receives real objects.
+    private static func sanitizeToolArgumentsJson(toolName: String, argumentsJson: String) -> String {
+        let leaf = (MCPNamespacedTool.parse(toolName)?.toolName ?? toolName).lowercased()
+        guard let data = argumentsJson.data(using: .utf8),
+              var dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            if leaf == "call_tool_by_name" || leaf == "call_tool" {
+                return MCPToolArgumentDefaults.macUseCallArgsJSON(toolName: "mail_list_accounts")
+            }
+            return argumentsJson
+        }
+        dict = MCPToolArgumentDefaults.normalizeArguments(
+            serverName: "macuse",
+            toolName: leaf,
+            arguments: dict
+        )
+        if leaf == "call_tool_by_name" || leaf == "call_tool" {
+            let nested = (dict["name"] as? String)
+                ?? (dict["tool"] as? String)
+                ?? "mail_list_accounts"
+            let inner: [String: Any]
+            if let obj = dict["arguments"] as? [String: Any] {
+                inner = obj
+            } else {
+                inner = [:]
+            }
+            return MCPToolArgumentDefaults.macUseCallArgsJSON(toolName: nested, arguments: inner)
+        }
+        if leaf == "get_tool_definitions" {
+            dict.removeValue(forKey: "arguments")
+            if dict["names"] == nil {
+                dict["names"] = ["*"]
+            }
+        }
+        guard JSONSerialization.isValidJSONObject(dict),
+              let out = try? JSONSerialization.data(withJSONObject: dict),
+              let s = String(data: out, encoding: .utf8) else {
+            return argumentsJson
+        }
+        return s
+    }
+
+    /// After MacUse `get_tool_definitions`, local models often narrate instead of calling
+    /// `call_tool_by_name`. Force the same next step Radiant takes for mail checks.
+    private static func macUseForcedFollowUp(
+        userPrompt: String,
+        availableTools: [Tool],
+        defsFetched: Bool,
+        mailListed: Bool,
+        mailSearched: Bool
+    ) -> (tool: String, args: String, notice: String)? {
+        let prompt = userPrompt.lowercased()
+        let wantsMacUse = prompt.contains("macuse") || prompt.contains("mac use")
+            || ((prompt.contains("mail") || prompt.contains("email") || prompt.contains("inbox"))
+                && (prompt.contains("mcp") || prompt.contains("computer") || prompt.contains("this computer")))
+        guard wantsMacUse else { return nil }
+
+        let wantsMail = prompt.contains("mail") || prompt.contains("email") || prompt.contains("inbox")
+        let callTool = availableTools.first(where: {
+            let n = $0.name.lowercased()
+            return n.hasSuffix("__call_tool_by_name") || n.contains("call_tool_by_name")
+        })
+        let defsTool = availableTools.first(where: {
+            let n = $0.name.lowercased()
+            return n.hasSuffix("__get_tool_definitions") || n.contains("get_tool_definitions")
+        })
+
+        if !defsFetched, let defsTool {
+            let names = wantsMail ? #"{"names":["mail_*"]}"# : #"{"names":["*"]}"#
+            return (defsTool.name, names, "Calling MacUse `get_tool_definitions`…")
+        }
+
+        guard wantsMail, let callTool else { return nil }
+
+        if !mailListed {
+            return (
+                callTool.name,
+                MCPToolArgumentDefaults.macUseCallArgsJSON(toolName: "mail_list_accounts"),
+                "Calling MacUse `mail_list_accounts`…"
+            )
+        }
+
+        if !mailSearched {
+            return (
+                callTool.name,
+                MCPToolArgumentDefaults.macUseCallArgsJSON(
+                    toolName: "mail_search_messages",
+                    arguments: ["limit": 50]
+                ),
+                "Calling MacUse `mail_search_messages`…"
+            )
+        }
+
+        return nil
     }
 
     private func parseToolCalls(from text: String) -> [(tool: String, args: String)] {

@@ -113,6 +113,40 @@ public struct MCPToolDefinition: Identifiable, Codable, Hashable, Sendable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(name)
     }
+
+    /// Build from a tools/list entry, preserving `inputSchema` when present.
+    public static func fromToolsListEntry(_ t: [String: Any]) -> MCPToolDefinition {
+        let name = t["name"] as? String ?? "tool"
+        let desc = t["description"] as? String
+        let schemaObj = t["inputSchema"] as? [String: Any] ?? t["input_schema"] as? [String: Any]
+        var schemaJson: String?
+        if let schemaObj,
+           let data = try? JSONSerialization.data(withJSONObject: schemaObj),
+           let s = String(data: data, encoding: .utf8) {
+            schemaJson = s
+        }
+        return MCPToolDefinition(name: name, description: desc, inputSchemaJson: schemaJson)
+    }
+}
+
+/// Radiant-compatible namespaced MCP tool names: `mcp__{serverId}__{toolName}`.
+public enum MCPNamespacedTool {
+    public static func name(serverId: String, toolName: String) -> String {
+        "mcp__\(serverId)__\(toolName)"
+    }
+
+    public static func parse(_ name: String) -> (serverId: String, toolName: String)? {
+        let parts = name.split(separator: "__", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 3, parts[0] == "mcp" else { return nil }
+        let serverId = parts[1]
+        let toolName = parts.dropFirst(2).joined(separator: "__")
+        guard !serverId.isEmpty, !toolName.isEmpty else { return nil }
+        return (serverId, toolName)
+    }
+
+    public static func isNamespaced(_ name: String) -> Bool {
+        name.hasPrefix("mcp__")
+    }
 }
 
 // MARK: - Identity Resolution & Disambiguation (from GrizzyClaw & Osaurus)
@@ -148,33 +182,160 @@ public enum MCPToolArgumentDefaults {
         toolName: String,
         arguments: [String: Any]
     ) -> [String: Any] {
-        var result = arguments
+        var result = coerceJSONMaps(in: arguments)
 
-        // Unpack nested parameter wrappers
-        if let params = result["parameters"] as? [String: Any] {
-            for (k, v) in params { if result[k] == nil { result[k] = v } }
+        // Unpack nested parameter wrappers (but keep MacUse meta-tool shape intact).
+        let leaf = toolName.lowercased()
+        let isCallByName = leaf == "call_tool_by_name" || leaf == "call_tool"
+        if isCallByName {
+            // Local models often emit `"arguments": "{}"` (string). MacUse requires a map.
+            if result["arguments"] == nil {
+                result["arguments"] = [String: Any]()
+            } else if let s = result["arguments"] as? String {
+                result["arguments"] = parseObjectMap(s) ?? [String: Any]()
+            } else if !(result["arguments"] is [String: Any]) {
+                result["arguments"] = [String: Any]()
+            }
+            if let params = result["parameters"] as? String {
+                result["parameters"] = parseObjectMap(params) ?? [String: Any]()
+            }
+        } else if leaf != "get_tool_definitions" {
+            if let params = result["parameters"] as? [String: Any] {
+                for (k, v) in params { if result[k] == nil { result[k] = v } }
+            }
+            if let innerArgs = result["arguments"] as? [String: Any] {
+                for (k, v) in innerArgs { if result[k] == nil { result[k] = v } }
+            }
         }
-        if let innerArgs = result["arguments"] as? [String: Any] {
-            for (k, v) in innerArgs { if result[k] == nil { result[k] = v } }
-        }
+        // get_tool_definitions: leave `{names:[...]}` alone — do NOT inject empty `arguments`.
 
         let sLower = serverName.lowercased()
         let tLower = toolName.lowercased()
 
         // MacUse Low Context Mode default argument shims
-        if sLower.contains("macuse") || tLower.contains("macuse") {
-            if tLower == "get_tool_definitions" && (result["names"] == nil || (result["names"] as? [Any])?.isEmpty == true) {
+        if tLower == "get_tool_definitions"
+            || sLower.contains("macuse")
+            || tLower.contains("macuse") {
+            if tLower == "get_tool_definitions"
+                && (result["names"] == nil || (result["names"] as? [Any])?.isEmpty == true) {
                 result["names"] = ["*"]
             }
         }
 
         return result
     }
+
+    /// Recursively turn JSON-string maps into real dictionaries (MLX/tool-call footgun).
+    public static func coerceJSONMaps(in arguments: [String: Any]) -> [String: Any] {
+        var result: [String: Any] = [:]
+        for (key, value) in arguments {
+            result[key] = coerceValue(value)
+        }
+        return result
+    }
+
+    private static func coerceValue(_ value: Any) -> Any {
+        if let s = value as? String {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("{"), let obj = parseObjectMap(trimmed) {
+                return obj
+            }
+            if trimmed.hasPrefix("["),
+               let data = trimmed.data(using: .utf8),
+               let arr = try? JSONSerialization.jsonObject(with: data) as? [Any] {
+                return arr.map { coerceValue($0) }
+            }
+            return s
+        }
+        if let dict = value as? [String: Any] {
+            return coerceJSONMaps(in: dict)
+        }
+        if let arr = value as? [Any] {
+            return arr.map { coerceValue($0) }
+        }
+        return value
+    }
+
+    public static func parseObjectMap(_ raw: String) -> [String: Any]? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "{}" { return [:] }
+        guard let data = trimmed.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return coerceJSONMaps(in: obj)
+    }
+
+    /// Encode a MacUse `call_tool_by_name` payload with a real object for `arguments`.
+    public static func macUseCallArgsJSON(toolName: String, arguments: [String: Any] = [:]) -> String {
+        let payload: [String: Any] = [
+            "name": toolName,
+            "arguments": arguments
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let s = String(data: data, encoding: .utf8) else {
+            return #"{"name":"\#(toolName)","arguments":{}}"#
+        }
+        return s
+    }
+
+    /// MacUse results often include `actions: [{ tool_call: { tool, arguments } }]`.
+    /// Radiant-quality local loops execute those next instead of hoping the model continues.
+    public static func suggestedCalls(fromToolResult text: String) -> [(nestedTool: String, arguments: [String: Any])] {
+        guard let data = text.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return []
+        }
+        let actions = (root["actions"] as? [[String: Any]]) ?? []
+        var out: [(String, [String: Any])] = []
+        for action in actions {
+            guard let tc = action["tool_call"] as? [String: Any] else { continue }
+            let nested = (tc["tool"] as? String)
+                ?? (tc["name"] as? String)
+                ?? ((tc["arguments"] as? [String: Any])?["name"] as? String)
+            guard let nested, !nested.isEmpty else { continue }
+            var args: [String: Any] = [:]
+            if let a = tc["arguments"] as? [String: Any] {
+                // Shape A: { tool: mail_search_messages, arguments: { limit: 50 } }
+                // Shape B: { tool: call_tool_by_name, arguments: { name, arguments } }
+                if nested == "call_tool_by_name" || nested == "call_tool",
+                   let innerName = a["name"] as? String {
+                    let innerArgs = (a["arguments"] as? [String: Any]) ?? [:]
+                    out.append((innerName, coerceJSONMaps(in: innerArgs)))
+                    continue
+                }
+                if a["name"] != nil && nested.hasPrefix("mail_") == false {
+                    // Nested call_tool_by_name style without rewriting nested name above.
+                    if let innerName = a["name"] as? String {
+                        let innerArgs = (a["arguments"] as? [String: Any]) ?? [:]
+                        out.append((innerName, coerceJSONMaps(in: innerArgs)))
+                        continue
+                    }
+                }
+                args = coerceJSONMaps(in: a)
+            } else if let s = tc["arguments"] as? String {
+                args = parseObjectMap(s) ?? [:]
+            }
+            out.append((nested, args))
+        }
+        return out
+    }
 }
 
 // MARK: - Server Health Status
 public enum MCPServerStatus {
     case notStarted, running, crashed, unreachable
+}
+
+private enum MCPLaunchError: LocalizedError {
+    case processExited(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .processExited(let message): return message
+        }
+    }
 }
 
 // MARK: - Live MCP Client & Manager
@@ -184,9 +345,11 @@ public actor MCPClientManager {
     private var runningProcesses: [String: Process] = [:]
     private var processOutputPipes: [String: Pipe] = [:]
     private var processInputPipes: [String: Pipe] = [:]
-    private var processOutputBuffers: [String: String] = [:]
+    /// Thread-safe stdout accumulators fed by FileHandle readability handlers (actor-safe across awaits).
+    private var processOutputBuffers: [String: MCPStdioBuffer] = [:]
     private var discoveredTools: [String: [MCPToolDefinition]] = [:]
     private var serverStatus: [String: MCPServerStatus] = [:]
+    private var sdkSessions: [String: MCPSDKSession] = [:]
     private var requestId: Int = 1
     
     // Request throttling for concurrent execution control
@@ -220,13 +383,200 @@ public actor MCPClientManager {
                 let tools = try await startServer(config: server)
                 result[server.name] = tools
             } catch {
-                let clean = server.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
-                result[server.name] = [
-                    MCPToolDefinition(name: "\(clean)_call", description: "Execute \(server.name) MCP actions")
-                ]
+                serverStatus[server.id] = .crashed
+                result[server.name] = []
             }
         }
         return result
+    }
+
+    /// Radiant-style first-class MCP tools for the agent loop:
+    /// `mcp__{serverId}__{toolName}` with real JSON schemas from tools/list.
+    ///
+    /// - Parameters:
+    ///   - preferServerIds: Warm these first (e.g. MacUse when the user asks about mail).
+    ///     When non-empty, only these servers block the agent; others warm in the background.
+    ///   - perServerTimeout: Hard cap per server so a stuck `npx`/MacUse cold start cannot
+    ///     leave the chat bubble empty and `isStreaming` forever.
+    public func mcpToolDefs(
+        preferServerIds: [String] = [],
+        perServerTimeout: Duration = .seconds(12)
+    ) async -> [Tool] {
+        let loadedSettings = PersistenceManager.shared.loadSettings()
+        let enabled = loadedSettings.mcpServers.filter { $0.isEnabled }
+        guard !enabled.isEmpty else { return [] }
+
+        let preferred: [MCPServerConfig]
+        let deferred: [MCPServerConfig]
+        if preferServerIds.isEmpty {
+            preferred = enabled
+            deferred = []
+        } else {
+            let preferSet = Set(preferServerIds)
+            let matched = enabled.filter { preferSet.contains($0.id) || preferSet.contains($0.name) }
+            // Fall back to all if preference matched nothing (stale id).
+            if matched.isEmpty {
+                preferred = enabled
+                deferred = []
+            } else {
+                preferred = matched
+                deferred = enabled.filter { server in !matched.contains(where: { $0.id == server.id }) }
+            }
+        }
+
+        await warmServers(preferred, perServerTimeout: perServerTimeout)
+
+        if !deferred.isEmpty {
+            let timeout = perServerTimeout
+            Task {
+                await self.warmServers(deferred, perServerTimeout: timeout)
+            }
+        }
+
+        var result: [Tool] = []
+        // Prefer returning tools from preferred servers; include any already-cached others.
+        let order = preferred + deferred
+        var seenIds = Set<String>()
+        for server in order where seenIds.insert(server.id).inserted {
+            let defs = discoveredTools[server.id] ?? []
+            for t in defs {
+                let namespaced = MCPNamespacedTool.name(serverId: server.id, toolName: t.name)
+                let schema = t.inputSchemaJson
+                    ?? #"{"type":"object","properties":{}}"#
+                let leaf = t.name.lowercased()
+                let readOnly = Self.isReadOnlyMCPTool(leaf)
+                result.append(Tool(
+                    id: namespaced,
+                    name: namespaced,
+                    displayName: "\(server.name): \(t.name)",
+                    description: "[\(server.name)] \(t.description ?? t.name)",
+                    category: .mcp,
+                    parametersJsonSchema: schema,
+                    isEnabled: true,
+                    requiresApproval: !readOnly
+                ))
+            }
+        }
+        return result
+    }
+
+    private func warmServers(_ servers: [MCPServerConfig], perServerTimeout: Duration) async {
+        guard !servers.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            for server in servers {
+                group.addTask {
+                    await self.ensureServerReady(server, timeout: perServerTimeout)
+                }
+            }
+            for await _ in group {}
+        }
+    }
+
+    private func ensureServerReady(_ server: MCPServerConfig, timeout: Duration = .seconds(12)) async {
+        if case .running = serverStatus[server.id],
+           let cached = discoveredTools[server.id], !cached.isEmpty {
+            return
+        }
+        do {
+            try await withThrowingTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    _ = try await self.startServer(config: server)
+                    return true
+                }
+                group.addTask {
+                    try await Task.sleep(for: timeout)
+                    return false
+                }
+                let started = try await group.next() ?? false
+                group.cancelAll()
+                if !started {
+                    throw MCPError.timeout
+                }
+            }
+        } catch is CancellationError {
+            // Parent cancelled — leave state as-is.
+        } catch {
+            if case MCPError.timeout = error {
+                serverStatus[server.id] = .crashed
+                print("[MCPManager] Timed out starting \(server.name) after \(timeout)")
+            }
+            // Leave discoveredTools unchanged (empty) so the agent can surface a clear notice.
+        }
+    }
+
+    /// Match user intent to MCP server ids so we do not block the first token on every `npx` server.
+    public nonisolated static func preferredServerIds(
+        forPrompt prompt: String,
+        servers: [MCPServerConfig]
+    ) -> [String] {
+        let p = prompt.lowercased()
+        let enabled = servers.filter(\.isEnabled)
+        func match(_ predicates: [(MCPServerConfig) -> Bool]) -> [String] {
+            enabled.filter { server in predicates.contains { $0(server) } }.map(\.id)
+        }
+
+        let macuseIntent = p.contains("macuse") || p.contains("mac use")
+            || ((p.contains("mail") || p.contains("email") || p.contains("inbox") || p.contains("calendar"))
+                && (p.contains("mcp") || p.contains("computer") || p.contains("this computer")))
+        if macuseIntent {
+            let ids = match([
+                { $0.name.lowercased().contains("macuse") },
+                { $0.command.lowercased().contains("macuse") }
+            ])
+            if !ids.isEmpty { return ids }
+        }
+
+        if p.contains("codegraph") {
+            let ids = match([
+                { $0.name.lowercased().contains("codegraph") },
+                { $0.command.lowercased().contains("codegraph") }
+            ])
+            if !ids.isEmpty { return ids }
+        }
+
+        // No strong preference — warm everything (still per-server timed out).
+        return []
+    }
+
+    nonisolated static func isReadOnlyMCPTool(_ leafName: String) -> Bool {
+        let leaf = leafName.lowercased()
+        if ["get_tool_definitions", "list_tools", "tools_list", "search", "fetch_content",
+            "codegraph_explore", "fetch", "read_resource"].contains(leaf) {
+            return true
+        }
+        return leaf.hasPrefix("list_") || leaf.hasPrefix("get_") || leaf.hasPrefix("search")
+            || leaf.hasPrefix("fetch") || leaf.hasPrefix("read_") || leaf.hasPrefix("find_")
+    }
+
+    /// Resolve the MCP `tools/call` name + arguments.
+    /// MacUse exposes only meta-tools (`get_tool_definitions`, `call_tool_by_name`); nested
+    /// `name`/`arguments` must stay as parameters — do not unwrap them into a fake top-level tool.
+    nonisolated static func resolveMCPCall(
+        toolName: String,
+        arguments: [String: Any]
+    ) -> (name: String, arguments: [String: Any]) {
+        let leaf = toolName.lowercased()
+        if leaf == "call_tool_by_name" || leaf == "call_tool" || leaf == "get_tool_definitions" {
+            return (toolName, arguments)
+        }
+
+        var actualTool = arguments["action"] as? String
+            ?? arguments["tool"] as? String
+            ?? arguments["name"] as? String
+            ?? toolName
+        // Models often emit `codegraph_call` with nested `{tool: ...}` — unwrap that.
+        if actualTool.lowercased().hasSuffix("_call"),
+           let nested = arguments["tool"] as? String,
+           !nested.isEmpty,
+           nested.lowercased() != actualTool.lowercased() {
+            actualTool = nested
+        }
+        let callArgs = arguments["parameters"] as? [String: Any]
+            ?? arguments["arguments"] as? [String: Any]
+            ?? arguments.filter {
+                !["action", "tool", "name", "server", "server_name", "parameters", "arguments"].contains($0.key)
+            }
+        return (actualTool, callArgs)
     }
     
     public func getServerStatus(serverId: String) -> MCPServerStatus {
@@ -238,32 +588,70 @@ public actor MCPClientManager {
     }
 
     private func startStdioServer(config: MCPServerConfig) async throws -> [MCPToolDefinition] {
-        stopServer(id: config.id)
+        await stopServer(id: config.id)
+
+        // Prefer the official MCP Swift SDK (Radiant parity); fall back to hand-rolled pipes.
+        do {
+            let session = MCPSDKSession(config: config)
+            let tools = try await session.start()
+            sdkSessions[config.id] = session
+            discoveredTools[config.id] = tools
+            serverStatus[config.id] = .running
+            return tools
+        } catch {
+            print("[MCPManager] SDK start failed for \(config.name), falling back to hand-rolled: \(error.localizedDescription)")
+        }
 
         let process = Process()
         let inPipe = Pipe()
         let outPipe = Pipe()
-        let errPipe = Pipe()
+        // Never attach an unread stderr Pipe — MCP servers (node/python) log heavily to stderr and
+        // will deadlock once the ~64KB pipe buffer fills, freezing the app mid tool-call.
+        process.standardError = FileHandle.nullDevice
 
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        var arguments = [config.command]
-        arguments.append(contentsOf: config.args)
-        process.arguments = arguments
+        let env = ToolExecutionEngine.defaultEnvironment(custom: config.env)
+        let launchArgs = Self.sanitizedStdioArgs(command: config.command, name: config.name, args: config.args)
+        let resolved = Self.resolveExecutable(config.command, environment: env)
+        if resolved.hasPrefix("/") {
+            process.executableURL = URL(fileURLWithPath: resolved)
+            process.arguments = launchArgs
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [config.command] + launchArgs
+        }
 
         if !config.workingDirectory.isEmpty {
             process.currentDirectoryURL = URL(fileURLWithPath: config.workingDirectory)
         }
 
-        process.environment = ToolExecutionEngine.defaultEnvironment(custom: config.env)
+        process.environment = env
         process.standardInput = inPipe
         process.standardOutput = outPipe
-        process.standardError = errPipe
+
+        let stdoutBuffer = MCPStdioBuffer()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty {
+                stdoutBuffer.append(chunk)
+            }
+        }
 
         do {
             try process.run()
+            // Bad CLI args (e.g. codegraph `alwaysLoad true`) exit immediately — writing stdin then
+            // used to raise an uncaught NSException via FileHandle.write(_:) and kill the app.
+            try await Task.sleep(nanoseconds: 120_000_000)
+            guard process.isRunning else {
+                outPipe.fileHandleForReading.readabilityHandler = nil
+                throw MCPLaunchError.processExited(
+                    "MCP '\(config.name)' exited immediately. Check command/args (got: \(config.command) \(launchArgs.joined(separator: " ")))."
+                )
+            }
+
             runningProcesses[config.id] = process
             processInputPipes[config.id] = inPipe
             processOutputPipes[config.id] = outPipe
+            processOutputBuffers[config.id] = stdoutBuffer
 
             // 1. Send initialize
             let initRequest: [String: Any] = [
@@ -277,6 +665,9 @@ public actor MCPClientManager {
                 ]
             ]
             try sendJson(initRequest, to: inPipe)
+            guard process.isRunning else {
+                throw MCPLaunchError.processExited("MCP '\(config.name)' died during initialize.")
+            }
 
             // 2. Send initialized notification
             let initializedNotification: [String: Any] = [
@@ -284,7 +675,7 @@ public actor MCPClientManager {
                 "method": "notifications/initialized",
                 "params": [:]
             ]
-            try? sendJson(initializedNotification, to: inPipe)
+            try sendJson(initializedNotification, to: inPipe)
 
             // 3. Send tools/list and wait for response to discover real tools
             let listToolsRequest: [String: Any] = [
@@ -293,63 +684,87 @@ public actor MCPClientManager {
                 "method": "tools/list",
                 "params": [:]
             ]
-            try? sendJson(listToolsRequest, to: inPipe)
+            try sendJson(listToolsRequest, to: inPipe)
 
             var tools: [MCPToolDefinition] = []
-            let listResp = await readResponse(for: 2, from: outPipe, timeoutSeconds: 2.0)
+            // MacUse and other heavy servers can take longer than 3s to answer tools/list.
+            let listResp = await readResponse(for: 2, buffer: stdoutBuffer, timeoutSeconds: 12.0)
             if !listResp.isEmpty, let data = listResp.data(using: .utf8),
                let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 let toolsArray = (json["tools"] as? [[String: Any]]) ?? ((json["result"] as? [String: Any])?["tools"] as? [[String: Any]]) ?? []
                 for t in toolsArray {
-                    let tName = t["name"] as? String ?? "tool"
-                    let tDesc = t["description"] as? String
-                    tools.append(MCPToolDefinition(name: tName, description: tDesc))
+                    tools.append(MCPToolDefinition.fromToolsListEntry(t))
                 }
             }
 
-            // Dynamic fallback tools based on server type and name if none returned yet
-            let cleanName = config.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
-
-            if tools.isEmpty {
-                if cleanName.contains("ddg") || cleanName.contains("search") || cleanName.contains("duck") {
-                    tools = [
-                        MCPToolDefinition(name: "search", description: "Search the web via DuckDuckGo"),
-                        MCPToolDefinition(name: "fetch_content", description: "Fetch webpage contents or search results")
-                    ]
-                } else if cleanName.contains("macuse") || cleanName.contains("mac") {
-                    tools = [
-                        MCPToolDefinition(name: "\(cleanName)_calendar", description: "Fetch upcoming events and schedule from macOS Calendar"),
-                        MCPToolDefinition(name: "\(cleanName)_reminders", description: "Fetch pending tasks and lists from macOS Reminders"),
-                        MCPToolDefinition(name: "\(cleanName)_applescript", description: "Execute AppleScript to interact with macOS applications"),
-                        MCPToolDefinition(name: "\(cleanName)_call", description: "Execute any MacUse automation or MCP action"),
-                        MCPToolDefinition(name: "get_tool_definitions", description: "List dynamic MacUse tools"),
-                        MCPToolDefinition(name: "call_tool_by_name", description: "Invoke dynamic MacUse tool by name")
-                    ]
-                } else {
-                    tools = [
-                        MCPToolDefinition(name: "\(cleanName)_call", description: "Execute tool or query on \(config.name) MCP server"),
-                        MCPToolDefinition(name: "mcp_resource_read", description: "Read structured resource from MCP server"),
-                        MCPToolDefinition(name: "mcp_query", description: "Execute MCP dynamic tool")
-                    ]
-                }
+            guard process.isRunning else {
+                throw MCPLaunchError.processExited("MCP '\(config.name)' exited after handshake.")
             }
 
             serverStatus[config.id] = .running
             discoveredTools[config.id] = tools
             return tools
         } catch {
-            print("[MCPManager] Stdio start fallback for \(config.name): \(error.localizedDescription)")
+            print("[MCPManager] Stdio start failed for \(config.name): \(error.localizedDescription)")
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            if process.isRunning { process.terminate() }
+            runningProcesses.removeValue(forKey: config.id)
+            processInputPipes.removeValue(forKey: config.id)
+            processOutputPipes.removeValue(forKey: config.id)
+            processOutputBuffers.removeValue(forKey: config.id)
             serverStatus[config.id] = .crashed
-            let cleanName = config.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
-            let fallback = [
-                MCPToolDefinition(
-                    name: "\(cleanName)_call",
-                    description: "Queries the \(config.name) Model Context Protocol service"
-                )
-            ]
-            discoveredTools[config.id] = fallback
-            return fallback
+            discoveredTools[config.id] = []
+            throw error
         }
+    }
+
+    /// Drop invalid CodeGraph argv tokens such as `alwaysLoad` / `true` that make `serve` exit immediately.
+    static func sanitizedStdioArgs(command: String, name: String, args: [String]) -> [String] {
+        let isCodegraph = command.lowercased().contains("codegraph")
+            || name.lowercased().contains("codegraph")
+            || name.lowercased().contains("code_graph")
+        guard isCodegraph else { return args }
+
+        var out: [String] = []
+        var i = 0
+        while i < args.count {
+            let tok = args[i]
+            switch tok {
+            case "serve", "--mcp", "--no-watch":
+                out.append(tok)
+                i += 1
+            case "-p", "--path":
+                out.append(tok)
+                if i + 1 < args.count {
+                    out.append(args[i + 1])
+                    i += 2
+                } else {
+                    i += 1
+                }
+            default:
+                // Drop unknowns (alwaysLoad, true, etc.)
+                i += 1
+            }
+        }
+        if !out.contains("serve") { out.insert("serve", at: 0) }
+        if !out.contains("--mcp") { out.append("--mcp") }
+        return out
+    }
+
+    static func resolveExecutable(_ command: String, environment: [String: String]) -> String {
+        if command.contains("/"), FileManager.default.isExecutableFile(atPath: command) {
+            return command
+        }
+        let pathDirs = (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+            .split(separator: ":")
+            .map(String.init)
+        for dir in pathDirs {
+            let candidate = (dir as NSString).appendingPathComponent(command)
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return command
     }
 
     private func queryHttpSseServer(config: MCPServerConfig) async throws -> [MCPToolDefinition] {
@@ -376,13 +791,8 @@ public actor MCPClientManager {
         
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             serverStatus[config.id] = .unreachable
-            let cleanName = config.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
-            return [
-                MCPToolDefinition(
-                    name: "\(cleanName)_call",
-                    description: "HTTP/SSE tool connected to \(config.url)"
-                )
-            ]
+            discoveredTools[config.id] = []
+            return []
         }
 
         do {
@@ -391,9 +801,7 @@ public actor MCPClientManager {
                let toolsArray = result["tools"] as? [[String: Any]] {
                 var list: [MCPToolDefinition] = []
                 for t in toolsArray {
-                    let name = t["name"] as? String ?? "mcp_tool"
-                    let desc = t["description"] as? String
-                    list.append(MCPToolDefinition(name: name, description: desc))
+                    list.append(MCPToolDefinition.fromToolsListEntry(t))
                 }
                 serverStatus[config.id] = .running
                 discoveredTools[config.id] = list
@@ -403,15 +811,8 @@ public actor MCPClientManager {
             serverStatus[config.id] = .unreachable
         }
 
-        let cleanName = config.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
-        let defaultTool = [
-            MCPToolDefinition(
-                name: "\(cleanName)_call",
-                description: "HTTP/SSE tool connected to \(config.url)"
-            )
-        ]
-        discoveredTools[config.id] = defaultTool
-        return defaultTool
+        discoveredTools[config.id] = []
+        return []
     }
 
     // MARK: - Universal Tool Dispatcher
@@ -470,65 +871,116 @@ public actor MCPClientManager {
             }
 
             if server.transportType == .stdio && !server.command.isEmpty {
-                // If process not running, try to start it
-                if runningProcesses[server.id] == nil || !(runningProcesses[server.id]?.isRunning ?? false) {
+                let hasSDK = sdkSessions[server.id] != nil
+                let procRunning = runningProcesses[server.id]?.isRunning == true
+                if !hasSDK && !procRunning {
                     _ = try? await startStdioServer(config: server)
                 }
 
+                // Official SDK path (Radiant parity)
+                if let session = sdkSessions[server.id] {
+                    let resolved = Self.resolveMCPCall(toolName: toolName, arguments: normArgs)
+                    do {
+                        let raw = try await session.callTool(name: resolved.name, arguments: resolved.arguments)
+                        return ToolBounds.boundResult(raw).text
+                    } catch {
+                        return "Error: MCP SDK call to '\(server.name)'/\(resolved.name) failed: \(error.localizedDescription)"
+                    }
+                }
+
+                guard let proc = runningProcesses[server.id], proc.isRunning else {
+                    return "Error: MCP Server '\(server.name)' failed to start. If this is CodeGraph, args must be `serve --mcp` (not `alwaysLoad true`)."
+                }
+
                 // Verify process is now running
-                if let inPipe = processInputPipes[server.id], let outPipe = processOutputPipes[server.id] {
-                    // Use thread-safe request ID generation
+                if let inPipe = processInputPipes[server.id],
+                   let stdoutBuffer = processOutputBuffers[server.id] {
                     let reqId = nextRequestId()
-                    let actualTool = normArgs["action"] as? String ?? normArgs["tool"] as? String ?? normArgs["name"] as? String ?? toolName
-                    
-                    // Check if we should throttle incoming requests
-                    if !shouldAcceptRequest() {
+                    let resolved = Self.resolveMCPCall(toolName: toolName, arguments: normArgs)
+                    let actualTool = resolved.name
+                    let callArgs = resolved.arguments
+
+                    if !acquireRequestSlot() {
                         return "MCP Server '\(server.name)' is busy. Please wait and retry your request."
                     }
 
-                    let callReq: [String: Any] = [
-                        "jsonrpc": "2.0",
-                        "id": reqId,
-                        "method": "tools/call",
-                        "params": [
-                            "name": actualTool,
-                            "arguments": normArgs["parameters"] as? [String: Any] ?? normArgs["arguments"] as? [String: Any] ?? normArgs
+                    // `list_tools` is an MCP protocol method (tools/list), not a tools/call target.
+                    let listAliases: Set<String> = ["list_tools", "tools_list", "list-tools", "tools/list", "listtools"]
+                    let callReq: [String: Any]
+                    if listAliases.contains(actualTool.lowercased()) {
+                        callReq = [
+                            "jsonrpc": "2.0",
+                            "id": reqId,
+                            "method": "tools/list",
+                            "params": [:]
                         ]
-                    ]
+                    } else {
+                        callReq = [
+                            "jsonrpc": "2.0",
+                            "id": reqId,
+                            "method": "tools/call",
+                            "params": [
+                                "name": actualTool,
+                                "arguments": callArgs
+                            ]
+                        ]
+                    }
 
-                    if let _ = try? sendJson(callReq, to: inPipe) {
-                        // Use timeout-based response reading
-                        let responseText = await withTimeout(30) { 
-                            await self.readResponse(for: reqId, from: outPipe, timeoutSeconds: 2.5)
-                        }
+                    do {
+                        try sendJson(callReq, to: inPipe)
+                        let responseText = await self.readResponse(for: reqId, buffer: stdoutBuffer, timeoutSeconds: 30.0)
                         releaseRequestSlot()
                         if !responseText.isEmpty {
                             return responseText
                         }
-                    } else {
+                        return "MCP Server '\(server.name)' returned an empty response for '\(actualTool)' (timed out or no matching JSON-RPC id)."
+                    } catch {
                         releaseRequestSlot()
+                        return "Error: failed to send MCP request to '\(server.name)': \(error.localizedDescription)"
                     }
                 } else {
-                    releaseRequestSlot()
                     return "Error: MCP Server '\(server.name)' communication pipes not available."
                 }
             } else if server.transportType == .httpSse && !server.url.isEmpty {
-                var req = URLRequest(url: URL(string: server.url)!)
+                guard let endpoint = URL(string: server.url) else {
+                    return "Error: MCP Server '\(server.name)' has an invalid URL: \(server.url)"
+                }
+                var req = URLRequest(url: endpoint)
                 req.httpMethod = "POST"
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 for (k, v) in server.headers { req.setValue(v, forHTTPHeaderField: k) }
                 for (k, v) in server.env { req.setValue(v, forHTTPHeaderField: k) }
 
-                let actualTool = normArgs["action"] as? String ?? normArgs["tool"] as? String ?? normArgs["name"] as? String ?? toolName
-                let callReq: [String: Any] = [
-                    "jsonrpc": "2.0",
-                    "id": nextRequestId(),
-                    "method": "tools/call",
-                    "params": [
-                        "name": actualTool,
-                        "arguments": normArgs["parameters"] as? [String: Any] ?? normArgs["arguments"] as? [String: Any] ?? normArgs
+                var actualTool = normArgs["action"] as? String ?? normArgs["tool"] as? String ?? normArgs["name"] as? String ?? toolName
+                if actualTool.lowercased().hasSuffix("_call"),
+                   let nested = normArgs["tool"] as? String,
+                   !nested.isEmpty,
+                   nested.lowercased() != actualTool.lowercased() {
+                    actualTool = nested
+                }
+                let callArgs = normArgs["parameters"] as? [String: Any]
+                    ?? normArgs["arguments"] as? [String: Any]
+                    ?? normArgs.filter { !["action", "tool", "name", "server", "server_name", "parameters", "arguments"].contains($0.key) }
+                let listAliases: Set<String> = ["list_tools", "tools_list", "list-tools", "tools/list", "listtools"]
+                let callReq: [String: Any]
+                if listAliases.contains(actualTool.lowercased()) {
+                    callReq = [
+                        "jsonrpc": "2.0",
+                        "id": nextRequestId(),
+                        "method": "tools/list",
+                        "params": [:]
                     ]
-                ]
+                } else {
+                    callReq = [
+                        "jsonrpc": "2.0",
+                        "id": nextRequestId(),
+                        "method": "tools/call",
+                        "params": [
+                            "name": actualTool,
+                            "arguments": callArgs
+                        ]
+                    ]
+                }
                 let bodyData = try? JSONSerialization.data(withJSONObject: callReq)
                 req.httpBody = bodyData
                 
@@ -539,21 +991,27 @@ public actor MCPClientManager {
                         if let result = respDict["result"] as? [String: Any] {
                             if let content = result["content"] as? [[String: Any]] {
                                 let texts = content.compactMap { $0["text"] as? String }
-                                if !texts.isEmpty { 
-                                    releaseRequestSlot()
-                                    return texts.joined(separator: "\n") 
+                                if !texts.isEmpty {
+                                    return texts.joined(separator: "\n")
+                                }
+                            }
+                            if let tools = result["tools"] as? [[String: Any]] {
+                                let names = tools.compactMap { $0["name"] as? String }
+                                if !names.isEmpty {
+                                    return "Available tools on \(server.name):\n" + names.map { "- \($0)" }.joined(separator: "\n")
                                 }
                             }
                             let jsonText = String(data: (try? JSONSerialization.data(withJSONObject: result, options: .prettyPrinted)) ?? Data(), encoding: .utf8) ?? "{}"
-                            releaseRequestSlot()
                             return jsonText
                         }
+                        if let error = respDict["error"] as? [String: Any] {
+                            return "MCP Error from '\(server.name)': \(error["message"] as? String ?? "\(error)")"
+                        }
                     } else {
-                        releaseRequestSlot()
-                        return "Error: MCP Server '\(server.name)' returned non-200 status."
+                        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                        return "Error: MCP Server '\(server.name)' returned HTTP \(status)."
                     }
                 } catch {
-                    releaseRequestSlot()
                     return "Error: MCP Server '\(server.name)' request failed: \(error.localizedDescription)"
                 }
             }
@@ -606,37 +1064,17 @@ public actor MCPClientManager {
         }
     }
 
-    private func readResponse(for reqId: Int, from pipe: Pipe, timeoutSeconds: Double) async -> String {
-        let handle = pipe.fileHandleForReading
+    private func readResponse(for reqId: Int, buffer: MCPStdioBuffer, timeoutSeconds: Double) async -> String {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
 
         while Date() < deadline {
-            let availableData = handle.availableData
-            if !availableData.isEmpty, let chunk = String(data: availableData, encoding: .utf8) {
-                let lines = chunk.components(separatedBy: .newlines)
-                for line in lines {
-                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
-                          let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
-
-                    if let respId = json["id"] as? Int, respId == reqId {
-                        if let result = json["result"] as? [String: Any] {
-                            if let content = result["content"] as? [[String: Any]] {
-                                let texts = content.compactMap { $0["text"] as? String }
-                                if !texts.isEmpty { return texts.joined(separator: "\n") }
-                            }
-                            if let jsonText = String(data: (try? JSONSerialization.data(withJSONObject: result, options: .prettyPrinted)) ?? Data(), encoding: .utf8) {
-                                return jsonText
-                            }
-                        } else if let error = json["error"] as? [String: Any] {
-                            return "MCP Error: \(error["message"] as? String ?? "Unknown error")"
-                        }
-                    }
-                }
+            if let matched = buffer.extractJSONRPCResponse(id: reqId) {
+                return matched
             }
-            try? await Task.sleep(nanoseconds: 60_000_000)
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
-        return ""
+        // Final attempt after timeout window
+        return buffer.extractJSONRPCResponse(id: reqId) ?? ""
     }
 
     // MARK: - Native macOS Automations (Calendar, Reminders, AppleScript)
@@ -767,17 +1205,22 @@ public actor MCPClientManager {
 
     private func sendJson(_ dict: [String: Any], to pipe: Pipe) throws {
         let data = try JSONSerialization.data(withJSONObject: dict)
-        guard var text = String(data: data, encoding: .utf8) else { return }
-        text += "\n"
-        if let lineData = text.data(using: .utf8) {
-            pipe.fileHandleForWriting.write(lineData)
-        }
+        var payload = data
+        payload.append(0x0A) // newline-delimited JSON-RPC
+        // Prefer throwing write — FileHandle.write(_:) raises NSException on EPIPE and can kill the app.
+        try pipe.fileHandleForWriting.write(contentsOf: payload)
     }
 
-    public func stopServer(id: String) {
+    public func stopServer(id: String) async {
+        if let session = sdkSessions.removeValue(forKey: id) {
+            await session.stop()
+        }
+        if let outPipe = processOutputPipes[id] {
+            outPipe.fileHandleForReading.readabilityHandler = nil
+        }
         if let proc = runningProcesses[id] {
-            if proc.isRunning { 
-                proc.terminate() 
+            if proc.isRunning {
+                proc.terminate()
                 serverStatus[id] = .notStarted
             }
             runningProcesses.removeValue(forKey: id)
@@ -787,10 +1230,78 @@ public actor MCPClientManager {
         processOutputBuffers.removeValue(forKey: id)
     }
 
-    public func stopAll() {
-        for (id, _) in runningProcesses {
-            stopServer(id: id)
+    public func stopAll() async {
+        let ids = Set(runningProcesses.keys).union(sdkSessions.keys)
+        for id in ids {
+            await stopServer(id: id)
         }
+    }
+}
+
+/// Thread-safe NDJSON stdout buffer for one MCP stdio process.
+final class MCPStdioBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var text = ""
+
+    func append(_ data: Data) {
+        guard let chunk = String(data: data, encoding: .utf8), !chunk.isEmpty else { return }
+        lock.lock()
+        text += chunk
+        // Cap runaway buffers (log spam / huge payloads)
+        if text.count > 2_000_000 {
+            text = String(text.suffix(1_000_000))
+        }
+        lock.unlock()
+    }
+
+    /// Pull the first complete JSON-RPC response matching `id`, removing it from the buffer.
+    func extractJSONRPCResponse(id: Int) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let remaining = text
+        var consumedUpTo = remaining.startIndex
+        while let lineEnd = remaining[consumedUpTo...].firstIndex(of: "\n") {
+            let line = remaining[consumedUpTo..<lineEnd]
+            let next = remaining.index(after: lineEnd)
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            consumedUpTo = next
+            guard !trimmed.isEmpty,
+                  let data = trimmed.data(using: .utf8),
+                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                continue
+            }
+
+            let respId: Int? = {
+                if let i = json["id"] as? Int { return i }
+                if let s = json["id"] as? String { return Int(s) }
+                return nil
+            }()
+            guard respId == id else { continue }
+
+            // Drop everything through this line from the buffer
+            text = String(remaining[next...])
+
+            if let result = json["result"] as? [String: Any] {
+                if let content = result["content"] as? [[String: Any]] {
+                    let texts = content.compactMap { $0["text"] as? String }
+                    if !texts.isEmpty { return texts.joined(separator: "\n") }
+                }
+                if let tools = result["tools"] as? [[String: Any]] {
+                    let names = tools.compactMap { $0["name"] as? String }
+                    if !names.isEmpty {
+                        return "Available tools:\n" + names.map { "- \($0)" }.joined(separator: "\n")
+                    }
+                }
+                if let jsonText = String(data: (try? JSONSerialization.data(withJSONObject: result, options: .prettyPrinted)) ?? Data(), encoding: .utf8) {
+                    return jsonText
+                }
+            } else if let error = json["error"] as? [String: Any] {
+                return "MCP Error: \(error["message"] as? String ?? "Unknown error")"
+            }
+            return trimmed
+        }
+        return nil
     }
 }
 

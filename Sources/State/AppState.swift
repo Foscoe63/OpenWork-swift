@@ -116,6 +116,8 @@ public final class AppState: ObservableObject {
     @Published public var activeSubAgentTasks: [SubAgentTask] = []
     @Published public var localMLXModels: [LocalMLXModel] = []
     @Published public var isScanningMLX: Bool = false
+    /// Model ids currently held in-process by NativeMLXService (Metal/RAM).
+    @Published public var loadedMLXModelIds: [String] = []
 
     // MARK: - Runtime
     @Published public var isGenerating: Bool = false
@@ -128,16 +130,43 @@ public final class AppState: ObservableObject {
     @Published public var pullModelStatusText: String = ""
     @Published public var isPullingModel: Bool = false
     private var currentExecutionTask: Task<Void, Never>? = nil
+    private var mlxLoadedObserver: NSObjectProtocol?
 
     private let persistence = PersistenceManager.shared
 
     public init() {
         loadAll()
+        mlxLoadedObserver = NotificationCenter.default.addObserver(
+            forName: .mlxLoadedModelsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshLoadedMLXModels()
+            }
+        }
+        refreshLoadedMLXModels()
+    }
+
+    deinit {
+        if let mlxLoadedObserver {
+            NotificationCenter.default.removeObserver(mlxLoadedObserver)
+        }
+    }
+
+    public func refreshLoadedMLXModels() {
+        loadedMLXModelIds = NativeMLXService.shared.loadedModelIds
     }
 
     public func loadAll() {
         self.workspaces = persistence.loadWorkspaces()
         self.settings = persistence.loadSettings()
+        // Prefer the shared Storage Models library when the setting is still empty.
+        if settings.customMLXModelsDirectory.isEmpty,
+           FileManager.default.fileExists(atPath: "/Volumes/Storage/Models") {
+            settings.customMLXModelsDirectory = "/Volumes/Storage/Models"
+            persistence.saveSettings(settings)
+        }
         self.providers = persistence.loadProviders()
         self.agents = persistence.loadAgents()
         self.sessions = persistence.loadSessions()
@@ -243,6 +272,14 @@ public final class AppState: ObservableObject {
     }
 
     public func selectLocalMLXModel(_ model: LocalMLXModel) {
+        // Free GPU/RAM from any previously loaded in-process model before switching.
+        let previouslyLoaded = NativeMLXService.shared.loadedModelIds.filter { $0 != model.id }
+        if !previouslyLoaded.isEmpty {
+            _ = NativeMLXService.shared.unloadAll()
+            // Keep the newly selected id unloaded until first chat turn loads it.
+            refreshLoadedMLXModels()
+        }
+
         // Ensure Apple Silicon built-in provider exists and is enabled
         if let omlxIdx = providers.firstIndex(where: { $0.kind == .omlx }) {
             providers[omlxIdx].isEnabled = true
@@ -298,16 +335,6 @@ public final class AppState: ObservableObject {
 
         selectedModelId = model.id
 
-        // Initialize local model engine in the background
-        Task.detached(priority: .userInitiated) {
-            let res = await LocalMLXEngine.shared.ensureServerRunning()
-            if res.success {
-                await MainActor.run {
-                    self.showToast("⚡️ Apple Silicon model ready: \(model.name)")
-                }
-            }
-        }
-
         // Update active session with the selected model
         if var curr = currentSession {
             curr.providerId = selectedProviderId
@@ -318,7 +345,59 @@ public final class AppState: ObservableObject {
             }
         }
 
-        showToast("Active model: \(model.name)")
+        if previouslyLoaded.isEmpty {
+            showToast("Active model: \(model.name)")
+        } else {
+            showToast("Switched to \(model.name) — previous model unloaded from memory")
+        }
+    }
+
+    /// Unload one in-process MLX model from Metal/RAM.
+    public func unloadMLXModel(id modelId: String) {
+        let unloaded = NativeMLXService.shared.unload(modelId: modelId)
+        refreshLoadedMLXModels()
+        if unloaded {
+            let name = localMLXModels.first(where: { $0.id == modelId })?.name ?? modelId
+            showToast("Unloaded \(name) from memory")
+        } else {
+            showToast("Model was not loaded in memory")
+        }
+    }
+
+    /// Unload every in-process MLX model.
+    public func unloadAllMLXModels() {
+        let count = NativeMLXService.shared.unloadAll()
+        refreshLoadedMLXModels()
+        if count > 0 {
+            showToast("Unloaded \(count) model\(count == 1 ? "" : "s") from memory")
+        } else {
+            showToast("No models currently loaded in memory")
+        }
+    }
+
+    /// Switch to a non-MLX provider model and persist the choice on the active session.
+    public func selectProviderModel(providerId: String, modelId: String) {
+        guard providers.contains(where: { $0.id == providerId }) else { return }
+        // Leaving built-in MLX — free any in-process weights.
+        if currentProvider.kind == .omlx || currentProvider.kind == .vmlx {
+            _ = NativeMLXService.shared.unloadAll()
+            refreshLoadedMLXModels()
+        }
+        selectedProviderId = providerId
+        selectedModelId = modelId
+
+        if var curr = currentSession {
+            curr.providerId = providerId
+            curr.modelId = modelId
+            if let idx = sessions.firstIndex(where: { $0.id == curr.id }) {
+                sessions[idx] = curr
+                persistence.saveSessions(sessions)
+            }
+        }
+
+        let name = providers.first(where: { $0.id == providerId })?.models.first(where: { $0.id == modelId })?.name
+            ?? modelId
+        showToast("Active model: \(name)")
     }
 
     // MARK: - Sessions Operations
@@ -347,6 +426,41 @@ public final class AppState: ObservableObject {
         if !session.modelId.isEmpty { selectedModelId = session.modelId }
         interAgentMessages = session.interAgentMessages
         activeSubAgentTasks = session.activeSubAgentTasks
+        // Keep chat header + sidebar workspace pickers aligned with the session.
+        if workspaces.contains(where: { $0.id == session.workspaceId }),
+           activeWorkspaceId != session.workspaceId {
+            activeWorkspaceId = session.workspaceId
+            settings.defaultWorkspaceId = session.workspaceId
+            persistence.saveSettings(settings)
+        }
+    }
+
+    /// Assign the active chat session to a workspace and sync `activeWorkspaceId`
+    /// (sidebar "Core Workspaces & Research" + chat header stay in lockstep).
+    public func assignCurrentSessionWorkspace(to workspaceId: String) {
+        guard let target = workspaces.first(where: { $0.id == workspaceId }) else { return }
+
+        activeWorkspaceId = target.id
+        settings.defaultWorkspaceId = target.id
+        persistence.saveSettings(settings)
+        ensureWorkspaceFolderExists(for: target)
+
+        if let assignedAgentId = target.assignedAgentId, agents.contains(where: { $0.id == assignedAgentId }) {
+            selectedAgentId = assignedAgentId
+        }
+
+        if var session = currentSession, let idx = sessions.firstIndex(where: { $0.id == session.id }) {
+            session.workspaceId = target.id
+            if let assignedAgentId = target.assignedAgentId {
+                session.agentId = assignedAgentId
+            }
+            sessions[idx] = session
+            persistence.saveSessions(sessions)
+            showToast("Session workspace: \(target.name)")
+        } else {
+            createNewSession(agentId: target.assignedAgentId ?? selectedAgentId)
+            showToast("Switched to '\(target.name)'")
+        }
     }
 
     public func deleteSession(_ session: Session) {
@@ -418,7 +532,25 @@ public final class AppState: ObservableObject {
                         if let r = m.reasoning, !r.isEmpty {
                             md += "> 🧠 **Thinking / Reasoning:**\n> " + r.replacingOccurrences(of: "\n", with: "\n> ") + "\n\n"
                         }
-                        md += "\(m.content)\n\n---\n\n"
+                        for notice in m.notices where !notice.isEmpty {
+                            md += "> ℹ️ \(notice)\n\n"
+                        }
+                        for tc in m.toolCalls {
+                            md += "> **tool** `\(tc.toolName)` (\(tc.status.rawValue))\n"
+                            md += "> args: `\(tc.argumentsJson)`\n"
+                            if let out = tc.resultOutput, !out.isEmpty {
+                                let preview = out.count > 1200 ? String(out.prefix(1200)) + "…" : out
+                                md += ">\n> ```\n> " + preview.replacingOccurrences(of: "\n", with: "\n> ") + "\n> ```\n"
+                            }
+                            md += "\n"
+                        }
+                        if !m.content.isEmpty {
+                            md += "\(m.content)\n\n"
+                        }
+                        if let halt = m.haltText, !halt.isEmpty {
+                            md += "**HALT** (\(m.haltReason ?? "stopped")): \(halt)\n\n"
+                        }
+                        md += "---\n\n"
                     }
                     try md.write(to: url, atomically: true, encoding: .utf8)
 
@@ -581,6 +713,7 @@ public final class AppState: ObservableObject {
                 self.isGenerating = false
                 self.currentExecutionTask = nil
                 self.persistence.saveSessions(self.sessions)
+                self.refreshLoadedMLXModels()
             }
         }
     }
@@ -589,7 +722,13 @@ public final class AppState: ObservableObject {
         currentExecutionTask?.cancel()
         currentExecutionTask = nil
         isGenerating = false
+        ToolApprovalManager.shared.rejectAllPending()
+        UserChoiceManager.shared.cancelAll()
         showToast("Generation cancelled")
+    }
+
+    public func continueAfterHalt() {
+        sendMessage(text: "Continue from where you stopped. Do not repeat completed work.")
     }
 
     private func handleSlashCommand(_ command: String) -> Bool {

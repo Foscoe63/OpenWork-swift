@@ -23,6 +23,43 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
 
     public init() {}
 
+    public var loadedModelIds: [String] {
+        lock.withLock { Array(loadedContainers.keys).sorted() }
+    }
+
+    public func isModelLoaded(_ modelId: String) -> Bool {
+        lock.withLock { loadedContainers[modelId] != nil }
+    }
+
+    /// Evict an in-process model from Metal/RAM so another can be loaded.
+    @discardableResult
+    public func unload(modelId: String) -> Bool {
+        let removed = lock.withLock { () -> Bool in
+            guard loadedContainers.removeValue(forKey: modelId) != nil else { return false }
+            recentLoadFailures[modelId] = nil
+            return true
+        }
+        if removed {
+            NotificationCenter.default.post(name: .mlxLoadedModelsDidChange, object: nil)
+        }
+        return removed
+    }
+
+    /// Evict every in-process MLX model currently held in memory.
+    @discardableResult
+    public func unloadAll() -> Int {
+        let count = lock.withLock { () -> Int in
+            let n = loadedContainers.count
+            loadedContainers.removeAll()
+            recentLoadFailures.removeAll()
+            return n
+        }
+        if count > 0 {
+            NotificationCenter.default.post(name: .mlxLoadedModelsDidChange, object: nil)
+        }
+        return count
+    }
+
     public func testConnection(provider: ModelProvider) async throws -> Bool {
         return true
     }
@@ -44,6 +81,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     ) async throws {
         // Built-in path: run MLX in-process first (same as Osaurus / GrizzyClaw).
         // External HTTP servers are only a secondary option — never required.
+        var inProcessError: Error?
         do {
             try await streamInProcess(
                 model: model,
@@ -51,13 +89,16 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                 messages: messages,
                 temperature: temperature,
                 maxTokens: maxTokens,
+                tools: tools,
                 onChunk: onChunk
             )
             return
         } catch {
-            // Fall through to optional local servers, then mock.
+            inProcessError = error
+            // Fall through to optional local servers.
         }
 
+        var lastServerError: Error?
         for port in [1337, 8000, 8080, 11434, 1234, 5243] {
             if await LocalMLXEngine.shared.isServerRunning(port: port) {
                 var fb = provider
@@ -81,21 +122,25 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                     )
                     return
                 } catch {
+                    lastServerError = error
                     continue
                 }
             }
         }
 
-        try await MockLLMService.shared.streamChat(
-            provider: provider,
-            model: model,
-            systemPrompt: systemPrompt,
-            messages: messages,
-            temperature: temperature,
-            maxTokens: maxTokens,
-            reasoningEffort: reasoningEffort,
-            tools: tools,
-            onChunk: onChunk
+        let inProcessDetail = inProcessError?.localizedDescription ?? "in-process load did not run"
+        let serverDetail = lastServerError?.localizedDescription ?? "no local OpenAI-compatible / Ollama server responded on common ports"
+        throw NSError(
+            domain: "NativeMLXService",
+            code: 10,
+            userInfo: [NSLocalizedDescriptionKey: """
+            Could not run model `\(model.id)`.
+
+            In-process MLX: \(inProcessDetail)
+            Local server fallback: \(serverDetail)
+
+            Download a complete model in Local Models (all weight shards present), or pick Ollama / a cloud provider in the model switcher.
+            """]
         )
     }
 
@@ -105,6 +150,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         messages: [ChatMessage],
         temperature: Double,
         maxTokens: Int,
+        tools: [Tool],
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws {
         let container = try await getOrLoadContainer(modelId: model.id) { status in
@@ -144,6 +190,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         }
 
         let history = Array(mlxMessages.dropLast())
+        let toolSpecs = Self.mlxToolSpecs(from: tools)
         let session = ChatSession(
             container,
             instructions: sanitizedInstructions,
@@ -151,10 +198,13 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             generateParameters: GenerateParameters(
                 maxTokens: maxTokens > 0 ? maxTokens : 4096,
                 temperature: Float(temperature)
-            )
+            ),
+            tools: toolSpecs.isEmpty ? nil : toolSpecs
+            // No toolDispatch — AgentRunner owns approval + MCP execution (Radiant shape).
+            // streamDetails surfaces .toolCall for the outer loop.
         )
 
-        let stream = session.streamResponse(
+        let stream = session.streamDetails(
             to: last.content,
             role: last.role,
             images: last.images,
@@ -163,15 +213,99 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         )
 
         var totalTokens = 0
-        for try await piece in stream {
+        var emittedToolCalls: [ToolCallInfo] = []
+        for try await generation in stream {
             if Task.isCancelled { break }
-            if !piece.isEmpty {
-                totalTokens += 1
-                onChunk(LLMStreamChunk(deltaText: piece))
+            switch generation {
+            case .chunk(let piece):
+                if !piece.isEmpty {
+                    totalTokens += 1
+                    onChunk(LLMStreamChunk(deltaText: piece))
+                }
+            case .toolCall(let call):
+                let argsObject = call.function.arguments.mapValues { $0.anyValue }
+                let argsJson: String
+                if JSONSerialization.isValidJSONObject(argsObject),
+                   let data = try? JSONSerialization.data(withJSONObject: argsObject),
+                   let s = String(data: data, encoding: .utf8) {
+                    argsJson = s
+                } else {
+                    argsJson = "{}"
+                }
+                let info = ToolCallInfo(
+                    id: call.id ?? UUID().uuidString,
+                    toolName: call.function.name,
+                    argumentsJson: argsJson,
+                    status: .running
+                )
+                emittedToolCalls.append(info)
+                onChunk(LLMStreamChunk(toolCalls: [info]))
+            case .info:
+                break
+            @unknown default:
+                break
             }
         }
 
-        onChunk(LLMStreamChunk(isFinished: true, completionTokens: totalTokens))
+        onChunk(LLMStreamChunk(
+            isFinished: true,
+            completionTokens: totalTokens,
+            toolCalls: emittedToolCalls
+        ))
+    }
+
+    /// Map OpenWork `Tool` models into mlx-swift-lm `ToolSpec` dictionaries.
+    private static func mlxToolSpecs(from tools: [Tool]) -> [ToolSpec] {
+        tools.filter(\.isEnabled).compactMap { tool -> ToolSpec? in
+            var parameters: [String: any Sendable] = [
+                "type": "object",
+                "properties": [String: any Sendable]()
+            ]
+            if let data = tool.parametersJsonSchema.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               !obj.isEmpty {
+                parameters = toSendableDict(obj)
+            }
+            return [
+                "type": "function",
+                "function": [
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": parameters
+                ] as [String: any Sendable]
+            ]
+        }
+    }
+
+    private static func toSendableDict(_ dict: [String: Any]) -> [String: any Sendable] {
+        var out: [String: any Sendable] = [:]
+        for (k, v) in dict {
+            out[k] = toSendable(v)
+        }
+        return out
+    }
+
+    private static func toSendable(_ value: Any) -> any Sendable {
+        switch value {
+        case let s as String: return s
+        case let i as Int: return i
+        case let d as Double: return d
+        case let b as Bool: return b
+        case let a as [Any]: return a.map { toSendable($0) }
+        case let d as [String: Any]: return toSendableDict(d)
+        case let n as NSNumber:
+            // Distinguish Bool boxed as NSNumber
+            if CFGetTypeID(n) == CFBooleanGetTypeID() {
+                return n.boolValue
+            }
+            if n.doubleValue.rounded() == n.doubleValue,
+               abs(n.doubleValue) < Double(Int.max) {
+                return n.intValue
+            }
+            return n.doubleValue
+        default:
+            return String(describing: value)
+        }
     }
 
     private func getOrLoadContainer(
@@ -214,6 +348,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                 loadedContainers[modelId] = container
                 recentLoadFailures[modelId] = nil
             }
+            NotificationCenter.default.post(name: .mlxLoadedModelsDidChange, object: nil)
             return container
         } catch {
             lock.withLock { recentLoadFailures[modelId] = Date() }
@@ -225,101 +360,76 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         modelId: String,
         onProgress: @Sendable @escaping (String) -> Void
     ) async throws -> ModelContainer {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let searchDirs = [
-            home.appendingPathComponent(".openwork/mlx_models", isDirectory: true),
-            home.appendingPathComponent(".grizzyclaw/mlx_models", isDirectory: true),
-            home.appendingPathComponent("Library/Application Support/GrizzyClaw/mlx_models", isDirectory: true),
-            home.appendingPathComponent(".cache/huggingface/hub", isDirectory: true)
-        ]
-
-        var foundLocalDirectory: URL? = nil
-        let sanitizedId = modelId.replacingOccurrences(of: "/", with: "--")
-        let hubFolder = "models--" + sanitizedId
-
-        searchLoop: for base in searchDirs {
-            let candidates = [
-                base.appendingPathComponent(modelId),
-                base.appendingPathComponent(sanitizedId),
-                // GrizzyClaw's on-disk layout nests an extra "models" segment before the repo id
-                // (e.g. ~/.grizzyclaw/mlx_models/models/mlx-community/<repo>) instead of putting it
-                // directly under the base directory like our own downloads do.
-                base.appendingPathComponent("models").appendingPathComponent(modelId),
-                base.appendingPathComponent("models").appendingPathComponent(sanitizedId)
-            ]
-            if let complete = candidates.first(where: { Self.isModelDirectoryComplete($0) }) {
-                foundLocalDirectory = complete
-                break searchLoop
-            }
-
-            let snapshotDir = base.appendingPathComponent(hubFolder).appendingPathComponent("snapshots")
-            if FileManager.default.fileExists(atPath: snapshotDir.path),
-               let snaps = try? FileManager.default.contentsOfDirectory(at: snapshotDir, includingPropertiesForKeys: nil),
-               let first = snaps.first(where: { Self.isModelDirectoryComplete($0) }) {
-                foundLocalDirectory = first
-                break searchLoop
-            }
-        }
-
+        let settings = PersistenceManager.shared.loadSettings()
         let tokenizerLoader = #huggingFaceTokenizerLoader()
-        let container: ModelContainer
 
-        if let localDir = foundLocalDirectory {
-            container = try await LLMModelFactory.shared.loadContainer(
+        // Prefer an already-complete directory from the shared Storage Models library / other known roots.
+        if let localDir = LocalMLXEngine.shared.resolveLocalModelDirectory(modelId: modelId, settings: settings) {
+            onProgress("Loading local MLX weights from \(localDir.path)")
+            return try await LLMModelFactory.shared.loadContainer(
                 from: localDir,
                 using: tokenizerLoader
             )
-        } else {
-            let cacheRoot = home.appendingPathComponent(".openwork/mlx_models/hub", isDirectory: true)
-            try? FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
-            let hubClient = HubClient(cache: HubCache(cacheDirectory: cacheRoot))
-            let downloader = #hubDownloader(hubClient)
+        }
 
-            container = try await LLMModelFactory.shared.loadContainer(
-                from: downloader,
-                using: tokenizerLoader,
-                configuration: ModelConfiguration(id: modelId, revision: "main"),
-                progressHandler: { progress in
-                    let pct = Int((progress.fractionCompleted * 100).rounded())
-                    onProgress("Loading MLX weights: \(pct)%")
-                }
+        // Detect incomplete partial downloads under known roots (same lookup, without completeness).
+        if let incomplete = Self.findIncompleteModelDirectory(modelId: modelId, settings: settings) {
+            throw NSError(
+                domain: "NativeMLXService",
+                code: 12,
+                userInfo: [NSLocalizedDescriptionKey: """
+                Found an incomplete download for `\(modelId)` at:
+                \(incomplete.path)
+
+                Weight shards are missing or empty. Open Local Models and resume/re-download until the model shows as ready, or choose a different model from /Volumes/Storage/Models.
+                """]
             )
         }
 
-        return container
+        onProgress("Downloading MLX weights for \(modelId)…")
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let cacheRoot = home.appendingPathComponent(".openwork/mlx_models/hub", isDirectory: true)
+        try? FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+        let hubClient = HubClient(cache: HubCache(cacheDirectory: cacheRoot))
+        let downloader = #hubDownloader(hubClient)
+
+        return try await LLMModelFactory.shared.loadContainer(
+            from: downloader,
+            using: tokenizerLoader,
+            configuration: ModelConfiguration(id: modelId, revision: "main"),
+            progressHandler: { progress in
+                let pct = Int((progress.fractionCompleted * 100).rounded())
+                onProgress("Loading MLX weights: \(pct)%")
+            }
+        )
+    }
+
+    private static func findIncompleteModelDirectory(modelId: String, settings: AppSettings) -> URL? {
+        let roots = LocalMLXEngine.knownMLXSearchRoots(settings: settings)
+        let sanitizedId = modelId.replacingOccurrences(of: "/", with: "--")
+        for base in roots {
+            let candidates = [
+                base.appendingPathComponent(modelId),
+                base.appendingPathComponent(sanitizedId),
+                base.appendingPathComponent("models").appendingPathComponent(modelId),
+                base.appendingPathComponent("models").appendingPathComponent(sanitizedId)
+            ]
+            for candidate in candidates {
+                let configPath = candidate.appendingPathComponent("config.json").path
+                if FileManager.default.fileExists(atPath: configPath),
+                   !LocalMLXEngine.isModelDirectoryComplete(candidate) {
+                    return candidate
+                }
+            }
+        }
+        return nil
     }
 
     /// `config.json` alone is not proof a model is usable — an interrupted or cancelled download
     /// (including one killed by our own load timeout) can leave config.json and a handful of small
     /// metadata files on disk while most or all of the multi-gigabyte weight shards are missing.
-    /// Treating that as "found locally" makes loadContainer fail on missing files instead of
-    /// falling through to the downloader, which would otherwise resume the incomplete cache.
     static func isModelDirectoryComplete(_ dir: URL) -> Bool {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: dir.appendingPathComponent("config.json").path) else { return false }
-
-        func nonEmptyFileExists(_ path: String) -> Bool {
-            guard let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int else { return false }
-            return size > 0
-        }
-
-        let indexURL = dir.appendingPathComponent("model.safetensors.index.json")
-        if fm.fileExists(atPath: indexURL.path) {
-            guard let data = try? Data(contentsOf: indexURL),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let weightMap = json["weight_map"] as? [String: String] else {
-                return false
-            }
-            let requiredShards = Set(weightMap.values)
-            guard !requiredShards.isEmpty else { return false }
-            return requiredShards.allSatisfy { nonEmptyFileExists(dir.appendingPathComponent($0).path) }
-        }
-
-        // No shard index: expect a single-file checkpoint alongside config.json.
-        guard let contents = try? fm.contentsOfDirectory(atPath: dir.path) else { return false }
-        let weightFiles = contents.filter { $0.hasSuffix(".safetensors") }
-        guard !weightFiles.isEmpty else { return false }
-        return weightFiles.allSatisfy { nonEmptyFileExists(dir.appendingPathComponent($0).path) }
+        LocalMLXEngine.isModelDirectoryComplete(dir)
     }
 
     private func sanitizeForHFChatTemplate(_ text: String) -> String {
@@ -364,6 +474,12 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
 public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     public static let shared = NativeMLXService()
     public init() {}
+
+    public var loadedModelIds: [String] { [] }
+    public func isModelLoaded(_ modelId: String) -> Bool { false }
+    @discardableResult public func unload(modelId: String) -> Bool { false }
+    @discardableResult public func unloadAll() -> Int { 0 }
+
     public func testConnection(provider: ModelProvider) async throws -> Bool { return true }
     public func listModels(provider: ModelProvider) async throws -> [ModelInfo] { return provider.models }
     public func streamChat(
@@ -403,19 +519,21 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             }
         }
 
-        // 2) No reachable local server and no in-process MLX (packages not linked in Xcode).
-        //    Keep chat usable instead of failing with "Could not connect to the server."
-        try await MockLLMService.shared.streamChat(
-            provider: provider,
-            model: model,
-            systemPrompt: systemPrompt,
-            messages: messages,
-            temperature: temperature,
-            maxTokens: maxTokens,
-            reasoningEffort: reasoningEffort,
-            tools: tools,
-            onChunk: onChunk
+        // 2) No reachable local server and no in-process MLX (packages not linked in this build).
+        throw NSError(
+            domain: "NativeMLXService",
+            code: 11,
+            userInfo: [NSLocalizedDescriptionKey: """
+            Built-in MLX packages are not linked in this build, and no local inference server was reachable \
+            (checked ports 1337, 8000, 11434, 1234, 8080, 5243).
+
+            Rebuild with MLX SPM packages linked, start Ollama/LM Studio/Osaurus, or select a cloud provider.
+            """]
         )
     }
 }
 #endif
+
+public extension Notification.Name {
+    static let mlxLoadedModelsDidChange = Notification.Name("mlxLoadedModelsDidChange")
+}

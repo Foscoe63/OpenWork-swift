@@ -132,13 +132,19 @@ public final class PersistenceManager: @unchecked Sendable {
             saveSettings(settings)
         }
 
-        // Synchronize MCP servers
+        // Synchronize MCP servers (repair known-bad launch args before either side wins)
         let backupMcp = loadMCPServers()
         if settings.mcpServers.isEmpty {
             settings.mcpServers = backupMcp
             saveSettings(settings)
         } else {
-            saveMCPServers(settings.mcpServers)
+            let repaired = repairMCPServerArgs(settings.mcpServers)
+            if repaired != settings.mcpServers {
+                settings.mcpServers = repaired
+                saveSettings(settings)
+            } else {
+                saveMCPServers(settings.mcpServers)
+            }
         }
 
         return settings
@@ -152,11 +158,30 @@ public final class PersistenceManager: @unchecked Sendable {
     // MARK: - MCP Servers Backup Store
     public func loadMCPServers() -> [MCPServerConfig] {
         if let servers = storage.load([MCPServerConfig].self, from: "mcp_servers.json"), !servers.isEmpty {
-            return servers
+            let repaired = repairMCPServerArgs(servers)
+            if repaired != servers {
+                saveMCPServers(repaired)
+            }
+            return repaired
         }
         let defaults = AppSettings.defaultMCPServers
         saveMCPServers(defaults)
         return defaults
+    }
+
+    /// Fix known-bad MCP launch args that cause child processes to exit immediately (and used to crash the app).
+    private func repairMCPServerArgs(_ servers: [MCPServerConfig]) -> [MCPServerConfig] {
+        servers.map { server in
+            var s = server
+            let isCodegraph = s.command.lowercased().contains("codegraph")
+                || s.name.lowercased().contains("codegraph")
+            guard isCodegraph else { return s }
+            let sanitized = MCPClientManager.sanitizedStdioArgs(command: s.command, name: s.name, args: s.args)
+            if sanitized != s.args {
+                s.args = sanitized
+            }
+            return s
+        }
     }
 
     public func saveMCPServers(_ servers: [MCPServerConfig]) {
@@ -676,31 +701,33 @@ public final class PersistenceManager: @unchecked Sendable {
 
     // MARK: - Tools
     public var defaultTools: [Tool] {
-        [
-            Tool(id: "file_read", name: "file_read", displayName: "Read File", description: "Reads text content from a file path in authorized workspace directories", category: .files),
-            Tool(id: "file_write", name: "file_write", displayName: "Write File", description: "Creates or overwrites a file with content", category: .files, requiresApproval: false),
-            Tool(id: "file_list", name: "file_list", displayName: "List Directory", description: "Lists files and subdirectories in a given folder", category: .files),
-            Tool(id: "file_copy", name: "file_copy", displayName: "Copy File", description: "Copies files or directories from source to destination", category: .files, requiresApproval: false),
-            Tool(id: "file_move", name: "file_move", displayName: "Move File", description: "Moves or renames files or directories", category: .files, requiresApproval: false),
-            Tool(id: "file_delete", name: "file_delete", displayName: "Delete File", description: "Removes a file or directory from disk", category: .files, requiresApproval: false),
-            Tool(id: "terminal_command", name: "terminal_command", displayName: "Execute Shell Command", description: "Executes a shell command in macOS terminal (zsh/bash/fish)", category: .terminal, requiresApproval: false),
-            Tool(id: "web_search", name: "web_search", displayName: "Web Search", description: "Searches the web for documentation, news, APIs, and real-time knowledge", category: .web),
-            Tool(id: "calculator", name: "calculator", displayName: "Math Calculator", description: "Evaluates mathematical expressions and formulas", category: .system),
-            Tool(id: "get_current_date", name: "get_current_date", displayName: "Get Current Date", description: "Returns the current date in YYYY-MM-DD format", category: .system),
-            Tool(id: "document_extract", name: "document_extract", displayName: "PDF & Vision OCR Extractor", description: "Extracts text from PDF documents via PDFKit or scanned images/receipts via Apple Vision framework OCR", category: .files),
-            Tool(id: "workspace_semantic_search", name: "workspace_semantic_search", displayName: "Workspace Semantic Search (RAG)", description: "Performs local semantic chunk search across all source files in the active workspace", category: .files),
-            Tool(id: "generate_image", name: "generate_image", displayName: "Generative Media & Canvas Image", description: "Generates UI diagrams, illustrations, charts, or SVG canvas artwork from prompts", category: .mediaVision),
-            Tool(id: "mlx_vision_describe", name: "mlx_vision_describe", displayName: "MLX Vision Multi-modal Describer", description: "Analyzes images, diagrams, and screenshots using local MLX vision models and Apple Vision classification", category: .mediaVision),
-            Tool(id: "image_analyze", name: "image_analyze", displayName: "Vision OCR & Image Structure Analyzer", description: "Detects text, bounding boxes, labels, and structured components inside screenshots and image files", category: .mediaVision),
-            Tool(id: "agent_spawn", name: "agent_spawn", displayName: "Spawn Sub-Agent", description: "Launches a specialized child sub-agent to execute a sub-task autonomously", category: .agents),
-            Tool(id: "agent_message", name: "agent_message", displayName: "Message Agent", description: "Sends an inter-agent message or query to another agent in the network", category: .agents),
-            Tool(id: "memory_store", name: "memory_store", displayName: "Save to Memory", description: "Saves a persistent fact, preference, or context item to the workspace memory", category: .system),
-            Tool(id: "memory_recall", name: "memory_recall", displayName: "Recall Memory", description: "Retrieves stored memories by search term or category", category: .system),
-            Tool(id: "gmail_list", name: "gmail_list", displayName: "List Gmail Messages", description: "Lists recent Gmail messages matching a search query (requires Google OAuth credentials in Settings → Extensions)", category: .web, isEnabled: false, requiresApproval: false),
-            Tool(id: "gmail_search", name: "gmail_search", displayName: "Search Gmail", description: "Searches Gmail with a Gmail query string (e.g. from:boss newer_than:7d)", category: .web, isEnabled: false, requiresApproval: false),
-            Tool(id: "google_calendar_list", name: "google_calendar_list", displayName: "List Google Calendar", description: "Lists upcoming events from the primary Google Calendar", category: .web, isEnabled: false, requiresApproval: false),
-            Tool(id: "google_calendar_upcoming", name: "google_calendar_upcoming", displayName: "Upcoming Google Calendar", description: "Lists Google Calendar events for the next N days", category: .web, isEnabled: false, requiresApproval: false)
+        var tools: [Tool] = [
+            Tool(id: "file_read", name: "file_read", displayName: "Read File", description: "Read a text file. Returns content with optional line offset/limit.", category: .files, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "file_read")),
+            Tool(id: "file_write", name: "file_write", displayName: "Write File", description: "Create or overwrite a file with the given content.", category: .files, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "file_write"), requiresApproval: true),
+            Tool(id: "file_list", name: "file_list", displayName: "List Directory", description: "Lists files and subdirectories in a given folder", category: .files, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "file_list")),
+            Tool(id: "file_copy", name: "file_copy", displayName: "Copy File", description: "Copies files or directories from source to destination", category: .files, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "file_copy"), requiresApproval: true),
+            Tool(id: "file_move", name: "file_move", displayName: "Move File", description: "Moves or renames files or directories", category: .files, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "file_move"), requiresApproval: true),
+            Tool(id: "file_delete", name: "file_delete", displayName: "Delete File", description: "Removes a file or directory from disk", category: .files, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "file_delete"), requiresApproval: true),
+            Tool(id: "terminal_command", name: "terminal_command", displayName: "Execute Shell Command", description: "Run a shell command in the workspace (timeout applies).", category: .terminal, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "terminal_command"), requiresApproval: false),
+            Tool(id: "web_search", name: "web_search", displayName: "Web Search", description: "Searches the web for documentation, news, APIs, and real-time knowledge", category: .web, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "web_search")),
+            Tool(id: "calculator", name: "calculator", displayName: "Math Calculator", description: "Evaluates mathematical expressions and formulas", category: .system, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "calculator")),
+            Tool(id: "get_current_date", name: "get_current_date", displayName: "Get Current Date", description: "Returns the current date in YYYY-MM-DD format", category: .system, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "get_current_date")),
+            Tool(id: "document_extract", name: "document_extract", displayName: "PDF & Vision OCR Extractor", description: "Extracts text from PDF documents via PDFKit or scanned images/receipts via Apple Vision framework OCR", category: .files, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "document_extract")),
+            Tool(id: "workspace_semantic_search", name: "workspace_semantic_search", displayName: "Workspace Semantic Search (RAG)", description: "Performs local semantic chunk search across all source files in the active workspace", category: .files, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "workspace_semantic_search")),
+            Tool(id: "generate_image", name: "generate_image", displayName: "Generative Media & Canvas Image", description: "Generates UI diagrams, illustrations, charts, or SVG canvas artwork from prompts", category: .mediaVision, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "generate_image")),
+            Tool(id: "mlx_vision_describe", name: "mlx_vision_describe", displayName: "MLX Vision Multi-modal Describer", description: "Analyzes images, diagrams, and screenshots using local MLX vision models and Apple Vision classification", category: .mediaVision, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "mlx_vision_describe")),
+            Tool(id: "image_analyze", name: "image_analyze", displayName: "Vision OCR & Image Structure Analyzer", description: "Detects text, bounding boxes, labels, and structured components inside screenshots and image files", category: .mediaVision, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "image_analyze")),
+            Tool(id: "agent_spawn", name: "agent_spawn", displayName: "Spawn Sub-Agent", description: "Launches a specialized child sub-agent to execute a sub-task autonomously", category: .agents, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "agent_spawn")),
+            Tool(id: "agent_message", name: "agent_message", displayName: "Message Agent", description: "Sends an inter-agent message or query to another agent in the network", category: .agents, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "agent_message")),
+            Tool(id: "memory_store", name: "memory_store", displayName: "Save to Memory", description: "Saves a persistent fact, preference, or context item to the workspace memory", category: .system, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "memory_store")),
+            Tool(id: "memory_recall", name: "memory_recall", displayName: "Recall Memory", description: "Retrieves stored memories by search term or category", category: .system, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "memory_recall")),
+            Tool(id: "gmail_list", name: "gmail_list", displayName: "List Gmail Messages", description: "Lists recent Gmail messages matching a search query (requires Google OAuth credentials in Settings → Extensions)", category: .web, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "gmail_list"), isEnabled: false, requiresApproval: false),
+            Tool(id: "gmail_search", name: "gmail_search", displayName: "Search Gmail", description: "Searches Gmail with a Gmail query string (e.g. from:boss newer_than:7d)", category: .web, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "gmail_search"), isEnabled: false, requiresApproval: false),
+            Tool(id: "google_calendar_list", name: "google_calendar_list", displayName: "List Google Calendar", description: "Lists upcoming events from the primary Google Calendar", category: .web, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "google_calendar_list"), isEnabled: false, requiresApproval: false),
+            Tool(id: "google_calendar_upcoming", name: "google_calendar_upcoming", displayName: "Upcoming Google Calendar", description: "Lists Google Calendar events for the next N days", category: .web, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "google_calendar_upcoming"), isEnabled: false, requiresApproval: false)
         ]
+        _ = ToolSchemaCatalog.ensureParityTools(in: &tools)
+        return tools
     }
 
     public func loadTools() -> [Tool] {
@@ -709,42 +736,26 @@ public final class PersistenceManager: @unchecked Sendable {
             items = loaded
         } else {
             items = defaultTools
+            _ = ToolSchemaCatalog.ensureParityTools(in: &items)
+            _ = ToolSchemaCatalog.applySchemas(to: &items)
             saveTools(items)
             return items
         }
 
-        var modified = false
+        var modified = ToolSchemaCatalog.ensureParityTools(in: &items)
+        if ToolSchemaCatalog.applySchemas(to: &items) { modified = true }
+
         for def in defaultTools {
             if !items.contains(where: { $0.id == def.id || $0.name == def.name }) {
-                items.append(def)
+                var tool = def
+                tool.parametersJsonSchema = ToolSchemaCatalog.schemaJSON(for: def.name)
+                items.append(tool)
                 modified = true
             }
         }
 
-        // Sync tools from configured MCP servers in settings
-        let settings = loadSettings()
-        for server in settings.mcpServers {
-            let toolId = "mcp_\(server.id)"
-            let clean = server.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
-            let toolName = "\(clean)_call"
-            
-            if let idx = items.firstIndex(where: { $0.id == toolId || $0.name == toolName }) {
-                // Update name & metadata if changed
-                items[idx].displayName = "\(server.name) MCP Server"
-                items[idx].description = "Executes tools and actions via the \(server.name) MCP server (\(server.transportType.displayName))"
-                items[idx].category = .mcp
-            } else {
-                items.append(Tool(
-                    id: toolId,
-                    name: toolName,
-                    displayName: "\(server.name) MCP Server",
-                    description: "Executes tools and actions via the \(server.name) MCP server (\(server.transportType.displayName))",
-                    category: .mcp,
-                    isEnabled: server.isEnabled
-                ))
-                modified = true
-            }
-        }
+        // Do NOT invent ghost `{server}_call` stubs — Radiant only surfaces real listTools results.
+        // Namespaced MCP tools are injected live by AgentRunner via mcpToolDefs().
 
         if modified {
             saveTools(items)

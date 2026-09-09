@@ -65,6 +65,43 @@ public struct ChatView: View {
                 }
             }
 
+            // Session workspace — synced with sidebar "Core Workspaces & Research"
+            WorkspaceSwitcherMenu(
+                appState: appState,
+                showsManagementActions: true,
+                onSelectWorkspace: { id in
+                    appState.assignCurrentSessionWorkspace(to: id)
+                }
+            ) {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(Color(hex: appState.currentWorkspace.color))
+                        .frame(width: 7, height: 7)
+
+                    Image(systemName: appState.currentWorkspace.icon)
+                        .font(.system(size: 10))
+                        .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+
+                    Text(appState.currentWorkspace.name)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                        .lineLimit(1)
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8))
+                        .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(ThemeColors.sidebarBg(for: appState.settings.theme))
+                .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(ThemeColors.border(for: appState.settings.theme).opacity(0.8), lineWidth: 1)
+                )
+            }
+            .help("Workspace for this session (synced with sidebar)")
+
             // Quick Model Selector in Header
             Menu {
                 let downloadedLocal = appState.localMLXModels.filter { $0.isDownloaded }
@@ -114,8 +151,7 @@ public struct ChatView: View {
                     Section(prov.name) {
                         ForEach(prov.models) { m in
                             Button {
-                                appState.selectedProviderId = prov.id
-                                appState.selectedModelId = m.id
+                                appState.selectProviderModel(providerId: prov.id, modelId: m.id)
                             } label: {
                                 HStack {
                                     Text(m.name)

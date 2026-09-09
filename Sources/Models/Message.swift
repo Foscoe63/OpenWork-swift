@@ -53,6 +53,11 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var isError: Bool
     public var promptTokens: Int
     public var completionTokens: Int
+    /// Durable harness notices (compaction, tools-unsupported) — Radiant `notice` parts.
+    public var notices: [String]
+    /// Durable halt reason when a turn was stopped by budget / stuck breaker / round cap.
+    public var haltReason: String?
+    public var haltText: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -74,7 +79,10 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         isStreaming: Bool = false,
         isError: Bool = false,
         promptTokens: Int = 0,
-        completionTokens: Int = 0
+        completionTokens: Int = 0,
+        notices: [String] = [],
+        haltReason: String? = nil,
+        haltText: String? = nil
     ) {
         self.id = id
         self.sessionId = sessionId
@@ -96,5 +104,70 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.isError = isError
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
+        self.notices = notices
+        self.haltReason = haltReason
+        self.haltText = haltText
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, sessionId, role, content, reasoning, thinkingTimeMs
+        case agentId, agentName, agentAvatar, agentColor, modelId, providerId
+        case timestamp, toolCalls, subAgentTasks, attachments
+        case isStreaming, isError, promptTokens, completionTokens
+        case notices, haltReason, haltText
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        self.sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId) ?? ""
+        self.role = try container.decodeIfPresent(MessageRole.self, forKey: .role) ?? .assistant
+        self.content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        self.reasoning = try container.decodeIfPresent(String.self, forKey: .reasoning)
+        self.thinkingTimeMs = try container.decodeIfPresent(Double.self, forKey: .thinkingTimeMs)
+        self.agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
+        self.agentName = try container.decodeIfPresent(String.self, forKey: .agentName)
+        self.agentAvatar = try container.decodeIfPresent(String.self, forKey: .agentAvatar)
+        self.agentColor = try container.decodeIfPresent(String.self, forKey: .agentColor)
+        self.modelId = try container.decodeIfPresent(String.self, forKey: .modelId)
+        self.providerId = try container.decodeIfPresent(String.self, forKey: .providerId)
+        self.timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
+        self.toolCalls = try container.decodeIfPresent([ToolCallInfo].self, forKey: .toolCalls) ?? []
+        self.subAgentTasks = try container.decodeIfPresent([SubAgentTask].self, forKey: .subAgentTasks) ?? []
+        self.attachments = try container.decodeIfPresent([MessageAttachment].self, forKey: .attachments) ?? []
+        self.isStreaming = try container.decodeIfPresent(Bool.self, forKey: .isStreaming) ?? false
+        self.isError = try container.decodeIfPresent(Bool.self, forKey: .isError) ?? false
+        self.promptTokens = try container.decodeIfPresent(Int.self, forKey: .promptTokens) ?? 0
+        self.completionTokens = try container.decodeIfPresent(Int.self, forKey: .completionTokens) ?? 0
+        self.notices = try container.decodeIfPresent([String].self, forKey: .notices) ?? []
+        self.haltReason = try container.decodeIfPresent(String.self, forKey: .haltReason)
+        self.haltText = try container.decodeIfPresent(String.self, forKey: .haltText)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(sessionId, forKey: .sessionId)
+        try container.encode(role, forKey: .role)
+        try container.encode(content, forKey: .content)
+        try container.encodeIfPresent(reasoning, forKey: .reasoning)
+        try container.encodeIfPresent(thinkingTimeMs, forKey: .thinkingTimeMs)
+        try container.encodeIfPresent(agentId, forKey: .agentId)
+        try container.encodeIfPresent(agentName, forKey: .agentName)
+        try container.encodeIfPresent(agentAvatar, forKey: .agentAvatar)
+        try container.encodeIfPresent(agentColor, forKey: .agentColor)
+        try container.encodeIfPresent(modelId, forKey: .modelId)
+        try container.encodeIfPresent(providerId, forKey: .providerId)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(toolCalls, forKey: .toolCalls)
+        try container.encode(subAgentTasks, forKey: .subAgentTasks)
+        try container.encode(attachments, forKey: .attachments)
+        try container.encode(isStreaming, forKey: .isStreaming)
+        try container.encode(isError, forKey: .isError)
+        try container.encode(promptTokens, forKey: .promptTokens)
+        try container.encode(completionTokens, forKey: .completionTokens)
+        try container.encode(notices, forKey: .notices)
+        try container.encodeIfPresent(haltReason, forKey: .haltReason)
+        try container.encodeIfPresent(haltText, forKey: .haltText)
     }
 }

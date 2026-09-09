@@ -1,10 +1,8 @@
 import Foundation
 
-/// Offline / no-server fallback used when built-in MLX packages are not linked
-/// or no local inference server is reachable.
-///
-/// For automation-style prompts it **actually executes** filesystem tools via
-/// `ToolExecutionEngine` (no fake "verified on disk" claims).
+/// Offline helper used only for explicit automation dry-runs / tests.
+/// Chat routing must never silently fall through here — that produced identical
+/// "offline fallback mode" replies for every prompt and model.
 public final class MockLLMService: LLMProviderClient, @unchecked Sendable {
     public static let shared = MockLLMService()
 

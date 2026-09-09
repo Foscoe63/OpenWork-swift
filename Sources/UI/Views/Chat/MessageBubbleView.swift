@@ -154,6 +154,46 @@ public struct MessageBubbleView: View {
                     }
                 }
 
+                if !message.notices.isEmpty {
+                    FlowNoticeChipsView(notices: message.notices, theme: appState.settings.theme)
+                }
+
+                if let haltText = message.haltText, !haltText.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11))
+                            Text(haltText)
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundColor(.orange)
+                        Text("Press Continue to resume from where the agent stopped.")
+                            .font(.system(size: 11))
+                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                        Button {
+                            appState.continueAfterHalt()
+                        } label: {
+                            Text("Continue")
+                                .font(.system(size: 12, weight: .semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.orange.opacity(0.2))
+                                .foregroundColor(.orange)
+                                .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(appState.isGenerating)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+                    )
+                    .cornerRadius(8)
+                }
+
                 // Main Markdown / Content Text
                 if !message.content.isEmpty {
                     MarkdownRichContentView(content: message.content, appState: appState)
@@ -161,13 +201,33 @@ public struct MessageBubbleView: View {
                     HStack(spacing: 4) {
                         ProgressView()
                             .scaleEffect(0.6)
-                        Text("Generating response...")
+                        Text(message.notices.last ?? "Generating response...")
                             .font(.system(size: 11))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                            .lineLimit(2)
                     }
                 }
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+private struct FlowNoticeChipsView: View {
+    let notices: [String]
+    let theme: AppTheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(notices.enumerated()), id: \.offset) { _, notice in
+                Text(notice)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(ThemeColors.textSecondary(for: theme))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(ThemeColors.border(for: theme).opacity(0.45))
+                    .cornerRadius(10)
+            }
+        }
     }
 }
