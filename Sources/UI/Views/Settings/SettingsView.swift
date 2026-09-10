@@ -11,6 +11,8 @@ public struct SettingsView: View {
     @State private var selectedSkillForDetail: Skill? = nil
     @State private var showingAddMcp = false
     @State private var selectedMcpForEdit: MCPServerConfig? = nil
+    @State private var mcpStatusReports: [MCPServerReport] = []
+    @State private var mcpStatusBusy = false
     @State private var showingAddPlugin = false
     @State private var selectedPluginForDetail: AppExtensionPlugin? = nil
     @State private var pluginSearchText = ""
@@ -2466,7 +2468,7 @@ public struct SettingsView: View {
             // MARK: - MODEL CONTEXT PROTOCOL (MCP) SERVERS SECTION
             SettingsCard(
                 title: "Model Context Protocol (MCP) Servers (\(appState.settings.mcpServers.count))",
-                description: "Extend autonomous agents with stdio processes, remote HTTP/SSE gateways, and WebSocket tools",
+                description: "Extend autonomous agents with stdio processes, remote HTTP/SSE gateways, and WebSocket tools. Enable only servers you trust — cold starts no longer block chat.",
                 icon: "network"
             ) {
                 HStack {
@@ -2474,10 +2476,18 @@ public struct SettingsView: View {
                         .font(.system(size: 12, weight: .semibold))
                     Spacer()
 
+                    Button(mcpStatusBusy ? "Probing…" : "Refresh Status") {
+                        refreshMcpStatus(probe: true)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(mcpStatusBusy)
+
                     Button("Restore Defaults") {
                         appState.settings.mcpServers = AppSettings.defaultMCPServers
                         appState.updateSettings(appState.settings)
-                        appState.showToast("Restored standard MCP servers")
+                        appState.showToast("Restored standard MCP servers (disabled by default)")
+                        refreshMcpStatus(probe: false)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -2513,6 +2523,7 @@ public struct SettingsView: View {
                 } else {
                     VStack(spacing: 8) {
                         ForEach(appState.settings.mcpServers) { mcp in
+                            let report = mcpStatusReports.first(where: { $0.id == mcp.id })
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: mcp.transportType.icon)
                                     .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
@@ -2531,6 +2542,8 @@ public struct SettingsView: View {
                                             .padding(.vertical, 1.5)
                                             .background(ThemeColors.border(for: appState.settings.theme))
                                             .cornerRadius(4)
+
+                                        mcpStatusBadge(for: mcp, report: report)
 
                                         if !mcp.env.isEmpty {
                                             Text("\(mcp.env.count) ENV")
@@ -2561,16 +2574,29 @@ public struct SettingsView: View {
                                             .foregroundColor(.secondary.opacity(0.8))
                                             .lineLimit(1)
                                     }
+
+                                    if let err = report?.error, !err.isEmpty {
+                                        Text(err)
+                                            .font(.system(size: 10.5))
+                                            .foregroundColor(.red.opacity(0.85))
+                                            .lineLimit(3)
+                                    } else if let tools = report?.tools, !tools.isEmpty {
+                                        Text("Tools: \(tools.prefix(8).joined(separator: ", "))\(tools.count > 8 ? "…" : "")")
+                                            .font(.system(size: 10.5))
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(2)
+                                    }
                                 }
 
                                 Spacer()
 
                                 HStack(spacing: 8) {
-                                    Button("Test Ping") {
-                                        appState.showToast("MCP '\(mcp.name)' ready")
+                                    Button(mcpStatusBusy ? "…" : "Test") {
+                                        testMcpServer(mcp)
                                     }
                                     .buttonStyle(.bordered)
                                     .controlSize(.small)
+                                    .disabled(mcpStatusBusy || !mcp.isEnabled)
 
                                     Button("Configure") {
                                         selectedMcpForEdit = mcp
@@ -2585,6 +2611,7 @@ public struct SettingsView: View {
                                             var updated = mcp
                                             updated.isEnabled = val
                                             appState.saveMcpServer(updated)
+                                            refreshMcpStatus(probe: false)
                                         }
                                     ))
                                     .toggleStyle(.switch)
@@ -2592,6 +2619,7 @@ public struct SettingsView: View {
 
                                     Button {
                                         appState.deleteMcpServer(mcp)
+                                        refreshMcpStatus(probe: false)
                                     } label: {
                                         Image(systemName: "trash")
                                             .foregroundColor(.red.opacity(0.8))
@@ -2610,6 +2638,9 @@ public struct SettingsView: View {
                         }
                     }
                 }
+            }
+            .task {
+                refreshMcpStatus(probe: false)
             }
         }
         .sheet(isPresented: $showingAddSkill) {
@@ -2667,6 +2698,69 @@ public struct SettingsView: View {
     }
 
     // MARK: - Helpers
+    private func mcpStatusBadge(for mcp: MCPServerConfig, report: MCPServerReport?) -> some View {
+        let label: String
+        let color: Color
+        if !mcp.isEnabled {
+            label = "off"
+            color = .secondary
+        } else if let report, report.connected {
+            label = "✓ \(report.toolCount) tools"
+            color = .green
+        } else if let report, report.error != nil {
+            label = "error"
+            color = .red
+        } else if report?.status == .connecting {
+            label = "connecting"
+            color = .orange
+        } else {
+            label = "idle"
+            color = .secondary
+        }
+        return Text(label)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundColor(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1.5)
+            .background(color.opacity(0.12))
+            .cornerRadius(4)
+    }
+
+    private func refreshMcpStatus(probe: Bool) {
+        mcpStatusBusy = true
+        Task { @MainActor in
+            let reports = await MCPClientManager.shared.mcpStatusReports(probe: probe)
+            mcpStatusReports = reports
+            mcpStatusBusy = false
+            if probe {
+                let connected = reports.filter(\.connected).count
+                let errors = reports.filter { $0.error != nil }.count
+                appState.showToast("MCP status: \(connected) connected, \(errors) errors")
+            }
+        }
+    }
+
+    private func testMcpServer(_ mcp: MCPServerConfig) {
+        guard mcp.isEnabled else {
+            appState.showToast("Enable '\(mcp.name)' before testing")
+            return
+        }
+        mcpStatusBusy = true
+        Task { @MainActor in
+            do {
+                let tools = try await MCPClientManager.shared.startServer(config: mcp)
+                let reports = await MCPClientManager.shared.mcpStatusReports(probe: false)
+                mcpStatusReports = reports
+                appState.showToast("MCP '\(mcp.name)' OK — \(tools.count) tools")
+            } catch {
+                let reports = await MCPClientManager.shared.mcpStatusReports(probe: false)
+                mcpStatusReports = reports
+                appState.showToast("MCP '\(mcp.name)' failed: \(error.localizedDescription)")
+            }
+            mcpStatusBusy = false
+        }
+    }
+
     private func tabTitle(for tab: String) -> String {
         switch tab {
         case "general": return "General Settings"

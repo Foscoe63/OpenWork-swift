@@ -85,19 +85,31 @@ public final class AppState: ObservableObject {
     public static let shared = AppState()
 
     // MARK: - Navigation & Layout
-    @Published public var navigationDestination: NavigationDestination = .chat
-    @Published public var isInspectorOpen: Bool = true
-    @Published public var inspectorTab: InspectorTab = .subagents
-    @Published public var settingsTab: String = "general"
+    @Published public var navigationDestination: NavigationDestination = WindowLayoutStore.navigationDestination {
+        didSet { WindowLayoutStore.navigationDestination = navigationDestination }
+    }
+    @Published public var isInspectorOpen: Bool = WindowLayoutStore.isInspectorOpen {
+        didSet { WindowLayoutStore.isInspectorOpen = isInspectorOpen }
+    }
+    @Published public var inspectorTab: InspectorTab = WindowLayoutStore.inspectorTab {
+        didSet { WindowLayoutStore.inspectorTab = inspectorTab }
+    }
+    @Published public var settingsTab: String = WindowLayoutStore.settingsTab {
+        didSet { WindowLayoutStore.settingsTab = settingsTab }
+    }
     @Published public var searchSessionText: String = ""
     @Published public var isSearchDialogOpen: Bool = false
     @Published public var toastMessage: String? = nil
 
     // MARK: - Core Entities
     @Published public var workspaces: [Workspace] = []
-    @Published public var activeWorkspaceId: String = "default-workspace"
+    @Published public var activeWorkspaceId: String = "default-workspace" {
+        didSet { WindowLayoutStore.workspaceId = activeWorkspaceId }
+    }
     @Published public var sessions: [Session] = []
-    @Published public var currentSessionId: String? = nil
+    @Published public var currentSessionId: String? = nil {
+        didSet { WindowLayoutStore.sessionId = currentSessionId }
+    }
     @Published public var agents: [Agent] = []
     @Published public var providers: [ModelProvider] = []
     @Published public var tools: [Tool] = []
@@ -178,8 +190,11 @@ public final class AppState: ObservableObject {
         self.watchItems = persistence.loadWatchItems()
         self.artifacts = persistence.loadArtifacts()
 
-        // Hydrate active workspace from settings
-        if workspaces.contains(where: { $0.id == settings.defaultWorkspaceId }) {
+        // Hydrate active workspace from settings / last-used layout
+        if let savedWs = WindowLayoutStore.workspaceId,
+           workspaces.contains(where: { $0.id == savedWs }) {
+            self.activeWorkspaceId = savedWs
+        } else if workspaces.contains(where: { $0.id == settings.defaultWorkspaceId }) {
             self.activeWorkspaceId = settings.defaultWorkspaceId
         } else if let firstWs = workspaces.first {
             self.activeWorkspaceId = firstWs.id
@@ -197,15 +212,28 @@ public final class AppState: ObservableObject {
         // Ensure workspace folder exists
         ensureWorkspaceFolderExists(for: currentWorkspace)
 
-        // Select initial session matching active workspace if available
+        // Select last session when possible; otherwise first for active workspace
         let activeWsSessions = sessions.filter { $0.workspaceId == activeWorkspaceId && !$0.isArchived }
-        if let first = activeWsSessions.first ?? sessions.first {
+        let restoredSession: Session?
+        if let savedSessionId = WindowLayoutStore.sessionId,
+           let match = sessions.first(where: { $0.id == savedSessionId && !$0.isArchived }) {
+            restoredSession = match
+            if workspaces.contains(where: { $0.id == match.workspaceId }) {
+                self.activeWorkspaceId = match.workspaceId
+            }
+        } else {
+            restoredSession = activeWsSessions.first ?? sessions.first
+        }
+
+        if let first = restoredSession {
             self.currentSessionId = first.id
             self.selectedAgentId = first.agentId
             self.selectedProviderId = first.providerId.isEmpty ? settings.defaultProviderId : first.providerId
             self.selectedModelId = first.modelId.isEmpty ? settings.defaultModelId : first.modelId
             self.interAgentMessages = first.interAgentMessages
             self.activeSubAgentTasks = first.activeSubAgentTasks
+            WindowLayoutStore.sessionId = first.id
+            WindowLayoutStore.workspaceId = activeWorkspaceId
         } else {
             self.selectedProviderId = settings.defaultProviderId
             self.selectedModelId = settings.defaultModelId

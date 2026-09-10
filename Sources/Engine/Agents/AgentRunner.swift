@@ -25,8 +25,8 @@ public final class AgentStreamAccumulator {
         }
         if !chunk.deltaText.isEmpty {
             fullText += chunk.deltaText
-            message.content = fullText
-            
+            publishVisibleContent()
+
             // Repetition / degenerative loop check on incoming stream (respects user settings)
             if self.isLoopBreakerEnabled && checkRepetitionLoop(in: fullText) {
                 isLoopDetected = true
@@ -140,12 +140,14 @@ public final class AgentStreamAccumulator {
 
     public func appendContent(_ text: String) {
         fullText += text
-        message.content = fullText
+        publishVisibleContent()
         onUpdate(message)
     }
 
     public func appendNotice(_ notice: String) {
         guard !notice.isEmpty else { return }
+        // Avoid stacking identical status chips.
+        if message.notices.last == notice { return }
         message.notices.append(notice)
         onUpdate(message)
     }
@@ -154,11 +156,12 @@ public final class AgentStreamAccumulator {
     public func reconcileFromBridge(text: String, reasoning: String, promptTokens: Int, completionTokens: Int) {
         if text.count > fullText.count {
             fullText = text
-            message.content = fullText
+            publishVisibleContent()
         }
         if reasoning.count > fullReasoning.count {
             fullReasoning = reasoning
             message.reasoning = fullReasoning
+            message.thinkingTimeMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
         }
         if promptTokens > 0 {
             message.promptTokens = promptTokens
@@ -175,7 +178,7 @@ public final class AgentStreamAccumulator {
         message.isStreaming = false
         if !text.isEmpty {
             fullText += (fullText.isEmpty ? "" : "\n\n") + text
-            message.content = fullText
+            publishVisibleContent()
         }
         onUpdate(message)
     }
@@ -183,55 +186,227 @@ public final class AgentStreamAccumulator {
     public func handleError(_ error: Error) {
         message.isStreaming = false
         message.isError = true
-        message.content = fullText.isEmpty ? "Error: \(error.localizedDescription)" : fullText
+        publishVisibleContent()
+        if message.content.isEmpty {
+            message.content = "Error: \(error.localizedDescription)"
+        }
         onUpdate(message)
     }
 
+    /// Split leaked model thinking out of the visible bubble; keep raw `fullText` for tool parsing.
+    private func publishVisibleContent() {
+        let split = AssistantContentSanitizer.splitThinking(from: fullText)
+        if !split.thinking.isEmpty {
+            if fullReasoning.isEmpty {
+                fullReasoning = split.thinking
+            } else if !fullReasoning.contains(split.thinking) && !split.thinking.contains(fullReasoning) {
+                fullReasoning += (fullReasoning.hasSuffix("\n") ? "" : "\n") + split.thinking
+            } else if split.thinking.count > fullReasoning.count {
+                fullReasoning = split.thinking
+            }
+            message.reasoning = fullReasoning
+            message.thinkingTimeMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        }
+        message.content = AssistantContentSanitizer.sanitizeVisible(split.visible)
+    }
+
     public func cleanToolCallSyntax(from rawText: String) -> String {
-        var cleaned = rawText
-        
+        let split = AssistantContentSanitizer.splitThinking(from: rawText)
+        return AssistantContentSanitizer.sanitizeVisible(split.visible)
+    }
+
+    public func finalize() {
+        message.isStreaming = false
+        publishVisibleContent()
+        // Drop routine MCP status chips once the answer is on screen.
+        message.notices.removeAll { notice in
+            let n = notice.lowercased()
+            return n.contains("listing configured mcp")
+                || n.contains("mcp ready")
+                || n.contains("warming mcp")
+                || n.contains("connecting ")
+                || n.hasPrefix("connecting")
+        }
+        onUpdate(message)
+    }
+
+    /// When the model narrates then emits tools, hide that preamble in the bubble (keep raw text for parsing).
+    public func hideTurnNarration(beforeLength: Int) {
+        let delta = String(fullText.dropFirst(beforeLength))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !delta.isEmpty else {
+            publishVisibleContent()
+            onUpdate(message)
+            return
+        }
+        let split = AssistantContentSanitizer.splitThinking(from: delta)
+        let narrate = AssistantContentSanitizer.sanitizeVisible(split.visible)
+        let think = [split.thinking, narrate].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        if !think.isEmpty {
+            if fullReasoning.isEmpty {
+                fullReasoning = think
+            } else if !fullReasoning.contains(think) {
+                fullReasoning += "\n\n" + think
+            }
+            message.reasoning = fullReasoning
+            message.thinkingTimeMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        }
+        // Show only content from before this turn until the final answer lands.
+        let prior = String(fullText.prefix(beforeLength))
+        let priorSplit = AssistantContentSanitizer.splitThinking(from: prior)
+        message.content = AssistantContentSanitizer.sanitizeVisible(priorSplit.visible)
+        onUpdate(message)
+    }
+
+    /// Sanitized text suitable for feeding back as an intermediate assistant message.
+    public var sanitizedFullText: String {
+        let split = AssistantContentSanitizer.splitThinking(from: fullText)
+        return AssistantContentSanitizer.sanitizeVisible(split.visible)
+    }
+}
+
+/// Strips leaked chain-of-thought and tool-call markup from user-visible assistant text.
+enum AssistantContentSanitizer {
+    static func splitThinking(from raw: String) -> (visible: String, thinking: String) {
+        var text = raw
+        var thinkingParts: [String] = []
+
+        func extractBlocks(pattern: String) {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return }
+            let ns = text as NSString
+            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: ns.length))
+            for match in matches.reversed() {
+                guard match.numberOfRanges >= 2,
+                      let bodyRange = Range(match.range(at: 1), in: text) else { continue }
+                let body = String(text[bodyRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !body.isEmpty { thinkingParts.insert(body, at: 0) }
+                if let full = Range(match.range(at: 0), in: text) {
+                    text.removeSubrange(full)
+                }
+            }
+        }
+
+        extractBlocks(pattern: #"<think>\s*([\s\S]*?)\s*</think>"#)
+        extractBlocks(pattern: #"<thinking>\s*([\s\S]*?)\s*</thinking>"#)
+        extractBlocks(pattern: #"<redacted_reasoning>\s*([\s\S]*?)\s*</redacted_reasoning>"#)
+
+        // Qwen / Ornith often emit preamble then a bare </think> with no opener.
+        let closeTags = ["</think>", "</thinking>", "</redacted_reasoning>"]
+        for tag in closeTags {
+            if let range = text.range(of: tag, options: .backwards) {
+                let before = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let after = String(text[range.upperBound...])
+                if !before.isEmpty { thinkingParts.append(before) }
+                text = after
+                break
+            }
+        }
+
+        // Incomplete streaming think block — hide until closed.
+        for open in ["<think>", "<thinking>", "<redacted_reasoning>"] {
+            if let openRange = text.range(of: open, options: .backwards) {
+                let before = String(text[..<openRange.lowerBound])
+                let inside = String(text[openRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !inside.isEmpty { thinkingParts.append(inside) }
+                text = before
+                break
+            }
+        }
+
+        let thinking = thinkingParts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+        return (text, thinking)
+    }
+
+    static func sanitizeVisible(_ raw: String) -> String {
+        var cleaned = raw
+
         // Remove TOOL_CALL = { ... }
         let assignPattern = "TOOL_CALL\\s*=\\s*\\{[\\s\\S]*?\\}"
         if let regex = try? NSRegularExpression(pattern: assignPattern, options: []) {
             let range = NSRange(location: 0, length: (cleaned as NSString).length)
             cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
         }
-        
+
         // Remove ```tool_call ... ``` or ```json with tool definitions
         let codeBlockPattern = "```(?:tool_call|json)?\\s*(?:\\r?\\n)?\\s*\\{\\s*\"(?:tool|name|mcp|server)\"[\\s\\S]*?\\}\\s*(?:\\r?\\n)?```"
         if let regex = try? NSRegularExpression(pattern: codeBlockPattern, options: []) {
             let range = NSRange(location: 0, length: (cleaned as NSString).length)
             cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
         }
-        
+
         // Remove XML tool calls <tool_call>...</tool_call>
         let xmlPattern = "<tool_call>[\\s\\S]*?(?:</tool_call>|$)"
         if let regex = try? NSRegularExpression(pattern: xmlPattern, options: []) {
             let range = NSRange(location: 0, length: (cleaned as NSString).length)
             cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
         }
-        
+
         // Remove raw naked tool JSON if it was the entirety or beginning of a line
         let nakedPattern = "(?m)^\\s*\\{\\s*\"(?:tool|name|mcp|server)\"\\s*:[\\s\\S]*?\\}\\s*$"
         if let regex = try? NSRegularExpression(pattern: nakedPattern, options: []) {
             let range = NSRange(location: 0, length: (cleaned as NSString).length)
             cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
         }
-        
-        // Remove conversational tool call intent filler lines that end abruptly (e.g. "Let me emit tool calls.", "---")
+
+        // Remove leftover think tag crumbs and filler intent lines.
+        let crumbPattern = "(?i)</?think>|</?thinking>|</?redacted_reasoning>"
+        if let regex = try? NSRegularExpression(pattern: crumbPattern, options: []) {
+            let range = NSRange(location: 0, length: (cleaned as NSString).length)
+            cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
+        }
+
         let fillerLinesPattern = "(?m)^\\s*(?:Let me emit tool calls\\.?|Let me call the tool\\.?|---\\s*)$\\s*"
         if let regex = try? NSRegularExpression(pattern: fillerLinesPattern, options: []) {
             let range = NSRange(location: 0, length: (cleaned as NSString).length)
             cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
         }
 
+        cleaned = dedupeRepeatedParagraphs(cleaned)
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    public func finalize() {
-        message.isStreaming = false
-        message.content = cleanToolCallSyntax(from: fullText)
-        onUpdate(message)
+    /// Collapses consecutive near-duplicate paragraphs (common with leaked monologue).
+    private static func dedupeRepeatedParagraphs(_ text: String) -> String {
+        let parts = text.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard parts.count > 1 else { return text }
+
+        var out: [String] = []
+        for part in parts {
+            if let last = out.last, paragraphsNearlyEqual(last, part) {
+                if part.count > last.count { out[out.count - 1] = part }
+                continue
+            }
+            out.append(part)
+        }
+        return out.joined(separator: "\n\n")
+    }
+
+    private static func paragraphsNearlyEqual(_ a: String, _ b: String) -> Bool {
+        let na = normalize(a)
+        let nb = normalize(b)
+        if na == nb { return true }
+        if na.count >= 40, nb.count >= 40 {
+            if na.hasPrefix(nb) || nb.hasPrefix(na) { return true }
+            let wa = Set(na.split(separator: " ").map(String.init))
+            let wb = Set(nb.split(separator: " ").map(String.init))
+            guard wa.count >= 8, wb.count >= 8 else { return false }
+            let inter = Double(wa.intersection(wb).count)
+            let union = Double(wa.union(wb).count)
+            return union > 0 && inter / union >= 0.9
+        }
+        return false
+    }
+
+    private static func normalize(_ s: String) -> String {
+        s.lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 }
 
@@ -460,6 +635,12 @@ public final class AgentRunner {
             initialMessage: assistantMsg,
             onUpdate: onMessageUpdated
         )
+        defer {
+            // Never leave a bubble stuck on isStreaming after cancel / MCP hang recovery.
+            if accumulator.message.isStreaming {
+                accumulator.finalize()
+            }
+        }
 
         let loadedSettings = PersistenceManager.shared.loadSettings()
         let maxIterations = max(1, loadedSettings.maxAutonomousIterations)
@@ -468,76 +649,101 @@ public final class AgentRunner {
         var availableTools = PersistenceManager.shared.loadTools().filter { $0.isEnabled }
         _ = ToolSchemaCatalog.ensureParityTools(in: &availableTools)
 
-        // Radiant parity: discover real MCP tools with schemas and inject as first-class
-        // namespaced tools (`mcp__{serverId}__{toolName}`) — not a single vague `*_call` stub.
-        // Prefer MacUse (etc.) when the prompt asks for it so we do not hang the empty
-        // "Generating response…" bubble waiting on every unrelated `npx` MCP cold start.
+        // Casual / inventory turns must not wait on npx cold starts.
+        let casualChat = MCPClientManager.isCasualChatPrompt(lastPrompt)
+        let inventoryPrompt = MCPClientManager.isMCPInventoryPrompt(lastPrompt)
         let preferMCP = MCPClientManager.preferredServerIds(
             forPrompt: lastPrompt,
             servers: loadedSettings.mcpServers
         )
-        if !loadedSettings.mcpServers.filter(\.isEnabled).isEmpty {
-            if preferMCP.isEmpty {
-                accumulator.appendNotice("Connecting MCP servers…")
-            } else {
-                let names = loadedSettings.mcpServers
-                    .filter { preferMCP.contains($0.id) }
-                    .map(\.name)
-                    .joined(separator: ", ")
-                accumulator.appendNotice("Connecting \(names.isEmpty ? "required MCP" : names)…")
-            }
+        let mcpTools: [Tool]
+        if casualChat || inventoryPrompt {
+            mcpTools = await MCPClientManager.shared.cachedMcpToolDefs()
+            await MCPClientManager.shared.warmAllInBackground()
+        } else if !preferMCP.isEmpty {
+            // Brief wait only for the servers the prompt actually needs — no status chip spam.
+            mcpTools = await MCPClientManager.shared.mcpToolDefs(
+                preferServerIds: preferMCP,
+                perServerTimeout: .seconds(8),
+                overallTimeout: .seconds(6),
+                blockForWarm: true
+            )
+        } else {
+            // Cache-first: never stall the bubble on every enabled npx server.
+            mcpTools = await MCPClientManager.shared.mcpToolDefs(
+                preferServerIds: preferMCP,
+                perServerTimeout: .seconds(8),
+                overallTimeout: .seconds(6),
+                blockForWarm: false
+            )
         }
-        let mcpTools = await MCPClientManager.shared.mcpToolDefs(
-            preferServerIds: preferMCP,
-            perServerTimeout: .seconds(12)
-        )
+
         var mcpPromptSummary = ""
-        if !mcpTools.isEmpty {
-            accumulator.appendNotice("MCP ready (\(mcpTools.count) tools).")
+        if inventoryPrompt {
+            // Inventory: compact status only — no tool dump, no tool calling.
+            let reports = await MCPClientManager.shared.mcpStatusReports(probe: false)
+            let liveLines = reports.map { r -> String in
+                let state: String
+                if !r.enabled { state = "disabled" }
+                else if r.connected { state = "connected (\(r.toolCount) tools)" }
+                else if let err = r.error { state = "error: \(err)" }
+                else { state = "not connected yet" }
+                return "| \(r.name) | `\(r.id)` | \(r.transport) | \(state) |"
+            }
+            mcpPromptSummary = """
+
+            ### MCP inventory (answer from this only)
+            | Server | ID | Transport | Status |
+            |--------|----|-----------|--------|
+            \(liveLines.isEmpty ? "| _(none configured)_ | | | |" : liveLines.joined(separator: "\n"))
+
+            INVENTORY MODE: Reply with one short markdown table of the servers above. \
+            Do not call tools. Do not narrate your plan. Do not invent servers.
+            """
+            availableTools = []
+        } else if !mcpTools.isEmpty {
             for t in mcpTools {
                 if !availableTools.contains(where: { $0.id == t.id || $0.name == t.name }) {
                     availableTools.append(t)
                 }
             }
+            // Compact listing — avoid dumping every tool schema twice into the prompt.
             let byServer = Dictionary(grouping: mcpTools) { tool -> String in
                 MCPNamespacedTool.parse(tool.name)?.serverId ?? "mcp"
             }
             let lines = byServer.map { serverId, tools -> String in
                 let serverName = loadedSettings.mcpServers.first(where: { $0.id == serverId })?.name ?? serverId
-                let names = tools.map(\.name).sorted().joined(separator: ", ")
-                return "- **\(serverName)**: \(names)"
+                let leafNames = tools.compactMap { MCPNamespacedTool.parse($0.name)?.toolName ?? $0.name }
+                    .sorted()
+                let shown = leafNames.prefix(10).joined(separator: ", ")
+                let more = leafNames.count > 10 ? " (+\(leafNames.count - 10) more)" : ""
+                return "- **\(serverName)** (`\(serverId)`): \(shown)\(more)"
             }.sorted()
             mcpPromptSummary = """
 
-            ### Live Model Context Protocol (MCP) tools (call these by exact name):
+            ### MCP tools (\(mcpTools.count) live) — call as `mcp__SERVER_ID__TOOL_NAME`
             \(lines.joined(separator: "\n"))
-
-            Prefer native function/tool calling with these exact names.
-            For MacUse mail/calendar: first call `…__get_tool_definitions` with `{"names":["*"]}`, then `…__call_tool_by_name`.
-            Markdown fallback (only if native tools are unavailable):
-            ```tool_call
-            {"tool": "mcp__SERVER_ID__TOOL_NAME", "parameters": {...}}
-            ```
+            Prefer native tool calls. Do not narrate before calling. For MacUse: `get_tool_definitions` then `call_tool_by_name`.
             """
-        } else if !loadedSettings.mcpServers.filter(\.isEnabled).isEmpty {
-            accumulator.appendNotice("MCP discovery returned no tools (timed out or failed).")
+        } else if !casualChat && !loadedSettings.mcpServers.filter(\.isEnabled).isEmpty {
             mcpPromptSummary = """
 
-            ### MCP servers are enabled but tool discovery returned no tools.
-            Fix or restart the MCP servers; do not invent stub tool names.
+            ### MCP
+            Enabled servers are still warming. Use built-in tools; do not invent MCP tool names.
             """
         }
 
-        if planModeActive {
+        if planModeActive && !inventoryPrompt {
             availableTools = Self.filterToolsForPlanMode(availableTools)
         }
 
         let enabledSkills = PersistenceManager.shared.loadSkills().filter(\.isEnabled)
         var skillsSection = ""
-        if !enabledSkills.isEmpty {
+        // Skip skills dump on inventory — it only encourages digression.
+        if !enabledSkills.isEmpty && !inventoryPrompt {
             let skillLines = enabledSkills.map { skill -> String in
                 let body = skill.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                let preview = body.isEmpty ? skill.description : body
+                let preview = body.isEmpty ? skill.description : String(body.prefix(160))
                 return "- **\(skill.name)**: \(preview)"
             }
             skillsSection = """
@@ -565,45 +771,38 @@ public final class AgentRunner {
         var macUseMessageJSON = ""
 
         // System prompt with modern tool-calling instructions (supports both native API tools & markdown ReAct schemas)
-        let systemPromptWithTools = """
-        \(agent.systemPrompt)
+        let systemPromptWithTools: String
+        if inventoryPrompt {
+            systemPromptWithTools = """
+            \(agent.systemPrompt)
+            \(mcpPromptSummary)
 
-        You are an advanced, fully autonomous coding, systems, and research agent on par with Claude Code and Cursor.
-        You have direct access to execution tools (use native function/tool calling when the runtime provides it):
-        - `file_read`: {"path": "..."}
-        - `file_write`: {"path": "...", "content": "..."}
-        - `edit_file`: {"path": "...", "old_string": "...", "new_string": "..."}
-        - `file_list`: {"path": "..."}
-        - `file_copy`: {"source": "...", "destination": "..."}
-        - `file_move`: {"source": "...", "destination": "..."}
-        - `file_delete`: {"path": "..."}
-        - `terminal_command` / `run_command`: {"command": "...", "cwd": "..."}
-        - `fetch_url`: {"url": "..."}
-        - `web_search`: {"query": "..."}
-        - `ask_user`: {"question": "...", "options": ["..."]}
-        - `exit_plan_mode`: {"summary": "..."}
-        - `todo_write`: {"items": [{"content": "...", "status": "pending"}]}
-        - `calculator`: {"expression": "..."}
-        - `get_current_date`: {}
-        - `document_extract`: {"path": "..."}
-        - `gmail_list`: {"query": "is:unread newer_than:1d", "max_results": 10}
-        - `gmail_search`: {"query": "from:example@gmail.com"}
-        - `google_calendar_list`: {"days": 7, "max_results": 15}
-        - `google_calendar_upcoming`: {"days": 7}
-        \(mcpPromptSummary)
-        \(skillsSection)
+            Be concise. No tool calls. No planning narration. Answer with one short table only.
+            """
+        } else {
+            systemPromptWithTools = """
+            \(agent.systemPrompt)
 
-        CRITICAL EXECUTION PROTOCOL:
-        1. When the user asks you to perform actions, DO NOT narrate ("I will check…" / "Let me try…"). IMMEDIATELY call the tool.
-        2. Prefer native tool/function calls. If you must use text, emit:
-        ```tool_call
-        {"tool": "file_list", "parameters": {"path": "."}}
-        ```
-        3. If you need multiple actions, emit multiple tool calls, then continue after results until the task is done.
-        4. Once finished, give a clear concise report of what you found or changed.
-        5. MacUse mail: after `get_tool_definitions`, you MUST call `call_tool_by_name` with `mail_list_accounts` then `mail_search_messages` before writing a summary. Never stop after definitions alone.
-        \(planModeActive ? "\n6. PLAN MODE is active: do not mutate files or run shell commands. Propose a plan, then call `exit_plan_mode` after the user approves." : "")
-        """
+            You are an advanced, fully autonomous coding, systems, and research agent.
+            Built-in tools (prefer native function/tool calling):
+            file_read, file_write, edit_file, file_list, file_copy, file_move, file_delete,
+            terminal_command/run_command, fetch_url, web_search, ask_user, exit_plan_mode,
+            todo_write, calculator, get_current_date, document_extract,
+            gmail_list, gmail_search, google_calendar_list, google_calendar_upcoming.
+            \(mcpPromptSummary)
+            \(skillsSection)
+
+            CRITICAL:
+            1. Do not narrate ("I will check…" / "Let me…"). Call the tool immediately, then answer.
+            2. Prefer native tool calls. Markdown fallback only if needed:
+            ```tool_call
+            {"tool": "file_list", "parameters": {"path": "."}}
+            ```
+            3. After tools finish, give one clear concise report — no repeated self-talk.
+            4. MacUse mail: after `get_tool_definitions`, call `mail_list_accounts` then `mail_search_messages` before summarizing.
+            \(planModeActive ? "\n5. PLAN MODE: do not mutate files or run shell. Propose a plan, then `exit_plan_mode` after approval." : "")
+            """
+        }
 
         while iteration < maxIterations {
             if Task.isCancelled {
@@ -687,6 +886,12 @@ public final class AgentRunner {
                     text: "Turn token budget exceeded (\(turnPromptTokens + turnCompletionTokens) > \(maxTurnTokens)). Press Continue to resume."
                 )
                 halted = true
+                break
+            }
+
+            // Inventory questions should be one-shot answers — never enter a tool loop.
+            if inventoryPrompt {
+                finishedNaturally = true
                 break
             }
 
@@ -828,6 +1033,10 @@ public final class AgentRunner {
             // Execute detected tool calls and feed results back into the conversation.
             // Radiant keeps calling tools until the model stops; local models often stop
             // early, so we also queue MacUse `actions[]` follow-ups in-process (mail search).
+            if !pendingCallsToExecute.isEmpty {
+                // Hide "Let me check…" preamble once tools are underway.
+                accumulator.hideTurnNarration(beforeLength: turnTextBefore.count)
+            }
             var stopToolLoop = false
             var toolQueue = pendingCallsToExecute
             var queueIndex = 0
@@ -1163,7 +1372,7 @@ public final class AgentRunner {
             let intermediateAssistantMsg = ChatMessage(
                 sessionId: session.id,
                 role: .assistant,
-                content: accumulator.fullText
+                content: accumulator.sanitizedFullText
             )
             workingMessages.append(intermediateAssistantMsg)
 

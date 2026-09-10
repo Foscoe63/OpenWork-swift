@@ -28,11 +28,10 @@ public struct ChatView: View {
                         .padding(.vertical, 12)
                     }
                     .onMessageCountChanged(count: session.messages.count) {
-                        if let last = session.messages.last {
-                            withAnimation {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
-                        }
+                        scrollChatToLatest(proxy: proxy, session: session)
+                    }
+                    .onChange(of: pendingApprovalScrollKey) { _ in
+                        scrollChatToLatest(proxy: proxy, session: session)
                     }
                 }
             } else {
@@ -43,6 +42,30 @@ public struct ChatView: View {
             ComposerView(appState: appState)
         }
         .background(ThemeColors.bg(for: appState.settings.theme))
+    }
+
+    /// Changes when the latest message gains/loses a pending Approve/Reject — scroll so it stays on screen.
+    private var pendingApprovalScrollKey: String {
+        guard let last = appState.currentSession?.messages.last else { return "" }
+        let pending = last.toolCalls
+            .filter { $0.status == .waitingApproval || $0.status == .pendingApproval }
+            .map(\.id)
+            .sorted()
+        return pending.joined(separator: ",")
+    }
+
+    private func scrollChatToLatest(proxy: ScrollViewProxy, session: Session) {
+        guard let last = session.messages.last else { return }
+        let hasPending = last.toolCalls.contains {
+            $0.status == .waitingApproval || $0.status == .pendingApproval
+        }
+        withAnimation {
+            if hasPending {
+                proxy.scrollTo("approval-\(last.id)", anchor: .bottom)
+            } else {
+                proxy.scrollTo(last.id, anchor: .bottom)
+            }
+        }
     }
 
     // MARK: - Header Bar

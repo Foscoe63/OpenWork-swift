@@ -29,7 +29,7 @@ public struct SideInspectorView: View {
                 terminalView
             }
         }
-        .frame(minWidth: 260, idealWidth: 320, maxWidth: 650)
+        .frame(minWidth: WindowLayoutStore.minInspectorWidth, maxWidth: WindowLayoutStore.maxInspectorWidth)
         .background(ThemeColors.sidebarBg(for: appState.settings.theme))
     }
 

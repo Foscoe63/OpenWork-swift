@@ -15,6 +15,7 @@
 		10B6A36E00FC951A5FEB3067 /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = 059BA2124DAE7BB7B31C216A /* MLXHuggingFace */; };
 		120EF5094BCB753164CF62F7 /* AgentCommunicationHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = C193C2751861F29065057037 /* AgentCommunicationHub.swift */; };
 		1680D6148F4D50FB2B243C46 /* SubAgentTreeVisualizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDF21317A739E5A2F7C43F5D /* SubAgentTreeVisualizer.swift */; };
+		18825852F35DAE8978FF09E6 /* WindowLayoutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BDAC21F5ADEB39750E761B /* WindowLayoutStore.swift */; };
 		1F2482664234681950F90E50 /* Tool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B776D13E33F6142443CF06B /* Tool.swift */; };
 		20670E9B3686DFE8DF26BE20 /* DocumentExtractionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = D123165576004A20F3BBB7DB /* DocumentExtractionEngine.swift */; };
 		25D776A14DF7254CA04F0655 /* LocalWorkspaceRAGEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1DDB27E6C629EDA0325B3AF /* LocalWorkspaceRAGEngine.swift */; };
@@ -149,6 +150,7 @@
 		86806C853FD895F086D5C09E /* StorageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageService.swift; sourceTree = "<group>"; };
 		8B866A6FA66F0F691AFE3D03 /* AppExtensionPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppExtensionPlugin.swift; sourceTree = "<group>"; };
 		8F98A8BD66F37E4C8A5DABBD /* ContextCompactor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextCompactor.swift; sourceTree = "<group>"; };
+		90BDAC21F5ADEB39750E761B /* WindowLayoutStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowLayoutStore.swift; sourceTree = "<group>"; };
 		9198D3660374674EB63D1B9B /* MemoryItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryItem.swift; sourceTree = "<group>"; };
 		961694809232071359E5A9D8 /* MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryView.swift; sourceTree = "<group>"; };
 		9DFE1EE15D83072238EAD2E4 /* InterAgentCommLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterAgentCommLogView.swift; sourceTree = "<group>"; };
@@ -402,6 +404,7 @@
 				15661ED260AC4F0891B83D4F /* KeychainManager.swift */,
 				25661E20D282DDBBA1D85437 /* PersistenceManager.swift */,
 				86806C853FD895F086D5C09E /* StorageService.swift */,
+				90BDAC21F5ADEB39750E761B /* WindowLayoutStore.swift */,
 			);
 			path = Storage;
 			sourceTree = "<group>";
@@ -753,6 +756,7 @@
 				B5ACC10445B7C5CEE56804AD /* WatchFolderEngine.swift in Sources */,
 				E815F55EB604B23C97687FD1 /* WatchFoldersView.swift in Sources */,
 				831D1338D040051952544CD0 /* WatchItem.swift in Sources */,
+				18825852F35DAE8978FF09E6 /* WindowLayoutStore.swift in Sources */,
 				68AC781AED345F727667D462 /* Workspace.swift in Sources */,
 				06688165260B1EEAA650DBCF /* WorkspaceSwitcherMenu.swift in Sources */,
 				F6C60563A07D0E8A3756D520 /* WorkspaceTerminalSession.swift in Sources */,
@@ -778,7 +782,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
+				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_SWIFT_FLAGS = "$(inherited) -strict-concurrency=minimal";
 				PRODUCT_BUNDLE_IDENTIFIER = ai.openwork.OpenWorkSwift;
 				SDKROOT = macosx;
@@ -842,6 +848,9 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
+				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
+				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
 				PRODUCT_NAME = OpenWork;
 				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -899,6 +908,9 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
+				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
+				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
+				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
 				PRODUCT_NAME = OpenWork;
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -923,7 +935,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
+				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_SWIFT_FLAGS = "$(inherited) -strict-concurrency=minimal";
 				PRODUCT_BUNDLE_IDENTIFIER = ai.openwork.OpenWorkSwift;
 				SDKROOT = macosx;

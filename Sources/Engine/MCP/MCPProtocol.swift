@@ -324,8 +324,22 @@ public enum MCPToolArgumentDefaults {
 }
 
 // MARK: - Server Health Status
-public enum MCPServerStatus {
-    case notStarted, running, crashed, unreachable
+public enum MCPServerStatus: Sendable, Equatable {
+    case notStarted, connecting, running, crashed, unreachable
+}
+
+/// Radiant-style status row for Settings / agent inventory (connected, error, tool names).
+public struct MCPServerReport: Sendable, Identifiable, Equatable {
+    public var id: String
+    public var name: String
+    public var enabled: Bool
+    public var connected: Bool
+    public var status: MCPServerStatus
+    public var error: String?
+    public var toolCount: Int
+    public var tools: [String]
+    public var transport: String
+    public var detail: String
 }
 
 private enum MCPLaunchError: LocalizedError {
@@ -335,6 +349,44 @@ private enum MCPLaunchError: LocalizedError {
         switch self {
         case .processExited(let message): return message
         }
+    }
+}
+
+/// Resumes a continuation at most once — used so MCP deadlines never wait on hung children.
+private final class OnceResume<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Never>?
+    private var value: T?
+    private var resumed = false
+
+    init(_ continuation: CheckedContinuation<T, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ value: T) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !resumed else { return }
+        resumed = true
+        self.value = value
+        continuation?.resume(returning: value)
+        continuation = nil
+    }
+}
+
+private final class MCPAtomicCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int
+
+    init(_ value: Int) { self.value = value }
+
+    /// Returns the value after decrement.
+    @discardableResult
+    func decrement() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        value -= 1
+        return value
     }
 }
 
@@ -349,7 +401,10 @@ public actor MCPClientManager {
     private var processOutputBuffers: [String: MCPStdioBuffer] = [:]
     private var discoveredTools: [String: [MCPToolDefinition]] = [:]
     private var serverStatus: [String: MCPServerStatus] = [:]
+    private var serverErrors: [String: String] = [:]
     private var sdkSessions: [String: MCPSDKSession] = [:]
+    /// Bumps on each start/stop so a late connect after timeout cannot mark the server running.
+    private var startGenerations: [String: Int] = [:]
     private var requestId: Int = 1
     
     // Request throttling for concurrent execution control
@@ -384,23 +439,126 @@ public actor MCPClientManager {
                 result[server.name] = tools
             } catch {
                 serverStatus[server.id] = .crashed
+                serverErrors[server.id] = error.localizedDescription
                 result[server.name] = []
             }
         }
         return result
     }
 
+    /// Snapshot of already-discovered MCP tools (no process starts). Safe for casual chat turns.
+    public func cachedMcpToolDefs() -> [Tool] {
+        let loadedSettings = PersistenceManager.shared.loadSettings()
+        let enabled = loadedSettings.mcpServers.filter(\.isEnabled)
+        return buildToolModels(from: enabled, order: enabled)
+    }
+
+    /// Warm enabled servers in the background so the next tool turn is faster.
+    public func warmAllInBackground(perServerTimeout: Duration = .seconds(8)) {
+        let loadedSettings = PersistenceManager.shared.loadSettings()
+        let enabled = loadedSettings.mcpServers.filter(\.isEnabled)
+        guard !enabled.isEmpty else { return }
+        Task { await self.warmServers(enabled, perServerTimeout: perServerTimeout) }
+    }
+
+    /// Radiant `mcpStatus` parity — settings UI and “what MCP servers are available?” answers.
+    public func mcpStatusReports(probe: Bool = false, perServerTimeout: Duration = .seconds(8)) async -> [MCPServerReport] {
+        let loadedSettings = PersistenceManager.shared.loadSettings()
+        let servers = loadedSettings.mcpServers
+        if probe {
+            let enabled = servers.filter(\.isEnabled)
+            await raceDeadline(overallTimeout: perServerTimeout) {
+                await self.warmServers(enabled, perServerTimeout: perServerTimeout)
+            }
+        }
+        return servers.map { server in
+            let tools = discoveredTools[server.id] ?? []
+            let status = serverStatus[server.id] ?? .notStarted
+            let err = serverErrors[server.id]
+            let connected = status == .running && err == nil
+            let detail: String
+            if server.transportType == .stdio {
+                detail = "\(server.command) \(server.args.joined(separator: " "))".trimmingCharacters(in: .whitespaces)
+            } else {
+                detail = server.url
+            }
+            return MCPServerReport(
+                id: server.id,
+                name: server.name,
+                enabled: server.isEnabled,
+                connected: connected,
+                status: status,
+                error: err,
+                toolCount: tools.count,
+                tools: tools.map(\.name),
+                transport: server.transportType.displayName,
+                detail: detail
+            )
+        }
+    }
+
+    /// Prompt block listing configured servers (no process spawn). Used for inventory questions.
+    public nonisolated static func configuredServersPromptSummary(servers: [MCPServerConfig]) -> String {
+        guard !servers.isEmpty else {
+            return """
+
+            ### Configured MCP servers
+            None configured. Add servers in Settings → MCP.
+            """
+        }
+        let lines = servers.map { s -> String in
+            let state = s.isEnabled ? "enabled" : "disabled"
+            let endpoint: String
+            if s.transportType == .stdio {
+                endpoint = "`\(s.command) \(s.args.joined(separator: " "))`".trimmingCharacters(in: .whitespaces)
+            } else {
+                endpoint = "`\(s.url)`"
+            }
+            return "- **\(s.name)** (\(s.id)) — \(state), \(s.transportType.displayName): \(endpoint)"
+        }
+        return """
+
+        ### Configured MCP servers
+        \(lines.joined(separator: "\n"))
+        Answer inventory questions from this list. Live tool schemas appear as `mcp__{serverId}__{tool}` once a server connects.
+        """
+    }
+
+    /// True when the user is asking which MCP servers exist / are configured — no connect required.
+    public nonisolated static func isMCPInventoryPrompt(_ prompt: String) -> Bool {
+        let p = prompt.lowercased()
+        let mentionsMCP = p.contains("mcp")
+        guard mentionsMCP else { return false }
+        let inventoryHints = [
+            "available", "configured", "what mcp", "which mcp", "list mcp",
+            "mcp server", "mcp-server", "show mcp", "see what mcp", "check.*mcp"
+        ]
+        if inventoryHints.contains(where: { hint in
+            if hint.contains(".*") {
+                return p.range(of: hint, options: .regularExpression) != nil
+            }
+            return p.contains(hint)
+        }) {
+            return true
+        }
+        // Short “check mcp servers” / “mcp servers?” style prompts.
+        if p.count <= 80, (p.contains("server") || p.contains("servers")),
+           (p.contains("check") || p.contains("list") || p.contains("show") || p.contains("what") || p.contains("see")) {
+            return true
+        }
+        return false
+    }
+
     /// Radiant-style first-class MCP tools for the agent loop:
     /// `mcp__{serverId}__{toolName}` with real JSON schemas from tools/list.
     ///
-    /// - Parameters:
-    ///   - preferServerIds: Warm these first (e.g. MacUse when the user asks about mail).
-    ///     When non-empty, only these servers block the agent; others warm in the background.
-    ///   - perServerTimeout: Hard cap per server so a stuck `npx`/MacUse cold start cannot
-    ///     leave the chat bubble empty and `isStreaming` forever.
+    /// Cache-first and deadline-safe: never waits on hung `client.connect` children
+    /// (structured `TaskGroup` timeouts cannot return while children ignore cancellation).
     public func mcpToolDefs(
         preferServerIds: [String] = [],
-        perServerTimeout: Duration = .seconds(12)
+        perServerTimeout: Duration = .seconds(8),
+        overallTimeout: Duration = .seconds(6),
+        blockForWarm: Bool = false
     ) async -> [Tool] {
         let loadedSettings = PersistenceManager.shared.loadSettings()
         let enabled = loadedSettings.mcpServers.filter { $0.isEnabled }
@@ -414,7 +572,6 @@ public actor MCPClientManager {
         } else {
             let preferSet = Set(preferServerIds)
             let matched = enabled.filter { preferSet.contains($0.id) || preferSet.contains($0.name) }
-            // Fall back to all if preference matched nothing (stale id).
             if matched.isEmpty {
                 preferred = enabled
                 deferred = []
@@ -424,20 +581,71 @@ public actor MCPClientManager {
             }
         }
 
-        await warmServers(preferred, perServerTimeout: perServerTimeout)
-
-        if !deferred.isEmpty {
-            let timeout = perServerTimeout
+        let cached = buildToolModels(from: enabled, order: preferred + deferred)
+        if !blockForWarm {
+            // Radiant-better: never stall the chat bubble on npx cold starts.
             Task {
-                await self.warmServers(deferred, perServerTimeout: timeout)
+                await self.warmServers(preferred, perServerTimeout: perServerTimeout)
+                if !deferred.isEmpty {
+                    let timeout = perServerTimeout
+                    await self.warmServers(deferred, perServerTimeout: timeout)
+                }
             }
+            return cached
         }
 
+        await raceDeadline(overallTimeout: overallTimeout) {
+            await self.warmServers(preferred, perServerTimeout: perServerTimeout)
+            if !deferred.isEmpty {
+                let timeout = perServerTimeout
+                Task { await self.warmServers(deferred, perServerTimeout: timeout) }
+            }
+        }
+        return buildToolModels(from: enabled, order: preferred + deferred)
+    }
+
+    /// Wait until `work` finishes or `overallTimeout` elapses — whichever first.
+    /// Unlike `withTaskGroup`, this does **not** wait for cancelled children to exit.
+    private func raceDeadline(overallTimeout: Duration, work: @escaping @Sendable () async -> Void) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let once = OnceResume(cont)
+            Task {
+                await work()
+                once.resume(())
+            }
+            Task {
+                try? await Task.sleep(for: overallTimeout)
+                once.resume(())
+            }
+        }
+    }
+
+    private func buildToolModels(from enabled: [MCPServerConfig], order: [MCPServerConfig]) -> [Tool] {
         var result: [Tool] = []
-        // Prefer returning tools from preferred servers; include any already-cached others.
-        let order = preferred + deferred
         var seenIds = Set<String>()
-        for server in order where seenIds.insert(server.id).inserted {
+        let sequence = order.isEmpty ? enabled : order
+        for server in sequence where seenIds.insert(server.id).inserted {
+            let defs = discoveredTools[server.id] ?? []
+            for t in defs {
+                let namespaced = MCPNamespacedTool.name(serverId: server.id, toolName: t.name)
+                let schema = t.inputSchemaJson
+                    ?? #"{"type":"object","properties":{}}"#
+                let leaf = t.name.lowercased()
+                let readOnly = Self.isReadOnlyMCPTool(leaf)
+                result.append(Tool(
+                    id: namespaced,
+                    name: namespaced,
+                    displayName: "\(server.name): \(t.name)",
+                    description: "[\(server.name)] \(t.description ?? t.name)",
+                    category: .mcp,
+                    parametersJsonSchema: schema,
+                    isEnabled: true,
+                    requiresApproval: !readOnly
+                ))
+            }
+        }
+        // Include any other enabled servers already cached but not in `order`.
+        for server in enabled where seenIds.insert(server.id).inserted {
             let defs = discoveredTools[server.id] ?? []
             for t in defs {
                 let namespaced = MCPNamespacedTool.name(serverId: server.id, toolName: t.name)
@@ -462,46 +670,78 @@ public actor MCPClientManager {
 
     private func warmServers(_ servers: [MCPServerConfig], perServerTimeout: Duration) async {
         guard !servers.isEmpty else { return }
-        await withTaskGroup(of: Void.self) { group in
+        // Detached per-server races — do not use a parent TaskGroup that waits on hung connects.
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let once = OnceResume(cont)
+            let total = servers.count
+            let remaining = MCPAtomicCounter(total)
+            if total == 0 {
+                once.resume(())
+                return
+            }
             for server in servers {
-                group.addTask {
+                Task {
                     await self.ensureServerReady(server, timeout: perServerTimeout)
+                    if remaining.decrement() == 0 {
+                        once.resume(())
+                    }
                 }
             }
-            for await _ in group {}
+            // Hard ceiling: all per-server budgets in parallel, plus a small grace.
+            Task {
+                try? await Task.sleep(for: perServerTimeout + .milliseconds(500))
+                once.resume(())
+            }
         }
     }
 
-    private func ensureServerReady(_ server: MCPServerConfig, timeout: Duration = .seconds(12)) async {
+    private func ensureServerReady(_ server: MCPServerConfig, timeout: Duration = .seconds(8)) async {
+        if Task.isCancelled { return }
         if case .running = serverStatus[server.id],
            let cached = discoveredTools[server.id], !cached.isEmpty {
             return
         }
-        do {
-            try await withThrowingTaskGroup(of: Bool.self) { group in
-                group.addTask {
+        serverStatus[server.id] = .connecting
+        serverErrors[server.id] = nil
+
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let once = OnceResume(cont)
+            let serverId = server.id
+            let name = server.name
+
+            Task {
+                do {
                     _ = try await self.startServer(config: server)
-                    return true
+                } catch {
+                    await self.noteStartFailure(serverId: serverId, message: error.localizedDescription)
                 }
-                group.addTask {
-                    try await Task.sleep(for: timeout)
-                    return false
-                }
-                let started = try await group.next() ?? false
-                group.cancelAll()
-                if !started {
-                    throw MCPError.timeout
-                }
+                once.resume(())
             }
-        } catch is CancellationError {
-            // Parent cancelled — leave state as-is.
-        } catch {
-            if case MCPError.timeout = error {
-                serverStatus[server.id] = .crashed
-                print("[MCPManager] Timed out starting \(server.name) after \(timeout)")
+            Task {
+                try? await Task.sleep(for: timeout)
+                // Kill in-flight process/session so a hung SDK connect can unwind.
+                await self.timeoutStart(serverId: serverId, name: name, timeout: timeout)
+                once.resume(())
             }
-            // Leave discoveredTools unchanged (empty) so the agent can surface a clear notice.
         }
+    }
+
+    private func noteStartFailure(serverId: String, message: String) {
+        if serverStatus[serverId] == .running { return }
+        serverStatus[serverId] = .crashed
+        serverErrors[serverId] = message
+        print("[MCPManager] Start failed for \(serverId): \(message)")
+    }
+
+    private func timeoutStart(serverId: String, name: String, timeout: Duration) async {
+        if case .running = serverStatus[serverId],
+           let cached = discoveredTools[serverId], !cached.isEmpty {
+            return
+        }
+        await stopServer(id: serverId)
+        serverStatus[serverId] = .crashed
+        serverErrors[serverId] = "Timed out after \(timeout) starting \(name)"
+        print("[MCPManager] Timed out starting \(name) after \(timeout)")
     }
 
     /// Match user intent to MCP server ids so we do not block the first token on every `npx` server.
@@ -510,6 +750,9 @@ public actor MCPClientManager {
         servers: [MCPServerConfig]
     ) -> [String] {
         let p = prompt.lowercased()
+        // Inventory questions do not need a live connect preference.
+        if isMCPInventoryPrompt(prompt) { return [] }
+
         let enabled = servers.filter(\.isEnabled)
         func match(_ predicates: [(MCPServerConfig) -> Bool]) -> [String] {
             enabled.filter { server in predicates.contains { $0(server) } }.map(\.id)
@@ -534,8 +777,31 @@ public actor MCPClientManager {
             if !ids.isEmpty { return ids }
         }
 
-        // No strong preference — warm everything (still per-server timed out).
+        // No strong preference — warm everything in the background.
         return []
+    }
+
+    /// Greetings / short social turns should not wait on MCP cold starts.
+    public nonisolated static func isCasualChatPrompt(_ prompt: String) -> Bool {
+        let t = prompt.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !t.isEmpty else { return true }
+        let exact: Set<String> = [
+            "hi", "hello", "hey", "yo", "sup", "howdy", "hiya",
+            "good morning", "good afternoon", "good evening", "good night",
+            "morning", "gm", "thanks", "thank you", "thx", "ty",
+            "ok", "okay", "k", "cool", "great", "nice", "bye", "goodbye"
+        ]
+        if exact.contains(t) { return true }
+        if t.count <= 40 {
+            let prefixes = ["hi ", "hello ", "hey ", "good morning", "good afternoon", "good evening"]
+            if prefixes.contains(where: { t.hasPrefix($0) }) {
+                let actionHints = ["mcp", "mail", "email", "file", "code", "search", "run", "tool", "check", "list", "open", "write", "fix"]
+                if !actionHints.contains(where: { t.contains($0) }) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     nonisolated static func isReadOnlyMCPTool(_ leafName: String) -> Bool {
@@ -589,17 +855,35 @@ public actor MCPClientManager {
 
     private func startStdioServer(config: MCPServerConfig) async throws -> [MCPToolDefinition] {
         await stopServer(id: config.id)
+        let generation = (startGenerations[config.id] ?? 0) + 1
+        startGenerations[config.id] = generation
+        serverStatus[config.id] = .connecting
+        serverErrors[config.id] = nil
 
         // Prefer the official MCP Swift SDK (Radiant parity); fall back to hand-rolled pipes.
         do {
             let session = MCPSDKSession(config: config)
-            let tools = try await session.start()
+            // Register BEFORE connect so a timeout can kill a hung handshake.
             sdkSessions[config.id] = session
+            let tools = try await session.start()
+            guard startGenerations[config.id] == generation else {
+                await session.stop()
+                throw MCPError.timeout
+            }
             discoveredTools[config.id] = tools
             serverStatus[config.id] = .running
+            serverErrors[config.id] = nil
             return tools
         } catch {
+            if sdkSessions[config.id] != nil {
+                await sdkSessions[config.id]?.stop()
+                sdkSessions.removeValue(forKey: config.id)
+            }
             print("[MCPManager] SDK start failed for \(config.name), falling back to hand-rolled: \(error.localizedDescription)")
+        }
+
+        guard startGenerations[config.id] == generation else {
+            throw MCPError.timeout
         }
 
         let process = Process()
@@ -647,6 +931,11 @@ public actor MCPClientManager {
                     "MCP '\(config.name)' exited immediately. Check command/args (got: \(config.command) \(launchArgs.joined(separator: " ")))."
                 )
             }
+            guard startGenerations[config.id] == generation else {
+                outPipe.fileHandleForReading.readabilityHandler = nil
+                if process.isRunning { process.terminate() }
+                throw MCPError.timeout
+            }
 
             runningProcesses[config.id] = process
             processInputPipes[config.id] = inPipe
@@ -687,8 +976,8 @@ public actor MCPClientManager {
             try sendJson(listToolsRequest, to: inPipe)
 
             var tools: [MCPToolDefinition] = []
-            // MacUse and other heavy servers can take longer than 3s to answer tools/list.
-            let listResp = await readResponse(for: 2, buffer: stdoutBuffer, timeoutSeconds: 12.0)
+            // Cap tools/list wait; outer ensureServerReady also kills the process on deadline.
+            let listResp = await readResponse(for: 2, buffer: stdoutBuffer, timeoutSeconds: 8.0)
             if !listResp.isEmpty, let data = listResp.data(using: .utf8),
                let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 let toolsArray = (json["tools"] as? [[String: Any]]) ?? ((json["result"] as? [String: Any])?["tools"] as? [[String: Any]]) ?? []
@@ -700,8 +989,12 @@ public actor MCPClientManager {
             guard process.isRunning else {
                 throw MCPLaunchError.processExited("MCP '\(config.name)' exited after handshake.")
             }
+            guard startGenerations[config.id] == generation else {
+                throw MCPError.timeout
+            }
 
             serverStatus[config.id] = .running
+            serverErrors[config.id] = nil
             discoveredTools[config.id] = tools
             return tools
         } catch {
@@ -712,8 +1005,11 @@ public actor MCPClientManager {
             processInputPipes.removeValue(forKey: config.id)
             processOutputPipes.removeValue(forKey: config.id)
             processOutputBuffers.removeValue(forKey: config.id)
-            serverStatus[config.id] = .crashed
-            discoveredTools[config.id] = []
+            if startGenerations[config.id] == generation {
+                serverStatus[config.id] = .crashed
+                serverErrors[config.id] = error.localizedDescription
+                discoveredTools[config.id] = []
+            }
             throw error
         }
     }
@@ -768,15 +1064,22 @@ public actor MCPClientManager {
     }
 
     private func queryHttpSseServer(config: MCPServerConfig) async throws -> [MCPToolDefinition] {
-        guard let url = URL(string: config.url) else { 
+        guard let url = URL(string: config.url), !config.url.isEmpty else {
             serverStatus[config.id] = .unreachable
+            serverErrors[config.id] = "Missing or invalid URL for HTTP MCP server."
             return []
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         for (k, v) in config.headers { req.setValue(v, forHTTPHeaderField: k) }
-        for (k, v) in config.env { req.setValue(v, forHTTPHeaderField: k) }
+        // Radiant parity: optional bearer token via env["MCP_TOKEN"] / env["token"] / headers.
+        if req.value(forHTTPHeaderField: "Authorization") == nil {
+            if let token = config.env["MCP_TOKEN"] ?? config.env["token"] ?? config.env["TOKEN"], !token.isEmpty {
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+        }
 
         let body: [String: Any] = [
             "jsonrpc": "2.0",
@@ -787,15 +1090,30 @@ public actor MCPClientManager {
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         req.timeoutInterval = 6
 
-        let (data, response) = try await URLSession.shared.data(for: req)
-        
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            serverStatus[config.id] = .unreachable
-            discoveredTools[config.id] = []
-            return []
-        }
-
         do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                serverStatus[config.id] = .unreachable
+                serverErrors[config.id] = "No HTTP response from \(config.url)"
+                discoveredTools[config.id] = []
+                return []
+            }
+            if http.statusCode == 401 || http.statusCode == 403 {
+                serverStatus[config.id] = .unreachable
+                let msg = config.headers["Authorization"] != nil || config.env["MCP_TOKEN"] != nil
+                    ? "That server rejected the token — check it is current and has the right scope."
+                    : "That server needs you to sign in. Paste an access token in headers/env; OpenWork cannot yet do a full OAuth sign-in for MCP servers."
+                serverErrors[config.id] = msg
+                discoveredTools[config.id] = []
+                return []
+            }
+            guard (200...299).contains(http.statusCode) else {
+                serverStatus[config.id] = .unreachable
+                serverErrors[config.id] = "HTTP \(http.statusCode) from \(config.url)"
+                discoveredTools[config.id] = []
+                return []
+            }
+
             if let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let result = dict["result"] as? [String: Any],
                let toolsArray = result["tools"] as? [[String: Any]] {
@@ -804,11 +1122,15 @@ public actor MCPClientManager {
                     list.append(MCPToolDefinition.fromToolsListEntry(t))
                 }
                 serverStatus[config.id] = .running
+                serverErrors[config.id] = nil
                 discoveredTools[config.id] = list
                 return list
             }
+            serverStatus[config.id] = .unreachable
+            serverErrors[config.id] = "Unexpected tools/list payload from \(config.url)"
         } catch {
             serverStatus[config.id] = .unreachable
+            serverErrors[config.id] = error.localizedDescription
         }
 
         discoveredTools[config.id] = []
@@ -1212,6 +1534,7 @@ public actor MCPClientManager {
     }
 
     public func stopServer(id: String) async {
+        startGenerations[id] = (startGenerations[id] ?? 0) + 1
         if let session = sdkSessions.removeValue(forKey: id) {
             await session.stop()
         }
@@ -1221,13 +1544,15 @@ public actor MCPClientManager {
         if let proc = runningProcesses[id] {
             if proc.isRunning {
                 proc.terminate()
-                serverStatus[id] = .notStarted
             }
             runningProcesses.removeValue(forKey: id)
         }
         processInputPipes.removeValue(forKey: id)
         processOutputPipes.removeValue(forKey: id)
         processOutputBuffers.removeValue(forKey: id)
+        if serverStatus[id] != .crashed && serverStatus[id] != .unreachable {
+            serverStatus[id] = .notStarted
+        }
     }
 
     public func stopAll() async {

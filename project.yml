@@ -13,6 +13,10 @@ settings:
     PRODUCT_NAME: "OpenWork"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     CLANG_CXX_LANGUAGE_STANDARD: "c++17"
+    # mlx-swift Metal headers use C++17 `if constexpr`; silence dialect noise from the Metal frontend.
+    OTHER_CPLUSPLUSFLAGS: "$(inherited) -std=c++17 -Wno-c++17-extensions"
+    OTHER_CFLAGS: "$(inherited) -Wno-c++17-extensions"
+    OTHER_METAL_FLAGS: "$(inherited) -Wno-c++17-extensions"
 
 packages:
   Yams:
@@ -81,3 +85,5 @@ targets:
         CODE_SIGN_STYLE: Automatic
         OTHER_SWIFT_FLAGS: "$(inherited) -strict-concurrency=minimal"
         OTHER_CPLUSPLUSFLAGS: "$(inherited) -std=c++17 -Wno-c++17-extensions"
+        OTHER_CFLAGS: "$(inherited) -Wno-c++17-extensions"
+        OTHER_METAL_FLAGS: "$(inherited) -Wno-c++17-extensions"

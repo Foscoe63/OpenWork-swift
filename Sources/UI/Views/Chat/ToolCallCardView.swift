@@ -2,10 +2,18 @@ import SwiftUI
 
 public struct ToolCallCardView: View {
     let toolCall: ToolCallInfo
-    @State private var isExpanded: Bool = false
+    let preferExpanded: Bool
+    @State private var isExpanded: Bool
 
-    public init(toolCall: ToolCallInfo) {
+    public init(toolCall: ToolCallInfo, preferExpanded: Bool = false) {
         self.toolCall = toolCall
+        self.preferExpanded = preferExpanded
+        let needsApproval = toolCall.status == .waitingApproval || toolCall.status == .pendingApproval
+        _isExpanded = State(initialValue: preferExpanded || needsApproval)
+    }
+
+    private var needsApproval: Bool {
+        toolCall.status == .waitingApproval || toolCall.status == .pendingApproval
     }
 
     public var body: some View {
@@ -27,7 +35,7 @@ public struct ToolCallCardView: View {
                     Text("(\(toolCall.argumentsJson))")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(needsApproval ? 3 : 1)
 
                     Spacer()
 
@@ -37,9 +45,11 @@ public struct ToolCallCardView: View {
                             .foregroundColor(.secondary)
                     }
 
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                    if !needsApproval {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -48,7 +58,7 @@ public struct ToolCallCardView: View {
             }
             .buttonStyle(.plain)
 
-            if toolCall.status == .waitingApproval || toolCall.status == .pendingApproval {
+            if needsApproval {
                 approvalPrompt
             }
 

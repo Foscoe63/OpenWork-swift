@@ -240,7 +240,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
                 command: "npx",
                 args: ["-y", "@modelcontextprotocol/server-filesystem", workspaceMain],
                 workingDirectory: workspaceMain,
-                isEnabled: true
+                isEnabled: false
             ),
             MCPServerConfig(
                 id: "mcp-fetch",
@@ -248,7 +248,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
                 transportType: .stdio,
                 command: "npx",
                 args: ["-y", "@modelcontextprotocol/server-fetch"],
-                isEnabled: true
+                isEnabled: false
             ),
             MCPServerConfig(
                 id: "mcp-memory",
@@ -256,7 +256,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
                 transportType: .stdio,
                 command: "npx",
                 args: ["-y", "@modelcontextprotocol/server-memory"],
-                isEnabled: true
+                isEnabled: false
             ),
             MCPServerConfig(
                 id: "mcp-git",
@@ -265,7 +265,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
                 command: "npx",
                 args: ["-y", "@modelcontextprotocol/server-git", "--repository", workspaceMain],
                 workingDirectory: workspaceMain,
-                isEnabled: true
+                isEnabled: false
             ),
             MCPServerConfig(
                 id: "mcp-macuse",
@@ -274,7 +274,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
                 command: "npx",
                 args: ["-y", "macuse-mcp"],
                 workingDirectory: workspaceMain,
-                isEnabled: true
+                isEnabled: false
             )
         ]
     }

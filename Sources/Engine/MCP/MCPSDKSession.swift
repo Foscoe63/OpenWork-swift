@@ -61,16 +61,26 @@ public actor MCPSDKSession {
             throw MCPSDKError.processExited("MCP '\(config.name)' exited immediately after launch.")
         }
 
+        // Retain process before connect so stop() can kill a hung handshake.
+        self.process = process
+        self.inPipe = inPipe
+        self.outPipe = outPipe
+
         let inputFD = FileDescriptor(rawValue: outPipe.fileHandleForReading.fileDescriptor)
         let outputFD = FileDescriptor(rawValue: inPipe.fileHandleForWriting.fileDescriptor)
         let transport = StdioTransport(input: inputFD, output: outputFD)
         let client = Client(name: "OpenWorkSwift", version: "1.0.0")
-        _ = try await client.connect(transport: transport)
+        do {
+            _ = try await client.connect(transport: transport)
+        } catch {
+            process.terminate()
+            self.process = nil
+            self.inPipe = nil
+            self.outPipe = nil
+            throw error
+        }
 
-        self.process = process
         self.client = client
-        self.inPipe = inPipe
-        self.outPipe = outPipe
 
         let (tools, _) = try await client.listTools()
         return tools.map(Self.mapTool)

@@ -2,6 +2,8 @@ import SwiftUI
 
 public struct MainView: View {
     @ObservedObject var appState: AppState
+    @State private var sidebarWidth: CGFloat = CGFloat(WindowLayoutStore.sidebarWidth)
+    @State private var inspectorWidth: CGFloat = CGFloat(WindowLayoutStore.inspectorWidth)
 
     public init(appState: AppState) {
         self.appState = appState
@@ -18,6 +20,16 @@ public struct MainView: View {
                 HSplitView {
                     // Left Sidebar
                     AppSidebar(appState: appState)
+                        .frame(
+                            minWidth: WindowLayoutStore.minSidebarWidth,
+                            idealWidth: sidebarWidth,
+                            maxWidth: WindowLayoutStore.maxSidebarWidth
+                        )
+                        .trackSplitWidth { width in
+                            guard width >= WindowLayoutStore.minSidebarWidth else { return }
+                            sidebarWidth = width
+                            WindowLayoutStore.sidebarWidth = Double(width)
+                        }
 
                     // Center Content Area
                     centerContent
@@ -26,6 +38,16 @@ public struct MainView: View {
                     // Right Side Inspector (collapsible for chat session)
                     if appState.isInspectorOpen && (appState.navigationDestination == .chat || appState.navigationDestination == .tools) {
                         SideInspectorView(appState: appState)
+                            .frame(
+                                minWidth: WindowLayoutStore.minInspectorWidth,
+                                idealWidth: inspectorWidth,
+                                maxWidth: WindowLayoutStore.maxInspectorWidth
+                            )
+                            .trackSplitWidth { width in
+                                guard width >= WindowLayoutStore.minInspectorWidth else { return }
+                                inspectorWidth = width
+                                WindowLayoutStore.inspectorWidth = Double(width)
+                            }
                     }
                 }
             }
@@ -66,6 +88,11 @@ public struct MainView: View {
             }
         }
         .frame(minWidth: 920, minHeight: 620)
+        .onAppear {
+            sidebarWidth = CGFloat(WindowLayoutStore.sidebarWidth)
+            inspectorWidth = CGFloat(WindowLayoutStore.inspectorWidth)
+            WindowLayoutStore.configureMainWindowAutosave()
+        }
     }
 
     // MARK: - Center Content by Destination
