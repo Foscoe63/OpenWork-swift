@@ -2,7 +2,7 @@
   <img src="Resources/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="112" alt="OpenWork icon" />
 </p>
 
-<h1 align="center">OpenWork</h1>
+<h1 align="center">OpenWork-Swift</h1>
 
 <p align="center">
   <strong>Native macOS autonomous AI workbench</strong><br/>
