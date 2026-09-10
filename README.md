@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Resources/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="112" alt="OpenWork icon" />
+  <img src="Resources/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="112" alt="OpenWork-Swift icon" />
 </p>
 
 <h1 align="center">OpenWork-Swift</h1>
@@ -31,7 +31,7 @@
 
 ## Overview
 
-**OpenWork** is a standalone native macOS app for autonomous agents, multi-agent collaboration, scheduled automations, and local/cloud LLM orchestration.
+**OpenWork-Swift** is a standalone native macOS app for autonomous agents, multi-agent collaboration, scheduled automations, and local/cloud LLM orchestration.
 
 It ships as a real `.app` — UI and tooling sit on system frameworks (`Accelerate`, `Vision`, `PDFKit`, `WebKit`, `Speech`, Keychain). End users who install a build do **not** need Xcode or Swift installed.
 
@@ -87,7 +87,7 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 
 ## MCP servers
 
-OpenWork speaks the [Model Context Protocol](https://modelcontextprotocol.io) with a Radiant-inspired client that prefers **failing soft** over freezing chat.
+OpenWork-Swift speaks the [Model Context Protocol](https://modelcontextprotocol.io) with a Radiant-inspired client that prefers **failing soft** over freezing chat.
 
 | | Behavior |
 |:---:|---|
@@ -200,11 +200,11 @@ swift test
 
 ```bash
 # After a successful Debug build:
-cp -R ~/Library/Developer/Xcode/DerivedData/OpenWorkSwift-*/Build/Products/Debug/OpenWork.app \
-  /Applications/OpenWork.app
+cp -R ~/Library/Developer/Xcode/DerivedData/OpenWorkSwift-*/Build/Products/Debug/OpenWork-Swift.app \
+  /Applications/OpenWork-Swift.app
 ```
 
-Quit any running OpenWork instance before replacing the bundle.
+Quit any running OpenWork-Swift instance before replacing the bundle.
 
 ---
 
@@ -226,10 +226,10 @@ Quit any running OpenWork instance before replacing the bundle.
 
 ## Privacy
 
-OpenWork is **local-first**. It talks only to LLM endpoints and MCP servers **you** configure. No bundled third-party analytics or telemetry.
+OpenWork-Swift is **local-first**. It talks only to LLM endpoints and MCP servers **you** configure. No bundled third-party analytics or telemetry.
 
 ---
 
 ## License
 
-MIT © 2026 OpenWork
+MIT © 2026 OpenWork-Swift
