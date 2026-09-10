@@ -8,7 +8,7 @@ public final class ProviderRouter: @unchecked Sendable {
     public func client(for provider: ModelProvider) -> LLMProviderClient {
         switch provider.kind {
         case .omlx, .vmlx:
-            return OpenAIService.shared
+            return NativeMLXService.shared
         case .ollama:
             return OllamaService.shared
         case .anthropic:
@@ -31,8 +31,69 @@ public final class ProviderRouter: @unchecked Sendable {
     ) async throws {
         var activeProvider = provider
 
-        // Built-in Apple Silicon Engine (matches Osaurus / GrizzyClaw on-device architecture)
-        if provider.kind == .omlx || provider.kind == .vmlx || activeProvider.type == .local {
+        // Built-in Apple Silicon / MLX: in-process engine, then optional local OpenAI-compatible
+        // servers. Never silently replace failures with MockLLMService — that made every prompt
+        // look identical ("offline fallback mode") regardless of the selected model.
+        if provider.kind == .omlx || provider.kind == .vmlx {
+            do {
+                try await NativeMLXService.shared.streamChat(
+                    provider: activeProvider,
+                    model: model,
+                    systemPrompt: systemPrompt,
+                    messages: messages,
+                    temperature: temperature,
+                    maxTokens: maxTokens,
+                    reasoningEffort: reasoningEffort,
+                    tools: tools,
+                    onChunk: onChunk
+                )
+                return
+            } catch {
+                let detail = error.localizedDescription
+                onChunk(LLMStreamChunk(
+                    deltaText: """
+                    \n\n⚠️ **Built-in MLX unavailable**
+
+                    \(detail)
+
+                    **What to do**
+                    - Open **Local Models** and finish downloading a complete MLX model, or
+                    - Switch the model picker to **Ollama**, **LM Studio**, or a **cloud** provider.
+                    """,
+                    isFinished: true
+                ))
+                throw error
+            }
+        }
+
+        // Ollama uses its own HTTP API (`/api/chat`) and must keep its configured base URL.
+        // Do NOT rewrite it through LocalMLXEngine (that appends `/v1` and breaks Ollama).
+        if activeProvider.kind == .ollama {
+            let selectedClient = OllamaService.shared
+            do {
+                try await selectedClient.streamChat(
+                    provider: activeProvider,
+                    model: model,
+                    systemPrompt: systemPrompt,
+                    messages: messages,
+                    temperature: temperature,
+                    maxTokens: maxTokens,
+                    reasoningEffort: reasoningEffort,
+                    tools: tools,
+                    onChunk: onChunk
+                )
+                return
+            } catch {
+                onChunk(LLMStreamChunk(
+                    deltaText: "\n\n⚠️ **Ollama Error:** \(error.localizedDescription)\n\nIs Ollama running? Default URL: `\(activeProvider.baseUrl)`.",
+                    isFinished: true
+                ))
+                throw error
+            }
+        }
+
+        // Other local OpenAI-compatible backends (LM Studio, llama.cpp, etc.)
+        if activeProvider.type == .local {
             let res = await LocalMLXEngine.shared.ensureServerRunning(modelId: model.id)
             if !res.success {
                 let msg = res.message.isEmpty ? "Local backend failed to start." : res.message
@@ -46,7 +107,10 @@ public final class ProviderRouter: @unchecked Sendable {
                     userInfo: [NSLocalizedDescriptionKey: msg]
                 )
             }
-            activeProvider.baseUrl = "http://127.0.0.1:\(res.activePort)/v1"
+            // Only rewrite base URL for OpenAI-compatible local servers — never for Ollama.
+            if res.activePort != 11434 {
+                activeProvider.baseUrl = "http://127.0.0.1:\(res.activePort)/v1"
+            }
 
             let selectedClient = client(for: activeProvider)
             do {
@@ -70,7 +134,6 @@ public final class ProviderRouter: @unchecked Sendable {
                 throw error
             }
         }
-
 
         // Remote / Cloud Providers (OpenAI, Anthropic, Groq, etc.)
         let selectedClient = client(for: activeProvider)

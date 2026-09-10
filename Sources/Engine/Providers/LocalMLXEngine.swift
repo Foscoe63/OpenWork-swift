@@ -291,6 +291,114 @@ public final class LocalMLXEngine: @unchecked Sendable {
 
     private init() {}
 
+    /// Shared roots where OpenWork looks for installed MLX weights.
+    public static func knownMLXSearchRoots(settings: AppSettings? = nil) -> [URL] {
+        var roots: [URL] = []
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let fm = FileManager.default
+
+        func appendIfExists(_ url: URL) {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                if !roots.contains(where: { $0.standardizedFileURL == url.standardizedFileURL }) {
+                    roots.append(url)
+                }
+            }
+        }
+
+        let appMlx = home.appendingPathComponent(".openwork/mlx_models", isDirectory: true)
+        try? fm.createDirectory(at: appMlx, withIntermediateDirectories: true)
+        roots.append(appMlx)
+
+        if let settings, !settings.customMLXModelsDirectory.isEmpty {
+            let expanded = (settings.customMLXModelsDirectory as NSString).expandingTildeInPath
+            appendIfExists(URL(fileURLWithPath: expanded, isDirectory: true))
+        }
+
+        // Primary shared library on this machine
+        appendIfExists(URL(fileURLWithPath: "/Volumes/Storage/Models", isDirectory: true))
+        appendIfExists(URL(fileURLWithPath: "/Volumes/Storage/models", isDirectory: true))
+
+        appendIfExists(home.appendingPathComponent(".grizzyclaw/mlx_models", isDirectory: true))
+        appendIfExists(home.appendingPathComponent("Library/Application Support/GrizzyClaw/mlx_models", isDirectory: true))
+        appendIfExists(home.appendingPathComponent(".lmstudio/models", isDirectory: true))
+        appendIfExists(home.appendingPathComponent(".cache/lm-studio/models", isDirectory: true))
+        appendIfExists(home.appendingPathComponent("Library/Application Support/LM Studio/models", isDirectory: true))
+
+        if settings?.scanHuggingFaceCache != false {
+            appendIfExists(home.appendingPathComponent(".cache/huggingface/hub", isDirectory: true))
+            if let settings, !settings.customHFCachePath.isEmpty {
+                let customHf = URL(fileURLWithPath: (settings.customHFCachePath as NSString).expandingTildeInPath, isDirectory: true)
+                appendIfExists(customHf)
+            }
+        }
+
+        return roots
+    }
+
+    /// Resolve an on-disk directory for a model id (`org/name`) under known MLX roots.
+    public func resolveLocalModelDirectory(modelId: String, settings: AppSettings? = nil) -> URL? {
+        let roots = Self.knownMLXSearchRoots(settings: settings)
+        let sanitizedId = modelId.replacingOccurrences(of: "/", with: "--")
+        let hubFolder = "models--" + sanitizedId
+
+        for base in roots {
+            let candidates = [
+                base.appendingPathComponent(modelId),
+                base.appendingPathComponent(sanitizedId),
+                base.appendingPathComponent("models").appendingPathComponent(modelId),
+                base.appendingPathComponent("models").appendingPathComponent(sanitizedId),
+                base.appendingPathComponent("hub").appendingPathComponent(hubFolder)
+            ]
+            for candidate in candidates {
+                if Self.isModelDirectoryComplete(candidate) {
+                    return candidate
+                }
+                // HF hub layout: models--org--name/snapshots/<rev>
+                let snapshots = candidate.appendingPathComponent("snapshots")
+                if let snaps = try? FileManager.default.contentsOfDirectory(at: snapshots, includingPropertiesForKeys: nil),
+                   let complete = snaps.first(where: { Self.isModelDirectoryComplete($0) }) {
+                    return complete
+                }
+            }
+
+            let snapshotDir = base.appendingPathComponent(hubFolder).appendingPathComponent("snapshots")
+            if let snaps = try? FileManager.default.contentsOfDirectory(at: snapshotDir, includingPropertiesForKeys: nil),
+               let complete = snaps.first(where: { Self.isModelDirectoryComplete($0) }) {
+                return complete
+            }
+        }
+        return nil
+    }
+
+    /// Same completeness rules as the in-process loader: config.json + all weight shards present.
+    public static func isModelDirectoryComplete(_ dir: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.appendingPathComponent("config.json").path) else { return false }
+
+        func nonEmptyFileExists(_ path: String) -> Bool {
+            guard let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int else { return false }
+            return size > 0
+        }
+
+        let indexURL = dir.appendingPathComponent("model.safetensors.index.json")
+        if fm.fileExists(atPath: indexURL.path) {
+            guard let data = try? Data(contentsOf: indexURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let weightMap = json["weight_map"] as? [String: String] else {
+                return false
+            }
+            let requiredShards = Set(weightMap.values)
+            guard !requiredShards.isEmpty else { return false }
+            return requiredShards.allSatisfy { nonEmptyFileExists(dir.appendingPathComponent($0).path) }
+        }
+
+        guard let contents = try? fm.contentsOfDirectory(atPath: dir.path) else { return false }
+        let weightFiles = contents.filter { $0.hasSuffix(".safetensors") }
+        guard !weightFiles.isEmpty else { return false }
+        return weightFiles.allSatisfy { nonEmptyFileExists(dir.appendingPathComponent($0).path) }
+    }
+
     /// Validates an MLX model directory on disk.
     public func validateModelFolder(directory: URL) -> MLXModelFolderValidation {
         let configURL = directory.appendingPathComponent("config.json")
@@ -312,45 +420,9 @@ public final class LocalMLXEngine: @unchecked Sendable {
         return .ok(modelType: modelType)
     }
 
-    /// Scans all configured locations (custom paths, Hugging Face cache, LM Studio libraries, Osaurus/GrizzyClaw paths).
+    /// Scans all configured locations (custom paths, Storage Models volume, Hugging Face cache, LM Studio, GrizzyClaw).
     public func scanInstalledModels(settings: AppSettings) -> [LocalMLXModel] {
-        var directoriesToScan: [URL] = []
-        let home = FileManager.default.homeDirectoryForCurrentUser
-
-        // 1. App default MLX folder
-        let appMlx = home.appendingPathComponent(".openwork/mlx_models", isDirectory: true)
-        try? FileManager.default.createDirectory(at: appMlx, withIntermediateDirectories: true)
-        directoriesToScan.append(appMlx)
-
-        // 2. Custom MLX folder from settings
-        if !settings.customMLXModelsDirectory.isEmpty {
-            let expanded = (settings.customMLXModelsDirectory as NSString).expandingTildeInPath
-            directoriesToScan.append(URL(fileURLWithPath: expanded, isDirectory: true))
-        }
-
-        // 3. Hugging Face Cache
-        if settings.scanHuggingFaceCache {
-            let hfCache = home.appendingPathComponent(".cache/huggingface/hub", isDirectory: true)
-            if FileManager.default.fileExists(atPath: hfCache.path) {
-                directoriesToScan.append(hfCache)
-            }
-            if !settings.customHFCachePath.isEmpty {
-                let customHf = URL(fileURLWithPath: (settings.customHFCachePath as NSString).expandingTildeInPath, isDirectory: true)
-                directoriesToScan.append(customHf)
-            }
-        }
-
-        // 4. LM Studio Models
-        if settings.scanLMStudioModels {
-            let lm1 = home.appendingPathComponent(".cache/lm-studio/models", isDirectory: true)
-            let lm2 = home.appendingPathComponent("Library/Application Support/LM Studio/models", isDirectory: true)
-            if FileManager.default.fileExists(atPath: lm1.path) { directoriesToScan.append(lm1) }
-            if FileManager.default.fileExists(atPath: lm2.path) { directoriesToScan.append(lm2) }
-        }
-
-        // 5. GrizzyClaw & Osaurus caches
-        let gcDir = home.appendingPathComponent(".grizzyclaw/mlx_models", isDirectory: true)
-        if FileManager.default.fileExists(atPath: gcDir.path) { directoriesToScan.append(gcDir) }
+        let directoriesToScan = Self.knownMLXSearchRoots(settings: settings)
 
         var foundInstalled: [String: LocalMLXModel] = [:]
 
@@ -400,7 +472,8 @@ public final class LocalMLXEngine: @unchecked Sendable {
     private func scanDirectoryRecursively(root: URL, current: URL, depth: Int, results: inout [String: LocalMLXModel]) {
         guard depth < 6 else { return }
         let validation = validateModelFolder(directory: current)
-        if validation.isLoadable {
+        // Require real weight shards — config.json alone (incomplete download) is not enough.
+        if validation.isLoadable && Self.isModelDirectoryComplete(current) {
             let repoId = deriveRepoId(root: root, modelDir: current)
             if results[repoId] == nil {
                 results[repoId] = buildModel(repoId: repoId, directory: current)
@@ -412,6 +485,11 @@ public final class LocalMLXEngine: @unchecked Sendable {
         for item in contents {
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue {
+                // Skip huge non-MLX trees (gturbo installers, blob stores, etc.)
+                let name = item.lastPathComponent.lowercased()
+                if name.hasSuffix(".gturbo") || name == "blobs" || name == "xet" || name == "manifests" {
+                    continue
+                }
                 scanDirectoryRecursively(root: root, current: item, depth: depth + 1, results: &results)
             }
         }
@@ -534,18 +612,32 @@ public final class LocalMLXEngine: @unchecked Sendable {
         process.standardOutput = pipe
         process.standardError = pipe
 
+        // huggingface-cli prints a live tqdm progress bar for the whole download, which easily
+        // exceeds the pipe's kernel buffer on a multi-gigabyte model. Nothing was draining that
+        // pipe here, so waitUntilExit() below would deadlock forever the first time that happened
+        // — the same Process/Pipe bug fixed elsewhere in this codebase, but with no timeout to
+        // even bound the damage since a real download can legitimately run a long time.
+        let state = ShellOutputState(maxBytes: 20_000)
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty { state.append(chunk) }
+        }
+
         try process.run()
-        
+
         onProgress(0.4, "Downloading model weights & tokenizer...")
         process.waitUntilExit()
+        pipe.fileHandleForReading.readabilityHandler = nil
 
         if process.terminationStatus == 0 {
             onProgress(1.0, "Completed!")
         } else {
+            let (output, _) = state.finalize()
+            let detail = output.isEmpty ? "" : " (\(output.suffix(300)))"
             throw NSError(
                 domain: "LocalMLXEngine",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Download failed. Please ensure 'huggingface-cli' is installed or clone to ~/.cache/huggingface."]
+                userInfo: [NSLocalizedDescriptionKey: "Download failed. Please ensure 'huggingface-cli' is installed or clone to ~/.cache/huggingface.\(detail)"]
             )
         }
     }

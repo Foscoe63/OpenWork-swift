@@ -659,7 +659,7 @@ public struct WatchItemEditModalView: View {
                                 }
                             }
                             .pickerStyle(.menu)
-                            .onChange(of: artifactTemplate) { newT in
+                            .onChange(of: artifactTemplate) { _, newT in
                                 customPrompt = newT.defaultPromptTemplate
                             }
                         }

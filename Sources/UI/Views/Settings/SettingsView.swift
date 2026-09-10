@@ -11,6 +11,8 @@ public struct SettingsView: View {
     @State private var selectedSkillForDetail: Skill? = nil
     @State private var showingAddMcp = false
     @State private var selectedMcpForEdit: MCPServerConfig? = nil
+    @State private var mcpStatusReports: [MCPServerReport] = []
+    @State private var mcpStatusBusy = false
     @State private var showingAddPlugin = false
     @State private var selectedPluginForDetail: AppExtensionPlugin? = nil
     @State private var pluginSearchText = ""
@@ -25,6 +27,17 @@ public struct SettingsView: View {
     @State private var newWsFolderPath = ""
     @State private var showingAddWatchItemModal = false
     @State private var editingWatchItem: WatchItem? = nil
+    @State private var googleClientId = ""
+    @State private var googleClientSecret = ""
+    @State private var googleApiKey = ""
+    @State private var googleAccessToken = ""
+    @State private var googleRefreshToken = ""
+    @State private var googleConnectionStatus = ""
+    @State private var isTestingGoogleConnection = false
+    @State private var isSigningInGoogle = false
+    @State private var showGoogleAdvancedCredentials = false
+    @State private var googleIsSignedIn = false
+    @State private var googleSignedInDisplay = ""
 
     public init(appState: AppState) {
         self.appState = appState
@@ -857,7 +870,7 @@ public struct SettingsView: View {
 
                 SettingsRow(title: "Custom MLX Models Directory", subtitle: "Specific folder on external SSD or hard drive", icon: "externaldrive.fill") {
                     HStack(spacing: 6) {
-                        TextField("~/.openwork/mlx_models", text: $appState.settings.customMLXModelsDirectory)
+                        TextField("/Volumes/Storage/Models", text: $appState.settings.customMLXModelsDirectory)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 220)
                         Button("Browse...") {
@@ -1347,6 +1360,8 @@ public struct SettingsView: View {
     // 4. Extensions & Plugins Page
     private var extensionsPage: some View {
         VStack(spacing: 16) {
+            googleIntegrationsCard
+
             // MARK: - TOP BAR & ACTIONS
             SettingsCard(
                 title: "Extensions & Plugins Hub (\(appState.plugins.count))",
@@ -1565,6 +1580,15 @@ public struct SettingsView: View {
                                             var updated = plugin
                                             updated.isEnabled = val
                                             appState.savePlugin(updated)
+                                            if plugin.id == "plugin-gmail" {
+                                                appState.settings.gmailExtensionEnabled = val
+                                                appState.updateSettings(appState.settings)
+                                                syncGoogleTools(names: ["gmail_list", "gmail_search"], enabled: val)
+                                            } else if plugin.id == "plugin-google-calendar" {
+                                                appState.settings.googleCalendarExtensionEnabled = val
+                                                appState.updateSettings(appState.settings)
+                                                syncGoogleTools(names: ["google_calendar_list", "google_calendar_upcoming"], enabled: val)
+                                            }
                                         }
                                     ))
                                     .toggleStyle(.switch)
@@ -1639,11 +1663,307 @@ public struct SettingsView: View {
     }
 
     // 5. Advanced
+    private var googleIntegrationsCard: some View {
+        SettingsCard(
+            title: "Google Integrations",
+            description: "Sign in with Google to connect Gmail and Calendar. Client ID / secrets stay in the macOS Keychain.",
+            icon: "envelope.badge.shield.half.filled"
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                if googleIsSignedIn {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundColor(.green)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(googleSignedInDisplay.isEmpty ? "Signed in to Google" : googleSignedInDisplay)
+                                .font(.system(size: 12, weight: .semibold))
+                            Text("Access tokens refresh automatically when they expire.")
+                                .font(.system(size: 10.5))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(8)
+                    .background(Color.green.opacity(0.08))
+                    .cornerRadius(8)
+                }
+
+                SecureField("Google OAuth Client ID", text: $googleClientId)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .onChange(of: googleClientId) { _, newValue in
+                        GoogleIntegrationsService.shared.clientId = newValue
+                    }
+
+                SecureField("Google OAuth Client Secret", text: $googleClientSecret)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .onChange(of: googleClientSecret) { _, newValue in
+                        GoogleIntegrationsService.shared.clientSecret = newValue
+                    }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Authorized redirect URI (required)")
+                        .font(.system(size: 11, weight: .semibold))
+                    HStack(spacing: 8) {
+                        Text(GoogleIntegrationsService.authorizedRedirectURI)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(ThemeColors.sidebarBg(for: appState.settings.theme))
+                            .cornerRadius(6)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(ThemeColors.border(for: appState.settings.theme), lineWidth: 1)
+                            )
+                        Button("Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(
+                                GoogleIntegrationsService.authorizedRedirectURI,
+                                forType: .string
+                            )
+                            googleConnectionStatus = "Copied redirect URI. Paste it into Google Cloud Console → Credentials → your OAuth client → Authorized redirect URIs."
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    Text("In Google Cloud Console, open your OAuth client and add that URI exactly (including the trailing slash). Prefer client type “Desktop app”; if you use “Web application”, this URI is required to avoid redirect_uri_mismatch.")
+                        .font(.system(size: 10.5))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: 10) {
+                    Button {
+                        Task {
+                            isSigningInGoogle = true
+                            googleConnectionStatus = ""
+                            do {
+                                googleConnectionStatus = try await GoogleIntegrationsService.shared.signInWithGoogle()
+                                googleAccessToken = GoogleIntegrationsService.shared.accessToken
+                                googleRefreshToken = GoogleIntegrationsService.shared.refreshToken
+                                if !GoogleIntegrationsService.shared.signedInEmail.isEmpty {
+                                    appState.settings.googleAccountEmail = GoogleIntegrationsService.shared.signedInEmail
+                                    appState.updateSettings(appState.settings)
+                                }
+                                refreshGoogleSignedInState()
+                            } catch is CancellationError {
+                                googleConnectionStatus = "Sign-in cancelled."
+                            } catch {
+                                googleConnectionStatus = "Sign-in failed: \(error.localizedDescription)"
+                            }
+                            isSigningInGoogle = false
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isSigningInGoogle {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "person.crop.circle.badge.checkmark")
+                            }
+                            Text(isSigningInGoogle ? "Waiting for browser…" : "Sign in with Google")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(isSigningInGoogle || googleClientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    if googleIsSignedIn {
+                        Button("Sign Out") {
+                            GoogleIntegrationsService.shared.signOut()
+                            googleAccessToken = ""
+                            googleRefreshToken = ""
+                            googleConnectionStatus = "Signed out of Google."
+                            refreshGoogleSignedInState()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(isSigningInGoogle)
+                    }
+
+                    Button {
+                        Task {
+                            isTestingGoogleConnection = true
+                            googleConnectionStatus = await GoogleIntegrationsService.shared.testConnection()
+                            isTestingGoogleConnection = false
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isTestingGoogleConnection {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                            Text(isTestingGoogleConnection ? "Testing…" : "Test Connection")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isTestingGoogleConnection || isSigningInGoogle)
+                }
+
+                if !googleConnectionStatus.isEmpty {
+                    Text(googleConnectionStatus)
+                        .font(.system(size: 11))
+                        .foregroundColor(googleConnectionStatus.hasPrefix("✅") ? .green : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                DisclosureGroup("Advanced credentials", isExpanded: $showGoogleAdvancedCredentials) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Google account email (optional)", text: Binding(
+                            get: { appState.settings.googleAccountEmail },
+                            set: { val in
+                                appState.settings.googleAccountEmail = val
+                                appState.updateSettings(appState.settings)
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12))
+
+                        SecureField("Google API Key (optional)", text: $googleApiKey)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                            .onChange(of: googleApiKey) { _, newValue in
+                                GoogleIntegrationsService.shared.apiKey = newValue
+                            }
+
+                        SecureField("Manual OAuth Access Token", text: $googleAccessToken)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                            .onChange(of: googleAccessToken) { _, newValue in
+                                GoogleIntegrationsService.shared.accessToken = newValue
+                            }
+
+                        SecureField("Manual OAuth Refresh Token", text: $googleRefreshToken)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                            .onChange(of: googleRefreshToken) { _, newValue in
+                                GoogleIntegrationsService.shared.refreshToken = newValue
+                            }
+
+                        Text("Prefer Sign in with Google. Manual tokens are only for debugging.")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.top, 6)
+                }
+                .font(.system(size: 11.5))
+
+                Divider()
+
+                SettingsRow(title: "Enable Gmail", subtitle: "Allow agents to list and search Gmail", icon: "envelope.fill") {
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.gmailExtensionEnabled },
+                        set: { val in
+                            appState.settings.gmailExtensionEnabled = val
+                            appState.updateSettings(appState.settings)
+                            syncGooglePlugin(id: "plugin-gmail", enabled: val)
+                            syncGoogleTools(names: ["gmail_list", "gmail_search"], enabled: val)
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                }
+
+                SettingsRow(title: "Enable Google Calendar", subtitle: "Allow agents to list upcoming Google Calendar events", icon: "calendar") {
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.googleCalendarExtensionEnabled },
+                        set: { val in
+                            appState.settings.googleCalendarExtensionEnabled = val
+                            appState.updateSettings(appState.settings)
+                            syncGooglePlugin(id: "plugin-google-calendar", enabled: val)
+                            syncGoogleTools(names: ["google_calendar_list", "google_calendar_upcoming"], enabled: val)
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                }
+            }
+            .onAppear {
+                let google = GoogleIntegrationsService.shared
+                googleClientId = google.clientId
+                googleClientSecret = google.clientSecret
+                googleApiKey = google.apiKey
+                googleAccessToken = google.accessToken
+                googleRefreshToken = google.refreshToken
+                refreshGoogleSignedInState()
+            }
+        }
+    }
+
+    private func refreshGoogleSignedInState() {
+        let google = GoogleIntegrationsService.shared
+        googleIsSignedIn = google.isSignedIn
+        if !google.signedInName.isEmpty, !google.signedInEmail.isEmpty {
+            googleSignedInDisplay = "Signed in as \(google.signedInName) <\(google.signedInEmail)>"
+        } else if !google.signedInEmail.isEmpty {
+            googleSignedInDisplay = "Signed in as \(google.signedInEmail)"
+        } else if !appState.settings.googleAccountEmail.isEmpty, google.isSignedIn {
+            googleSignedInDisplay = "Signed in as \(appState.settings.googleAccountEmail)"
+        } else if google.isSignedIn {
+            googleSignedInDisplay = "Signed in to Google"
+        } else {
+            googleSignedInDisplay = ""
+        }
+    }
+
+    private func syncGooglePlugin(id: String, enabled: Bool) {
+        if let plugin = appState.plugins.first(where: { $0.id == id }) {
+            var updated = plugin
+            updated.isEnabled = enabled
+            appState.savePlugin(updated)
+        } else {
+            let name = id == "plugin-gmail" ? "Gmail" : "Google Calendar"
+            let description = id == "plugin-gmail"
+                ? "Read and search Gmail via Google APIs."
+                : "List upcoming Google Calendar events."
+            let permissions = id == "plugin-gmail"
+                ? ["network:outbound", "google:gmail.readonly"]
+                : ["network:outbound", "google:calendar.readonly"]
+            appState.savePlugin(AppExtensionPlugin(
+                id: id,
+                name: name,
+                description: description,
+                pluginType: .workspaceTool,
+                source: .builtIn,
+                isEnabled: enabled,
+                permissions: permissions
+            ))
+        }
+    }
+
+    private func syncGoogleTools(names: [String], enabled: Bool) {
+        var tools = appState.tools
+        var changed = false
+        for name in names {
+            if let idx = tools.firstIndex(where: { $0.name == name || $0.id == name }) {
+                if tools[idx].isEnabled != enabled {
+                    tools[idx].isEnabled = enabled
+                    changed = true
+                }
+            }
+        }
+        if changed {
+            appState.tools = tools
+            PersistenceManager.shared.saveTools(tools)
+        }
+    }
+
     private var advancedPage: some View {
         VStack(spacing: 16) {
             SettingsCard(title: "Autonomous ReAct Loop & Hierarchy", description: "Multi-agent hierarchy limits and deep ReAct execution cycles", icon: "point.3.connected.trianglepath.dotted") {
                 SettingsRow(title: "Max Autonomous Iteration Loop (\(appState.settings.maxAutonomousIterations) turns)", subtitle: "Maximum iterative ReAct tool calls per agent turn (1 - 50)", icon: "arrow.triangle.2.circlepath") {
                     Stepper("", value: $appState.settings.maxAutonomousIterations, in: 1...50)
+                }
+
+                SettingsRow(title: "Plan Mode", subtitle: "Block writes/shell/mutating MCP until exit_plan_mode (Radiant parity)", icon: "list.clipboard") {
+                    Toggle("", isOn: $appState.settings.planModeEnabled)
+                        .toggleStyle(.switch)
+                }
+
+                SettingsRow(title: "Max Turn Tokens (\(appState.settings.maxTurnTokens / 1000)k)", subtitle: "Halt a single turn when estimated token use exceeds this budget", icon: "gauge.with.dots.needle.67percent") {
+                    Stepper("", value: $appState.settings.maxTurnTokens, in: 100_000...5_000_000, step: 100_000)
                 }
 
                 SettingsRow(title: "Allow Sub-Agent Spawning", subtitle: "Enable lead agents to launch child agents", icon: "person.2.fill") {
@@ -2148,7 +2468,7 @@ public struct SettingsView: View {
             // MARK: - MODEL CONTEXT PROTOCOL (MCP) SERVERS SECTION
             SettingsCard(
                 title: "Model Context Protocol (MCP) Servers (\(appState.settings.mcpServers.count))",
-                description: "Extend autonomous agents with stdio processes, remote HTTP/SSE gateways, and WebSocket tools",
+                description: "Extend autonomous agents with stdio processes, remote HTTP/SSE gateways, and WebSocket tools. Enable only servers you trust — cold starts no longer block chat.",
                 icon: "network"
             ) {
                 HStack {
@@ -2156,10 +2476,18 @@ public struct SettingsView: View {
                         .font(.system(size: 12, weight: .semibold))
                     Spacer()
 
+                    Button(mcpStatusBusy ? "Probing…" : "Refresh Status") {
+                        refreshMcpStatus(probe: true)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(mcpStatusBusy)
+
                     Button("Restore Defaults") {
                         appState.settings.mcpServers = AppSettings.defaultMCPServers
                         appState.updateSettings(appState.settings)
-                        appState.showToast("Restored standard MCP servers")
+                        appState.showToast("Restored standard MCP servers (disabled by default)")
+                        refreshMcpStatus(probe: false)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -2195,6 +2523,7 @@ public struct SettingsView: View {
                 } else {
                     VStack(spacing: 8) {
                         ForEach(appState.settings.mcpServers) { mcp in
+                            let report = mcpStatusReports.first(where: { $0.id == mcp.id })
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: mcp.transportType.icon)
                                     .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
@@ -2213,6 +2542,8 @@ public struct SettingsView: View {
                                             .padding(.vertical, 1.5)
                                             .background(ThemeColors.border(for: appState.settings.theme))
                                             .cornerRadius(4)
+
+                                        mcpStatusBadge(for: mcp, report: report)
 
                                         if !mcp.env.isEmpty {
                                             Text("\(mcp.env.count) ENV")
@@ -2243,16 +2574,29 @@ public struct SettingsView: View {
                                             .foregroundColor(.secondary.opacity(0.8))
                                             .lineLimit(1)
                                     }
+
+                                    if let err = report?.error, !err.isEmpty {
+                                        Text(err)
+                                            .font(.system(size: 10.5))
+                                            .foregroundColor(.red.opacity(0.85))
+                                            .lineLimit(3)
+                                    } else if let tools = report?.tools, !tools.isEmpty {
+                                        Text("Tools: \(tools.prefix(8).joined(separator: ", "))\(tools.count > 8 ? "…" : "")")
+                                            .font(.system(size: 10.5))
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(2)
+                                    }
                                 }
 
                                 Spacer()
 
                                 HStack(spacing: 8) {
-                                    Button("Test Ping") {
-                                        appState.showToast("MCP '\(mcp.name)' ready")
+                                    Button(mcpStatusBusy ? "…" : "Test") {
+                                        testMcpServer(mcp)
                                     }
                                     .buttonStyle(.bordered)
                                     .controlSize(.small)
+                                    .disabled(mcpStatusBusy || !mcp.isEnabled)
 
                                     Button("Configure") {
                                         selectedMcpForEdit = mcp
@@ -2267,6 +2611,7 @@ public struct SettingsView: View {
                                             var updated = mcp
                                             updated.isEnabled = val
                                             appState.saveMcpServer(updated)
+                                            refreshMcpStatus(probe: false)
                                         }
                                     ))
                                     .toggleStyle(.switch)
@@ -2274,6 +2619,7 @@ public struct SettingsView: View {
 
                                     Button {
                                         appState.deleteMcpServer(mcp)
+                                        refreshMcpStatus(probe: false)
                                     } label: {
                                         Image(systemName: "trash")
                                             .foregroundColor(.red.opacity(0.8))
@@ -2292,6 +2638,9 @@ public struct SettingsView: View {
                         }
                     }
                 }
+            }
+            .task {
+                refreshMcpStatus(probe: false)
             }
         }
         .sheet(isPresented: $showingAddSkill) {
@@ -2349,6 +2698,69 @@ public struct SettingsView: View {
     }
 
     // MARK: - Helpers
+    private func mcpStatusBadge(for mcp: MCPServerConfig, report: MCPServerReport?) -> some View {
+        let label: String
+        let color: Color
+        if !mcp.isEnabled {
+            label = "off"
+            color = .secondary
+        } else if let report, report.connected {
+            label = "✓ \(report.toolCount) tools"
+            color = .green
+        } else if let report, report.error != nil {
+            label = "error"
+            color = .red
+        } else if report?.status == .connecting {
+            label = "connecting"
+            color = .orange
+        } else {
+            label = "idle"
+            color = .secondary
+        }
+        return Text(label)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundColor(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1.5)
+            .background(color.opacity(0.12))
+            .cornerRadius(4)
+    }
+
+    private func refreshMcpStatus(probe: Bool) {
+        mcpStatusBusy = true
+        Task { @MainActor in
+            let reports = await MCPClientManager.shared.mcpStatusReports(probe: probe)
+            mcpStatusReports = reports
+            mcpStatusBusy = false
+            if probe {
+                let connected = reports.filter(\.connected).count
+                let errors = reports.filter { $0.error != nil }.count
+                appState.showToast("MCP status: \(connected) connected, \(errors) errors")
+            }
+        }
+    }
+
+    private func testMcpServer(_ mcp: MCPServerConfig) {
+        guard mcp.isEnabled else {
+            appState.showToast("Enable '\(mcp.name)' before testing")
+            return
+        }
+        mcpStatusBusy = true
+        Task { @MainActor in
+            do {
+                let tools = try await MCPClientManager.shared.startServer(config: mcp)
+                let reports = await MCPClientManager.shared.mcpStatusReports(probe: false)
+                mcpStatusReports = reports
+                appState.showToast("MCP '\(mcp.name)' OK — \(tools.count) tools")
+            } catch {
+                let reports = await MCPClientManager.shared.mcpStatusReports(probe: false)
+                mcpStatusReports = reports
+                appState.showToast("MCP '\(mcp.name)' failed: \(error.localizedDescription)")
+            }
+            mcpStatusBusy = false
+        }
+    }
+
     private func tabTitle(for tab: String) -> String {
         switch tab {
         case "general": return "General Settings"

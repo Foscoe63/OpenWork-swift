@@ -3,12 +3,34 @@ import AppKit
 
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        // Writing to a dead MCP child stdin must not abort the process (EPIPE).
+        signal(SIGPIPE, SIG_IGN)
+
         if let image = NSImage(named: "AppIcon") {
             NSApplication.shared.applicationIconImage = image
         } else if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") ?? Bundle.main.url(forResource: "AppIcon.icns", withExtension: nil),
                   let image = NSImage(contentsOf: iconURL) {
             NSApplication.shared.applicationIconImage = image
         }
+
+        WindowLayoutStore.observeMainWindowAutosave()
+        // Window may not exist yet; configure now and again on the next runloop.
+        WindowLayoutStore.configureMainWindowAutosave()
+        DispatchQueue.main.async {
+            WindowLayoutStore.configureMainWindowAutosave()
+        }
+    }
+
+    public func applicationDidBecomeActive(_ notification: Notification) {
+        WindowLayoutStore.configureMainWindowAutosave()
+    }
+
+    public func applicationWillTerminate(_ notification: Notification) {
+        // Flush any pending frame + ensure layout keys are written.
+        for window in NSApp.windows where window.frameAutosaveName == WindowLayoutStore.mainWindowAutosaveName {
+            window.saveFrame(usingName: WindowLayoutStore.mainWindowAutosaveName)
+        }
+        UserDefaults.standard.synchronize()
     }
 }
 
@@ -23,9 +45,13 @@ public struct OpenWorkSwiftApp: App {
         WindowGroup {
             MainView(appState: appState)
                 .preferredColorScheme(colorScheme(for: appState.settings.theme))
+                .onAppear {
+                    WindowLayoutStore.configureMainWindowAutosave()
+                }
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
+        .defaultSize(width: 1280, height: 800)
         .commands {
             SidebarCommands()
 

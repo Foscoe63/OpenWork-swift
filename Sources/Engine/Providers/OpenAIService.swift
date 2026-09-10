@@ -228,19 +228,13 @@ public final class OpenAIService: LLMProviderClient, @unchecked Sendable {
         let isLocalEndpoint = provider.baseUrl.contains("mlx") || provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.contains("localhost")
         for msg in messages {
             if msg.role == .tool {
-                if isLocalEndpoint {
-                    // Local endpoints (MLX, Ollama, LM Studio) expect tool observations as user messages unless native tool_calls were emitted
-                    formattedMessages.append([
-                        "role": "user",
-                        "content": "[Tool Result]:\n\(msg.content)\n\nPlease continue your response incorporating the tool result above."
-                    ])
-                } else {
-                    formattedMessages.append([
-                        "role": "tool",
-                        "content": msg.content,
-                        "tool_call_id": msg.id
-                    ])
-                }
+                // Radiant / OpenAI-compat: native tool role + tool_call_id.
+                // (Legacy user-role wrapping caused local models to ignore observations.)
+                formattedMessages.append([
+                    "role": "tool",
+                    "content": msg.content,
+                    "tool_call_id": msg.id
+                ])
             } else {
                 formattedMessages.append(["role": msg.role.rawValue, "content": msg.content])
             }
@@ -264,8 +258,9 @@ public final class OpenAIService: LLMProviderClient, @unchecked Sendable {
             body["reasoning_effort"] = reasoningEffort.rawValue
         }
 
-        // Add native structured tool schemas if tools are provided
-        if !tools.isEmpty && !provider.baseUrl.contains("mlx") && !provider.baseUrl.contains("127.0.0.1") && !provider.baseUrl.contains("localhost") {
+        // Add native structured tool schemas whenever tools are provided (including local
+        // OpenAI-compatible endpoints — Radiant parity).
+        if !tools.isEmpty {
             var toolsArray: [[String: Any]] = []
             for t in tools where t.isEnabled {
                 var parametersDict: [String: Any] = ["type": "object", "properties": [String: Any]()]
