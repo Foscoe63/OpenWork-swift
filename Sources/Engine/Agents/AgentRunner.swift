@@ -737,6 +737,11 @@ public final class AgentRunner {
             availableTools = Self.filterToolsForPlanMode(availableTools)
         }
 
+        // Where the agent actually is. Without this it guesses paths and build commands every turn.
+        let workspaceSection = inventoryPrompt
+            ? ""
+            : WorkspaceContext.promptBlock(WorkspaceContext.snapshot(folderPath: workspace.folderPath))
+
         let enabledSkills = PersistenceManager.shared.loadSkills().filter(\.isEnabled)
         var skillsSection = ""
         // Skip skills dump on inventory — it only encourages digression.
@@ -791,10 +796,12 @@ public final class AgentRunner {
         } else {
             systemPromptWithTools = """
             \(agent.systemPrompt)
+            \(workspaceSection)
 
             You are an advanced, fully autonomous coding, systems, and research agent.
             Built-in tools (prefer native function/tool calling):
-            file_read, file_write, edit_file, file_list, file_copy, file_move, file_delete,
+            file_read (supports offset/limit), file_write, edit_file, file_list, grep, glob,
+            file_copy, file_move, file_delete,
             terminal_command/run_command, fetch_url, web_search, ask_user, exit_plan_mode,
             todo_write, calculator, get_current_date, document_extract,
             gmail_list, gmail_search, google_calendar_list, google_calendar_upcoming.

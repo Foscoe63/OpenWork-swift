@@ -138,7 +138,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
             }
-            return readFile(path: fullPath, startTime: startTime)
+            let offset = (dict["offset"] as? Int) ?? (dict["start_line"] as? Int)
+            let limit = (dict["limit"] as? Int) ?? (dict["max_lines"] as? Int)
+            return readFile(path: fullPath, offset: offset, limit: limit, startTime: startTime)
 
         case "file_write", "write_file", "create_file", "save_file":
             let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? (dict["filepath"] as? String) ?? (dict["file"] as? String) ?? (dict["title"] as? String) ?? ""
@@ -148,6 +150,77 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 return denial
             }
             return writeFile(path: fullPath, content: content, startTime: startTime)
+
+        case "grep", "search_code", "code_search":
+            let pattern = (dict["pattern"] as? String) ?? (dict["query"] as? String) ?? (dict["regex"] as? String) ?? ""
+            guard !pattern.isEmpty else {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "grep requires a `pattern` (a regular expression).",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            let rawRoot = (dict["path"] as? String) ?? (dict["directory"] as? String) ?? workspace.folderPath
+            let root = rawRoot.hasPrefix("/") ? rawRoot : (workspace.folderPath as NSString).appendingPathComponent(rawRoot)
+            if let denial = sandboxDenial(for: root, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
+            let include = (dict["include"] as? String) ?? (dict["glob"] as? String)
+            let caseInsensitive = (dict["case_insensitive"] as? Bool) ?? (dict["ignore_case"] as? Bool) ?? false
+            let grepLimit = (dict["limit"] as? Int) ?? (dict["max_results"] as? Int) ?? 100
+            do {
+                let result = try CodeSearch.grep(
+                    pattern: pattern,
+                    root: root,
+                    include: include,
+                    caseInsensitive: caseInsensitive,
+                    limit: grepLimit
+                )
+                return ToolExecutionResult(
+                    success: true,
+                    output: CodeSearch.format(result, pattern: pattern),
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            } catch {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "grep: invalid regular expression /\(pattern)/ — \(error.localizedDescription)",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+
+        case "glob", "find_files":
+            let pattern = (dict["pattern"] as? String) ?? (dict["glob"] as? String) ?? (dict["query"] as? String) ?? ""
+            guard !pattern.isEmpty else {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "glob requires a `pattern`, for example `**/*.swift` or `Package.swift`.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            let rawRoot = (dict["path"] as? String) ?? (dict["directory"] as? String) ?? workspace.folderPath
+            let root = rawRoot.hasPrefix("/") ? rawRoot : (workspace.folderPath as NSString).appendingPathComponent(rawRoot)
+            if let denial = sandboxDenial(for: root, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
+            let globLimit = (dict["limit"] as? Int) ?? 200
+            let hits = CodeSearch.glob(pattern: pattern, root: root, limit: globLimit)
+            if hits.paths.isEmpty {
+                return ToolExecutionResult(
+                    success: true,
+                    output: "No files match `\(pattern)` under \(root) (\(hits.scanned) files scanned).",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            var body = hits.paths.joined(separator: "\n")
+            if hits.truncated {
+                body += "\n… more matches omitted; narrow the pattern or raise `limit`."
+            }
+            return ToolExecutionResult(
+                success: true,
+                output: body,
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
 
         case "file_list", "list_files", "list_directory", "ls", "dir":
             let path = (dict["path"] as? String) ?? (dict["directory"] as? String) ?? (dict["folder"] as? String) ?? workspace.folderPath
@@ -875,25 +948,82 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         return true
     }
 
-    private func readFile(path: String, startTime: Double) -> ToolExecutionResult {
+    /// Lines returned when the caller does not ask for a specific window.
+    static let defaultReadLineLimit = 2_000
+    /// Individual lines longer than this are clipped; minified bundles otherwise blow the budget.
+    static let maxReadLineLength = 2_000
+
+    /// Read a file as numbered lines, windowed by `offset`/`limit`.
+    ///
+    /// The previous implementation returned the first 10,000 characters and nothing else, with no
+    /// way to reach the remainder — on this project's own sources that is 11-18% of the file.
+    /// Line numbers matter too: `edit_file` needs an exact `old_string`, and the model picks a
+    /// better one when it can see where it is.
+    private func readFile(
+        path: String,
+        offset: Int?,
+        limit: Int?,
+        startTime: Double
+    ) -> ToolExecutionResult {
         let cleanPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
         let expanded = (cleanPath as NSString).expandingTildeInPath
+
+        let content: String
         do {
-            let content = try String(contentsOfFile: expanded, encoding: .utf8)
-            let preview = content.count > 10000 ? String(content.prefix(10000)) + "\n...[truncated]" : content
-            return ToolExecutionResult(
-                success: true,
-                output: preview,
-                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-            )
+            content = try String(contentsOfFile: expanded, encoding: .utf8)
         } catch {
+            var message = "Failed to read file '\(cleanPath)': \(error.localizedDescription)"
+            if !FileManager.default.fileExists(atPath: expanded) {
+                message += " The file does not exist — use `glob` to find the right path rather than guessing."
+            } else {
+                message += " If this is a binary or non-UTF8 file, it cannot be read as text."
+            }
             return ToolExecutionResult(
                 success: false,
                 output: "",
-                error: "Failed to read file '\(cleanPath)': \(error.localizedDescription)",
+                error: message,
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
         }
+
+        let lines = content.components(separatedBy: "\n")
+        let total = lines.count
+        let start = max(1, offset ?? 1)
+        guard start <= total else {
+            return ToolExecutionResult(
+                success: false,
+                output: "",
+                error: "offset \(start) is past the end of '\(cleanPath)' (\(total) lines).",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+        }
+        let count = max(1, limit ?? Self.defaultReadLineLimit)
+        let end = min(total, start + count - 1)
+
+        let width = String(end).count
+        var body: [String] = []
+        for number in start...end {
+            let raw = lines[number - 1]
+            let text = raw.count > Self.maxReadLineLength
+                ? String(raw.prefix(Self.maxReadLineLength)) + "… [line clipped]"
+                : raw
+            body.append("\(String(number).leftPadded(to: width))\t\(text)")
+        }
+
+        var header = "\(cleanPath) — \(total) lines"
+        if start > 1 || end < total {
+            header += ", showing \(start)-\(end)"
+        }
+        var output = header + "\n" + body.joined(separator: "\n")
+        if end < total {
+            output += "\n\n[\(total - end) more lines. Continue with offset=\(end + 1).]"
+        }
+
+        return ToolExecutionResult(
+            success: true,
+            output: output,
+            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        )
     }
 
     private func writeFile(path: String, content: String, startTime: Double) -> ToolExecutionResult {
@@ -1153,5 +1283,12 @@ final class ShellOutputState: @unchecked Sendable {
             text += "\n...[output truncated after \(maxBytes) bytes]"
         }
         return (text, timedOut)
+    }
+}
+
+extension String {
+    /// Right-align a line number so numbered output stays in a column.
+    func leftPadded(to width: Int) -> String {
+        count >= width ? self : String(repeating: " ", count: width - count) + self
     }
 }

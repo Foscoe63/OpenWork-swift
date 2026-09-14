@@ -53,6 +53,22 @@ public enum ToolSchemaCatalog {
                 requiresApproval: true
             ),
             Tool(
+                id: "grep",
+                name: "grep",
+                displayName: "Search Code",
+                description: "Search file contents by regular expression. Returns path:line: text. Use this to locate symbols before reading files — it is exhaustive, unlike semantic search.",
+                category: .files,
+                parametersJsonSchema: schemas["grep"]!
+            ),
+            Tool(
+                id: "glob",
+                name: "glob",
+                displayName: "Find Files",
+                description: "Find files by path glob (**/*.swift), newest first. Use this instead of guessing paths.",
+                category: .files,
+                parametersJsonSchema: schemas["glob"]!
+            ),
+            Tool(
                 id: "fetch_url",
                 name: "fetch_url",
                 displayName: "Fetch URL",
@@ -94,6 +110,8 @@ public enum ToolSchemaCatalog {
         "write_file": #"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}"#,
         "edit_file": #"{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}"#,
         "file_edit": #"{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}"#,
+        "grep": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Regular expression to search for"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"include":{"type":"string","description":"Glob limiting which files are searched, e.g. **/*.swift"},"case_insensitive":{"type":"boolean"},"limit":{"type":"integer","description":"Max matching lines (default 100)"}},"required":["pattern"]}"#,
+        "glob": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Path glob, e.g. **/*.swift or Sources/**/Tool*.swift"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"limit":{"type":"integer","description":"Max paths (default 200)"}},"required":["pattern"]}"#,
         "file_list": #"{"type":"object","properties":{"path":{"type":"string","description":"Directory path"}},"required":["path"]}"#,
         "file_copy": #"{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"}},"required":["source","destination"]}"#,
         "file_move": #"{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"}},"required":["source","destination"]}"#,
