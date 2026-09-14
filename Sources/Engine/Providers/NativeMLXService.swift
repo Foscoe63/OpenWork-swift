@@ -16,6 +16,11 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// Loads already running. A load that overran its deadline keeps going, and the next turn
     /// waits on the same task instead of starting a second copy of a 48GB read.
     private var inFlightLoads: [String: Task<ModelContainer, Error>] = [:]
+    /// The live chat session and what it has already consumed, so a continuing conversation
+    /// reuses its KV cache instead of re-prefilling the whole transcript every turn.
+    private var cachedSession: ChatSession?
+    private var cachedSessionKey: MLXSessionReuse.Key?
+    private var cachedConsumed: [MLXSessionReuse.Fingerprint] = []
     private let lock = NSLock()
 
     /// A model with no local weights on disk yet requires a Hugging Face download, which can be
@@ -192,37 +197,109 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             return
         }
 
-        let history = Array(mlxMessages.dropLast())
         let toolSpecs = Self.mlxToolSpecs(from: tools)
-        let session = ChatSession(
-            container,
+        let key = MLXSessionReuse.Key(
+            modelId: model.id,
             instructions: sanitizedInstructions,
-            history: history,
-            generateParameters: Self.generateParameters(
-                maxTokens: maxTokens,
-                temperature: temperature
-            ),
-            tools: toolSpecs.isEmpty ? nil : toolSpecs
-            // No toolDispatch — AgentRunner owns approval + MCP execution (Radiant shape).
-            // streamDetails surfaces .toolCall for the outer loop.
+            toolNames: tools.map(\.name)
         )
+        let fingerprints = mlxMessages.map {
+            MLXSessionReuse.Fingerprint(
+                role: String(describing: $0.role),
+                content: $0.content,
+                hasAttachments: !$0.images.isEmpty || !$0.videos.isEmpty || !$0.audios.isEmpty
+            )
+        }
 
-        let stream = session.streamDetails(
-            to: last.content,
-            role: last.role,
-            images: last.images,
-            videos: [],
-            audios: []
-        )
+        let decision = lock.withLock {
+            MLXSessionReuse.decide(
+                cachedKey: cachedSession == nil ? nil : cachedSessionKey,
+                cachedConsumed: cachedConsumed,
+                incomingKey: key,
+                incoming: fingerprints
+            )
+        }
+
+        let session: ChatSession
+        let stream: AsyncThrowingStream<Generation, Error>
+
+        switch decision {
+        case .advance(let new):
+            // Continue the live session: only the messages it has not seen are prefilled.
+            let reused = lock.withLock { cachedSession }!
+            session = reused
+            let appended = Array(mlxMessages[new.startIndex...])
+            stream = reused.streamDetails(to: appended)
+            lock.withLock { cachedConsumed = fingerprints }
+
+        case .rebuild(let reason):
+            if reason != "no cached session" {
+                onChunk(LLMStreamChunk(deltaReasoning: "[context cache reset: \(reason)]\n"))
+            }
+            let history = Array(mlxMessages.dropLast())
+            let fresh = ChatSession(
+                container,
+                instructions: sanitizedInstructions,
+                history: history,
+                generateParameters: Self.generateParameters(
+                    maxTokens: maxTokens,
+                    temperature: temperature
+                ),
+                tools: toolSpecs.isEmpty ? nil : toolSpecs
+                // No toolDispatch — AgentRunner owns approval + MCP execution (Radiant shape).
+                // streamDetails surfaces .toolCall for the outer loop.
+            )
+            session = fresh
+            stream = fresh.streamDetails(
+                to: last.content,
+                role: last.role,
+                images: last.images,
+                videos: [],
+                audios: []
+            )
+            lock.withLock {
+                cachedSession = fresh
+                cachedSessionKey = key
+                cachedConsumed = fingerprints
+            }
+        }
+        _ = session
 
         var totalTokens = 0
         var emittedToolCalls: [ToolCallInfo] = []
+        // What the model produced this turn. MLX appends its own reply to the session's cache,
+        // so the reply has to be recorded as consumed too — otherwise the next turn re-sends it
+        // and the conversation gains a duplicate the user never wrote.
+        var assistantText = ""
+        var completedNormally = false
+        defer {
+            lock.withLock {
+                guard cachedSession != nil else { return }
+                if completedNormally {
+                    cachedConsumed.append(
+                        MLXSessionReuse.Fingerprint(
+                            role: "assistant",
+                            content: assistantText,
+                            isGeneratedReply: true
+                        )
+                    )
+                } else {
+                    // Cancelled or thrown mid-generation: the session holds a partial reply we
+                    // cannot describe, so the cache can no longer be trusted to match.
+                    cachedSession = nil
+                    cachedSessionKey = nil
+                    cachedConsumed = []
+                }
+            }
+        }
+
         for try await generation in stream {
             if Task.isCancelled { break }
             switch generation {
             case .chunk(let piece):
                 if !piece.isEmpty {
                     totalTokens += 1
+                    assistantText += piece
                     onChunk(LLMStreamChunk(deltaText: piece))
                 }
             case .toolCall(let call):
@@ -249,6 +326,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                 break
             }
         }
+        completedNormally = !Task.isCancelled
 
         onChunk(LLMStreamChunk(
             isFinished: true,
