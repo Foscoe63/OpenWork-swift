@@ -13,18 +13,24 @@ concurrency:
 jobs:
   test:
     name: Build & test (macOS)
-    # mlx-swift declares `swift-tools-version: 6.3;(experimentalCGen)`, which needs Xcode 27.
-    # macos-26 ships Xcode 26.x and cannot resolve the package graph, and MLX needs arm64.
-    # `xcode-27` is a preview image label — if it is retired, move to whichever GA image
-    # carries Xcode 27 or newer rather than downgrading it.
-    runs-on: xcode-27
-    timeout-minutes: 90
+    # GA image, and arm64, which MLX requires.
+    runs-on: macos-26
+    # A full cold run is ~5 minutes. Fail fast rather than sit on a hung test.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show toolchain
+      # mlx-swift declares `swift-tools-version: 6.3;(experimentalCGen)`, so the package graph
+      # only resolves on a toolchain that new. The image default is older, so select the newest
+      # Xcode present rather than pinning a version that ages out of the image — macos-26 carries
+      # Xcode 26.6, which is Swift 6.3.3. (Xcode's marketing version runs ahead of its Swift
+      # version; 26.x is new enough, despite the 27 in the tools requirement.)
+      - name: Select an Xcode new enough for mlx-swift
         run: |
+          newest="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          echo "Selecting $newest"
+          sudo xcode-select -s "$newest"
           sw_vers
           xcodebuild -version
           xcrun swift --version
