@@ -629,24 +629,20 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 )
             }
 
-        case "workspace_semantic_search":
+        case "workspace_semantic_search", "search_workspace":
             let query = dict["query"] as? String ?? ""
-            let topK = dict["top_k"] as? Int ?? 4
-            let results = await LocalWorkspaceRAGEngine.shared.search(query: query, in: workspace.folderPath, topK: topK)
-            if results.isEmpty {
+            guard !query.isEmpty else {
                 return ToolExecutionResult(
-                    success: true,
-                    output: "No relevant code snippets or documentation found matching '\(query)' in \(workspace.folderPath)",
+                    success: false, output: "",
+                    error: "search_workspace requires a `query`.",
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
             }
-            var output = "### Relevant Workspace Context for '\(query)':\n\n"
-            for r in results {
-                output += "📄 **\(r.relativePath)** (Lines \(r.lineStart)-\(r.lineEnd), Score: \(String(format: "%.1f", r.score))):\n```\n\(r.text)\n```\n\n"
-            }
+            let topK = (dict["top_k"] as? Int) ?? (dict["limit"] as? Int) ?? 6
+            let hits = await CodeIndex.shared.search(query: query, root: workspace.folderPath, topK: topK)
             return ToolExecutionResult(
                 success: true,
-                output: output,
+                output: CodeIndex.format(hits, query: query),
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
 
