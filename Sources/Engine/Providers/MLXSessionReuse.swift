@@ -91,18 +91,44 @@ public enum MLXSessionReuse {
         guard !cachedConsumed.isEmpty else {
             return .rebuild(reason: "cached session has consumed nothing")
         }
-        guard incoming.count >= cachedConsumed.count else {
-            // Fewer messages than before means history was rewritten, not appended.
-            return .rebuild(reason: "history shrank — prefix was rewritten")
-        }
-        // Every consumed message must still be present, unchanged, in the same position.
-        for (index, previous) in cachedConsumed.enumerated() where !previous.matches(incoming[index]) {
-            return .rebuild(reason: "history diverged at message \(index + 1)")
-        }
         if incoming.contains(where: \.hasAttachments) {
             return .rebuild(reason: "attachments are not compared, so reuse is unsafe")
         }
-        let new = incoming[cachedConsumed.count...]
+
+        // Walk both lists together. They are not the same list: the session's history contains
+        // the replies it generated, while the caller's transcript may render those differently,
+        // fold them into a later message, or omit an empty one entirely. So a consumed entry the
+        // session produced itself is allowed to have no counterpart — the session keeps it either
+        // way, and skipping it here only affects where the append begins.
+        //
+        // Everything the *caller* supplied must still match in order. That is the part which, if
+        // rewritten, would leave the cache describing text no longer in the conversation.
+        var consumedIndex = 0
+        var incomingIndex = 0
+        while consumedIndex < cachedConsumed.count {
+            let previous = cachedConsumed[consumedIndex]
+            if incomingIndex < incoming.count, previous.matches(incoming[incomingIndex]) {
+                consumedIndex += 1
+                incomingIndex += 1
+                continue
+            }
+            if previous.isGeneratedReply, consumedIndex == cachedConsumed.count - 1 {
+                // The session's most recent reply, which the caller has not listed at this
+                // position. Scoped to the trailing entry on purpose: anything earlier that no
+                // longer matches is a genuine rewrite of settled history, not a reply the
+                // transcript renders elsewhere.
+                //
+                // Known limitation: a caller that *replaced* its last reply with different
+                // content is indistinguishable from one that omitted it, so that case is not
+                // detected. AgentRunner only ever appends, and compaction rewrites earlier
+                // entries — which the comparison above still catches.
+                consumedIndex += 1
+                continue
+            }
+            return .rebuild(reason: "history diverged at message \(incomingIndex + 1)")
+        }
+
+        let new = incoming[incomingIndex...]
         guard !new.isEmpty else {
             // Nothing new to say. Re-sending the last message would duplicate it in the cache.
             return .rebuild(reason: "no new messages to append")

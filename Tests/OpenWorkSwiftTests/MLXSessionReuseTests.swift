@@ -104,7 +104,7 @@ final class MLXSessionReuseTests: XCTestCase {
         let d = MLXSessionReuse.decide(
             cachedKey: key(), cachedConsumed: consumed, incomingKey: key(), incoming: [msg("user", "one")]
         )
-        XCTAssertEqual(reason(d), "history shrank — prefix was rewritten")
+        XCTAssertNotNil(reason(d), "a shorter history is a rewrite and must rebuild")
     }
 
     /// Re-sending with nothing new would duplicate the last message inside the cache.
@@ -173,15 +173,18 @@ extension MLXSessionReuseTests {
         XCTAssertEqual(Array(new).count, 1)
     }
 
-    /// The wildcard is scoped to role and position — it must not excuse a real rewrite.
-    func testGeneratedReplyWildcardStillRequiresAnAssistantThere() {
+    /// A generated reply that is NOT the trailing entry must still match — the skip is scoped
+    /// to the session's most recent reply only, so settled history cannot be waved through.
+    func testNonTrailingGeneratedReplyStillRequiresAMatch() {
         let consumed = [
             MLXSessionReuse.Fingerprint(role: "user", content: "do it"),
             generated("reply"),
+            MLXSessionReuse.Fingerprint(role: "user", content: "settled"),
         ]
         let incoming = [
             MLXSessionReuse.Fingerprint(role: "user", content: "do it"),
             MLXSessionReuse.Fingerprint(role: "user", content: "something else entirely"),
+            MLXSessionReuse.Fingerprint(role: "user", content: "settled"),
             MLXSessionReuse.Fingerprint(role: "user", content: "more"),
         ]
         let d = MLXSessionReuse.decide(
@@ -190,6 +193,50 @@ extension MLXSessionReuseTests {
             incomingKey: MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"]),
             incoming: incoming
         )
-        if case .advance = d { XCTFail("a changed role must still rebuild") }
+        if case .advance = d { XCTFail("a rewrite behind the trailing reply must still rebuild") }
+    }
+}
+
+/// The session's history and the caller's transcript are not the same list.
+extension MLXSessionReuseTests {
+    private var k: MLXSessionReuse.Key {
+        MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"])
+    }
+    private func gen(_ c: String) -> MLXSessionReuse.Fingerprint {
+        MLXSessionReuse.Fingerprint(role: "assistant", content: c, isGeneratedReply: true)
+    }
+    private func plain(_ r: String, _ c: String) -> MLXSessionReuse.Fingerprint {
+        MLXSessionReuse.Fingerprint(role: r, content: c)
+    }
+
+    /// Observed live: the session held a reply the caller's next list did not carry, which made
+    /// the comparison permanently off by one and rebuilt on every iteration.
+    func testGeneratedReplyWithNoCounterpartIsSkipped() {
+        let consumed = [plain("user", "ask"), plain("assistant", ""), gen("")]
+        let incoming = [plain("user", "ask"), plain("assistant", ""), plain("user", "[Tool output]\nx")]
+        guard case .advance(let new) = MLXSessionReuse.decide(
+            cachedKey: k, cachedConsumed: consumed, incomingKey: k, incoming: incoming
+        ) else { return XCTFail("should reuse") }
+        XCTAssertEqual(Array(new), [plain("user", "[Tool output]\nx")])
+    }
+
+    /// When the caller *does* carry the reply, it matches and is not skipped twice.
+    func testGeneratedReplyWithACounterpartConsumesIt() {
+        let consumed = [plain("user", "ask"), gen("answer")]
+        let incoming = [plain("user", "ask"), plain("assistant", "answer"), plain("user", "next")]
+        guard case .advance(let new) = MLXSessionReuse.decide(
+            cachedKey: k, cachedConsumed: consumed, incomingKey: k, incoming: incoming
+        ) else { return XCTFail("should reuse") }
+        XCTAssertEqual(Array(new), [plain("user", "next")], "the reply must not be appended again")
+    }
+
+    /// Caller-supplied history being rewritten is still a rebuild — the skip is scoped to
+    /// generated replies only.
+    func testCallerRewriteStillRebuilds() {
+        let consumed = [plain("user", "one"), plain("user", "two"), gen("r")]
+        let incoming = [plain("user", "one"), plain("user", "CHANGED"), plain("user", "three")]
+        if case .advance = MLXSessionReuse.decide(
+            cachedKey: k, cachedConsumed: consumed, incomingKey: k, incoming: incoming
+        ) { XCTFail("a rewritten caller message must rebuild") }
     }
 }

@@ -178,7 +178,12 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             case .system:
                 return Chat.Message(role: .system, content: cleanContent)
             case .tool:
-                return Chat.Message(role: .user, content: "[Tool output]\n" + cleanContent)
+                // The merge above already labels tool output; this path only sees a stray
+                // .tool message that never went through it.
+                return Chat.Message(
+                    role: .user,
+                    content: cleanContent.hasPrefix("[Tool output]") ? cleanContent : "[Tool output]\n" + cleanContent
+                )
             }
         }
 
@@ -561,6 +566,21 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         return s
     }
 
+    /// Render tool results as their own user messages.
+    ///
+    /// Chat templates have no `tool` role, so results must arrive as user turns. They are emitted
+    /// standalone and never folded into the message that follows, which is what makes the
+    /// rendered transcript **append-only**: a result reads identically whether or not something
+    /// comes after it.
+    ///
+    /// The previous version merged a run of tool results into the *next* user message, so the
+    /// same result rendered one way while trailing and another once a user message landed after
+    /// it. That silently rewrote earlier entries on every call, which defeated KV cache reuse
+    /// (`MLXSessionReuse` correctly saw the prefix change and rebuilt) and made prompt caching
+    /// impossible in principle, not just here.
+    ///
+    /// Consecutive results are still combined with each other — that run is complete once it ends,
+    /// so combining them does not depend on anything later.
     private func mergeToolMessagesIntoFollowingUser(_ messages: [ChatMessage]) -> [ChatMessage] {
         guard !messages.isEmpty else { return messages }
         var out: [ChatMessage] = []
@@ -578,13 +598,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                 combined += messages[i].content
                 i = messages.index(after: i)
             }
-            guard i < messages.endIndex, messages[i].role == .user else {
-                out.append(ChatMessage(role: .user, content: "[Tool output]\n" + combined))
-                continue
-            }
-            let u = messages[i]
-            out.append(ChatMessage(role: .user, content: combined + "\n\n" + u.content))
-            i = messages.index(after: i)
+            out.append(ChatMessage(role: .user, content: "[Tool output]\n" + combined))
         }
         return out
     }
