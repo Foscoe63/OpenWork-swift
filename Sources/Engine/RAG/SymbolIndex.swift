@@ -9,9 +9,10 @@ import Foundation
 ///
 /// It is a regex scan, not a compiler. It reads what a declaration line looks like in each
 /// language and nothing more: no macro expansion, no conditional compilation, no generated code.
-/// So it can miss a declaration written unusually, and it will report a commented-out one. That is
-/// acceptable for navigation and not acceptable as proof of absence — `find_symbol` finding
-/// nothing means "not found by this scan", which is why the tool says so and points at `grep`.
+/// Line and block comments are skipped, but a declaration written unusually can still be missed.
+/// That is acceptable for navigation and not acceptable as proof of absence — `find_symbol`
+/// finding nothing means "not found by this scan", which is why the tool says so and points at
+/// `grep`.
 public actor SymbolIndex {
     public static let shared = SymbolIndex()
 
@@ -154,12 +155,19 @@ public actor SymbolIndex {
     static func scan(path: String, content: String, ext: String) -> [Symbol] {
         guard let regexes = regexes(for: ext) else { return [] }
         var out: [Symbol] = []
+        // Tracks `/* … */`, so a declaration commented out in a block is not reported as real.
+        // Nesting is counted because Swift allows it; languages that do not are unaffected, since
+        // an unnested close still returns the depth to zero.
+        var blockCommentDepth = 0
 
         for (offset, rawLine) in content.components(separatedBy: "\n").enumerated() {
             let line = String(rawLine)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            // Cheap comment rejection. It does not understand block comments, which is why the
-            // doc comment says a commented-out declaration can still be reported.
+            let wasInBlockComment = blockCommentDepth > 0
+            blockCommentDepth = Self.blockCommentDepth(after: line, startingAt: blockCommentDepth, ext: ext)
+            if wasInBlockComment { continue }
+
+            // Cheap line-comment rejection.
             if trimmed.hasPrefix("//") || trimmed.hasPrefix("#") || trimmed.hasPrefix("*") { continue }
 
             let range = NSRange(line.startIndex..., in: line)
@@ -180,6 +188,56 @@ public actor SymbolIndex {
             }
         }
         return out
+    }
+
+    /// Block-comment depth after reading `line`, given the depth before it.
+    ///
+    /// Scans character by character rather than counting occurrences, so a `/*` appearing after a
+    /// `//` on the same line, or either marker inside a string literal, does not open a comment
+    /// that never closes and silently blank the rest of the file.
+    static func blockCommentDepth(after line: String, startingAt depth: Int, ext: String) -> Int {
+        guard Self.hasBlockComments(ext) else { return 0 }
+        var depth = depth
+        var inString = false
+        var previous: Character? = nil
+        var index = line.startIndex
+
+        while index < line.endIndex {
+            let character = line[index]
+            let next = line.index(after: index)
+            let following = next < line.endIndex ? line[next] : nil
+
+            if depth == 0 && inString {
+                if character == "\"" && previous != "\\" { inString = false }
+            } else if depth == 0 {
+                if character == "\"" {
+                    inString = true
+                } else if character == "/" && following == "/" {
+                    return depth  // Rest of the line is a line comment.
+                } else if character == "/" && following == "*" {
+                    depth += 1
+                    index = next
+                }
+            } else {
+                if character == "*" && following == "/" {
+                    depth -= 1
+                    index = next
+                } else if character == "/" && following == "*" {
+                    depth += 1
+                    index = next
+                }
+            }
+
+            previous = character
+            index = line.index(after: index)
+        }
+        return depth
+    }
+
+    /// Languages whose `/* … */` this understands. Python and Ruby have no block comment form,
+    /// and treating `#` runs as one would be wrong.
+    private static func hasBlockComments(_ ext: String) -> Bool {
+        !["py", "rb"].contains(ext)
     }
 
     // MARK: - Lookup

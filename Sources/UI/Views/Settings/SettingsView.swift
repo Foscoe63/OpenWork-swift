@@ -865,6 +865,23 @@ public struct SettingsView: View {
                     }
                 }
 
+                SettingsRow(
+                    title: "Preload Model at Launch",
+                    subtitle: "Load your default in-process MLX model on startup, so the first message does not wait for it",
+                    icon: "bolt.horizontal.circle"
+                ) {
+                    // The setting was stored but had no control and no reader, so it could never
+                    // be turned on and would have done nothing if it had been.
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.autoLoadTopMLXModelOnLaunch },
+                        set: { val in
+                            appState.settings.autoLoadTopMLXModelOnLaunch = val
+                            appState.updateSettings(appState.settings)
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                }
+
                 SettingsRow(title: "LM Studio Library (~/.cache/lm-studio)", subtitle: "Discover safetensors and MLX weights from LM Studio", icon: "desktopcomputer") {
                     Toggle("", isOn: Binding(
                         get: { appState.settings.scanLMStudioModels },

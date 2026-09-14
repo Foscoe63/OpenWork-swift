@@ -261,6 +261,32 @@ public final class AppState: ObservableObject {
 
         // Scan local MLX models
         rescanMLXModels()
+
+        if settings.autoLoadTopMLXModelOnLaunch {
+            preloadDefaultMLXModel()
+        }
+    }
+
+    /// Warm the in-process MLX model the next turn will most likely need.
+    ///
+    /// The first turn against a large local checkpoint pays minutes of loading while the user
+    /// waits on an answer. Done at launch, that cost lands where nothing is blocked on it.
+    ///
+    /// Preloads the *configured* model rather than whichever is flagged a top pick: loading a
+    /// model the user has not selected would spend tens of gigabytes of memory on a guess, and the
+    /// turn would then load the real one anyway.
+    private func preloadDefaultMLXModel() {
+        let modelId = settings.defaultModelId
+        guard !modelId.isEmpty else { return }
+        // Only for the in-process path. A server-backed provider loads on its own side, and a
+        // cloud model has nothing to load.
+        let provider = providers.first { $0.id == settings.defaultProviderId }
+        guard provider?.kind == .omlx || provider?.kind == .vmlx else { return }
+        guard LocalMLXEngine.shared.resolveLocalModelDirectory(modelId: modelId, settings: settings) != nil else {
+            // Not on disk. Preloading would start a multi-gigabyte download nobody asked for.
+            return
+        }
+        NativeMLXService.shared.preload(modelId: modelId)
     }
 
     public var currentWorkspace: Workspace {

@@ -423,6 +423,24 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         }
     }
 
+    /// Start loading `modelId` into memory without waiting for it.
+    ///
+    /// The first turn against a large local model pays the whole load — minutes, for a 35GB
+    /// checkpoint — while the user watches a spinner. Doing it at launch, when they are not
+    /// waiting on an answer, moves that cost somewhere it does not block anything.
+    ///
+    /// Fire-and-forget on purpose: a failure here is not worth surfacing, because nothing has been
+    /// asked for yet, and the real request will report it properly. `getOrLoadContainer` already
+    /// shares one in-flight load per model, so a turn starting mid-preload joins it rather than
+    /// loading a second copy.
+    public func preload(modelId: String) {
+        guard !modelId.isEmpty else { return }
+        guard lock.withLock({ loadedContainers[modelId] == nil && inFlightLoads[modelId] == nil }) else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            _ = try? await self?.getOrLoadContainer(modelId: modelId, onProgress: { _ in })
+        }
+    }
+
     private func getOrLoadContainer(
         modelId: String,
         onProgress: @Sendable @escaping (String) -> Void
@@ -615,6 +633,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     public func isModelLoaded(_ modelId: String) -> Bool { false }
     @discardableResult public func unload(modelId: String) -> Bool { false }
     @discardableResult public func unloadAll() -> Int { 0 }
+    public func preload(modelId: String) {}
 
     public func testConnection(provider: ModelProvider) async throws -> Bool { return true }
     public func listModels(provider: ModelProvider) async throws -> [ModelInfo] { return provider.models }

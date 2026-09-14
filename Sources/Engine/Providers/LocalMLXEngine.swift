@@ -321,9 +321,14 @@ public final class LocalMLXEngine: @unchecked Sendable {
 
         appendIfExists(home.appendingPathComponent(".grizzyclaw/mlx_models", isDirectory: true))
         appendIfExists(home.appendingPathComponent("Library/Application Support/GrizzyClaw/mlx_models", isDirectory: true))
-        appendIfExists(home.appendingPathComponent(".lmstudio/models", isDirectory: true))
-        appendIfExists(home.appendingPathComponent(".cache/lm-studio/models", isDirectory: true))
-        appendIfExists(home.appendingPathComponent("Library/Application Support/LM Studio/models", isDirectory: true))
+        // The settings toggle for this existed but nothing read it, so turning LM Studio discovery
+        // off still listed its models. Matches the Hugging Face guard below: nil settings means
+        // "no preference expressed", which scans.
+        if settings?.scanLMStudioModels != false {
+            appendIfExists(home.appendingPathComponent(".lmstudio/models", isDirectory: true))
+            appendIfExists(home.appendingPathComponent(".cache/lm-studio/models", isDirectory: true))
+            appendIfExists(home.appendingPathComponent("Library/Application Support/LM Studio/models", isDirectory: true))
+        }
 
         if settings?.scanHuggingFaceCache != false {
             appendIfExists(home.appendingPathComponent(".cache/huggingface/hub", isDirectory: true))

@@ -6,10 +6,10 @@ Written 2026-09-14. Everything below is verified against the code, not remembere
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` | 319 |
+| OpenWork-Swift | yes, `main` | 331 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
-OpenWork went from 13 tests to 319 over this work.
+OpenWork went from 13 tests to 331 over this work. Released as 1.1.0.
 
 ---
 
@@ -70,15 +70,13 @@ off. A turn that produced only reasoning also no longer renders as an empty bubb
 `defaultReasoningEffort` is wired for *new* agents only. Still unread:
 `useTranslucentBackground`, `compactSidebar`, `showInterAgentCommunicationLogs`,
 `enableAgentCollaborationRoom`, `voiceInputEnabled`, `voiceSynthesisEnabled`,
-`speechVoiceIdentifier`, `imageGenerationEnabled`, `scanLMStudioModels`,
-`autoLoadTopMLXModelOnLaunch`, `developerMode`, `verboseLogging`, and the cloud fields
-(`cloudSyncEnabled`, `cloudControlPlaneUrl`, `cloudAccountEmail`, `cloudOrganizationName`,
-`autoCheckForUpdates`).
+`speechVoiceIdentifier`, `imageGenerationEnabled`, `developerMode`, `verboseLogging`, and the
+cloud fields (`cloudSyncEnabled`, `cloudControlPlaneUrl`, `cloudAccountEmail`,
+`cloudOrganizationName`, `autoCheckForUpdates`).
 
-These were left deliberately rather than deleted: several look like surface for planned features
+These are left deliberately rather than deleted: several look like surface for planned features
 (voice, image generation, the collaboration room), and the cloud fields are two whole settings
-pages. Deleting those is a product decision, not a cleanup. `scanLMStudioModels` and
-`autoLoadTopMLXModelOnLaunch` are the cheapest genuine wins left.
+pages. Deleting those is a product decision, not a cleanup — it needs your call, not mine.
 
 ### Worth building next
 
@@ -86,8 +84,10 @@ pages. Deleting those is a product decision, not a cleanup. `scanLMStudioModels`
   declared; the next hop is finding references safely.
 - **Narrowed re-runs for more runners.** Only SwiftPM, `go test` and pytest can be narrowed.
   cargo and npm return nil, correctly, and stay whole-suite.
-- **`find_symbol` block comments.** Line-leading `//` and `#` are skipped; a declaration inside a
-  `/* … */` block is still reported. Cheap to fix, and the doc comment already admits it.
+- **Notarised releases.** `OpenWork.zip` on the GitHub releases is ad-hoc signed, so macOS blocks
+  it on first launch and users need right-click → Open. This machine has no signing identity
+  (`security find-identity -v -p codesigning` reports none) and no notarytool profile, so it needs
+  your Developer ID and an App Store Connect key before the release workflow can be automated.
 
 ### Explicitly decided against — with reasons, so they are not re-proposed
 
@@ -176,7 +176,7 @@ again. `omlx-local` is enabled, which is the one that matters for in-process MLX
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 319 tests
+$SWIFT test                    # 331 tests
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build   # App Intents metadata
 ```

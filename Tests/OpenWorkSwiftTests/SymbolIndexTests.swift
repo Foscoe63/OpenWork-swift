@@ -153,3 +153,71 @@ final class SymbolIndexTests: XCTestCase {
         XCTAssertTrue(text.contains("[type] Sources/P.swift:12: struct Parser {"))
     }
 }
+
+/// A declaration inside `/* … */` is not a declaration. Reporting one sends the reader to a line
+/// that does not define anything — worse than a miss, because it looks like an answer.
+final class SymbolIndexBlockCommentTests: XCTestCase {
+
+    private func scan(_ content: String, ext: String = "swift") -> [SymbolIndex.Symbol] {
+        SymbolIndex.scan(path: "F", content: content, ext: ext)
+    }
+
+    func testDeclarationsInsideABlockCommentAreSkipped() {
+        let symbols = scan("""
+        /*
+        struct OldParser {
+            func parse() {}
+        }
+        */
+        struct Parser {}
+        """)
+        XCTAssertEqual(symbols.map(\.name), ["Parser"])
+    }
+
+    func testCodeAfterTheBlockClosesIsStillFound() {
+        let symbols = scan("/* note */\nstruct Parser {}")
+        XCTAssertEqual(symbols.map(\.name), ["Parser"])
+    }
+
+    func testNestedBlocksClosePairwise() {
+        let symbols = scan("""
+        /* outer /* inner */ still commented
+        struct Hidden {}
+        */
+        struct Visible {}
+        """)
+        XCTAssertEqual(symbols.map(\.name), ["Visible"])
+    }
+
+    /// The failure that matters: a `/*` inside a string or after `//` must not open a comment
+    /// that never closes, silently blanking every declaration below it.
+    func testASlashStarInsideAStringDoesNotSwallowTheFile() {
+        let symbols = scan("""
+        let pattern = "/*"
+        struct Parser {}
+        """)
+        XCTAssertTrue(symbols.contains { $0.name == "Parser" })
+    }
+
+    func testASlashStarAfterALineCommentDoesNotSwallowTheFile() {
+        let symbols = scan("""
+        // see /* the old version
+        struct Parser {}
+        """)
+        XCTAssertTrue(symbols.contains { $0.name == "Parser" })
+    }
+
+    func testAnEscapedQuoteDoesNotEndTheStringEarly() {
+        let symbols = scan("""
+        let quoted = "he said \\" /*"
+        struct Parser {}
+        """)
+        XCTAssertTrue(symbols.contains { $0.name == "Parser" })
+    }
+
+    /// Python and Ruby have no block comment form; treating `/*` as one would be wrong.
+    func testLanguagesWithoutBlockCommentsAreUnaffected() {
+        let symbols = SymbolIndex.scan(path: "F", content: "x = \"/*\"\nclass Handler:\n    pass", ext: "py")
+        XCTAssertEqual(symbols.map(\.name), ["Handler"])
+    }
+}
