@@ -149,7 +149,60 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
             }
+            await FileCheckpointStore.shared.record(path: fullPath)
             return writeFile(path: fullPath, content: content, startTime: startTime)
+
+        case "git_status":
+            let out = GitTools.status(in: workspace.folderPath)
+            return ToolExecutionResult(
+                success: out.isRepository, output: out.text,
+                error: out.isRepository ? nil : out.text,
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
+        case "git_diff":
+            let target = (dict["path"] as? String) ?? (dict["file"] as? String)
+            let staged = (dict["staged"] as? Bool) ?? false
+            let out = GitTools.diff(in: workspace.folderPath, path: target, staged: staged)
+            return ToolExecutionResult(
+                success: out.isRepository, output: out.text,
+                error: out.isRepository ? nil : out.text,
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
+        case "git_log":
+            let count = (dict["count"] as? Int) ?? (dict["limit"] as? Int) ?? 10
+            let out = GitTools.log(in: workspace.folderPath, count: count)
+            return ToolExecutionResult(
+                success: out.isRepository, output: out.text,
+                error: out.isRepository ? nil : out.text,
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
+        case "changed_files":
+            let summary = await FileCheckpointStore.shared.summary()
+            return ToolExecutionResult(
+                success: true,
+                output: FileCheckpointStore.describe(summary, root: workspace.folderPath),
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
+        case "revert_changes":
+            let summary = await FileCheckpointStore.shared.summary()
+            guard !summary.isEmpty else {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "Nothing to revert — this turn has not changed any files.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            let outcome = await FileCheckpointStore.shared.revertTurn()
+            return ToolExecutionResult(
+                success: outcome.failed.isEmpty,
+                output: FileCheckpointStore.describe(outcome, root: workspace.folderPath),
+                error: outcome.failed.isEmpty ? nil : "Some files could not be reverted.",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
 
         case "grep", "search_code", "code_search":
             let pattern = (dict["pattern"] as? String) ?? (dict["query"] as? String) ?? (dict["regex"] as? String) ?? ""
@@ -236,6 +289,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 ?? sandboxDenial(for: fullTo, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
             }
+            await FileCheckpointStore.shared.record(path: fullTo)
             do {
                 let toDir = (fullTo as NSString).deletingLastPathComponent
                 try fileManager.createDirectory(atPath: toDir, withIntermediateDirectories: true)
@@ -266,6 +320,8 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 ?? sandboxDenial(for: fullTo, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
             }
+            await FileCheckpointStore.shared.record(path: fullFrom)
+            await FileCheckpointStore.shared.record(path: fullTo)
             do {
                 let toDir = (fullTo as NSString).deletingLastPathComponent
                 try fileManager.createDirectory(atPath: toDir, withIntermediateDirectories: true)
@@ -293,6 +349,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
             }
+            await FileCheckpointStore.shared.record(path: fullPath)
             do {
                 if fileManager.fileExists(atPath: fullPath) {
                     try fileManager.removeItem(atPath: fullPath)
@@ -380,6 +437,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                         durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                     )
                 }
+                await FileCheckpointStore.shared.record(path: fullPath)
                 let updated: String
                 if replaceAll {
                     updated = existing.replacingOccurrences(of: oldString, with: newString)

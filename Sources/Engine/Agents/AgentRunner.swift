@@ -737,6 +737,14 @@ public final class AgentRunner {
             availableTools = Self.filterToolsForPlanMode(availableTools)
         }
 
+        // Undo is scoped to one turn, so the window opens here rather than at session start.
+        await FileCheckpointStore.shared.beginTurn(label: session.id)
+
+        // Standing rules that live in the repository itself.
+        let instructionsSection = inventoryPrompt
+            ? ""
+            : ProjectInstructions.promptBlock(ProjectInstructions.load(folderPath: workspace.folderPath))
+
         // Where the agent actually is. Without this it guesses paths and build commands every turn.
         let workspaceSection = inventoryPrompt
             ? ""
@@ -797,10 +805,12 @@ public final class AgentRunner {
             systemPromptWithTools = """
             \(agent.systemPrompt)
             \(workspaceSection)
+            \(instructionsSection)
 
             You are an advanced, fully autonomous coding, systems, and research agent.
             Built-in tools (prefer native function/tool calling):
             file_read (supports offset/limit), file_write, edit_file, file_list, grep, glob,
+            git_status, git_diff, git_log, changed_files, revert_changes,
             file_copy, file_move, file_delete,
             terminal_command/run_command, fetch_url, web_search, ask_user, exit_plan_mode,
             todo_write, calculator, get_current_date, document_extract,
@@ -1588,6 +1598,9 @@ public final class AgentRunner {
             return "This modifies files on disk."
         case "file_delete", "delete_file", "rm":
             return "This permanently deletes a file from disk."
+        case "revert_changes":
+            // Undo is itself destructive: it discards everything the turn produced.
+            return "This discards every file change made during this turn."
         case "terminal_command", "run_command":
             if settings.terminalSafetyLevel == .alwaysAsk {
                 return "Runs a shell command on your Mac (Terminal Safety Level: Always Ask Confirmation)."

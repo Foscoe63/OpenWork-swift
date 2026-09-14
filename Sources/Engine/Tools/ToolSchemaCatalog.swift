@@ -69,6 +69,47 @@ public enum ToolSchemaCatalog {
                 parametersJsonSchema: schemas["glob"]!
             ),
             Tool(
+                id: "git_status",
+                name: "git_status",
+                displayName: "Git Status",
+                description: "Show the current branch and which files are modified, added, deleted or untracked.",
+                category: .system,
+                parametersJsonSchema: schemas["git_status"]!
+            ),
+            Tool(
+                id: "git_diff",
+                name: "git_diff",
+                displayName: "Git Diff",
+                description: "Show a unified diff of uncommitted changes. Use this to check your own work before reporting it done.",
+                category: .system,
+                parametersJsonSchema: schemas["git_diff"]!
+            ),
+            Tool(
+                id: "git_log",
+                name: "git_log",
+                displayName: "Git Log",
+                description: "Show recent commits, newest first.",
+                category: .system,
+                parametersJsonSchema: schemas["git_log"]!
+            ),
+            Tool(
+                id: "changed_files",
+                name: "changed_files",
+                displayName: "Changed Files",
+                description: "List the files this turn has created, modified or deleted.",
+                category: .files,
+                parametersJsonSchema: schemas["changed_files"]!
+            ),
+            Tool(
+                id: "revert_changes",
+                name: "revert_changes",
+                displayName: "Revert This Turn",
+                description: "Undo every file change made during this turn, restoring the files to how they were when it began. Use when an edit went wrong.",
+                category: .files,
+                parametersJsonSchema: schemas["revert_changes"]!,
+                requiresApproval: true
+            ),
+            Tool(
                 id: "fetch_url",
                 name: "fetch_url",
                 displayName: "Fetch URL",
@@ -112,6 +153,11 @@ public enum ToolSchemaCatalog {
         "file_edit": #"{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}"#,
         "grep": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Regular expression to search for"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"include":{"type":"string","description":"Glob limiting which files are searched, e.g. **/*.swift"},"case_insensitive":{"type":"boolean"},"limit":{"type":"integer","description":"Max matching lines (default 100)"}},"required":["pattern"]}"#,
         "glob": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Path glob, e.g. **/*.swift or Sources/**/Tool*.swift"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"limit":{"type":"integer","description":"Max paths (default 200)"}},"required":["pattern"]}"#,
+        "git_status": #"{"type":"object","properties":{}}"#,
+        "git_diff": #"{"type":"object","properties":{"path":{"type":"string","description":"Limit the diff to this path"},"staged":{"type":"boolean","description":"Show staged changes instead of the working tree"}},"required":[]}"#,
+        "git_log": #"{"type":"object","properties":{"count":{"type":"integer","description":"How many commits (default 10)"}},"required":[]}"#,
+        "changed_files": #"{"type":"object","properties":{}}"#,
+        "revert_changes": #"{"type":"object","properties":{}}"#,
         "file_list": #"{"type":"object","properties":{"path":{"type":"string","description":"Directory path"}},"required":["path"]}"#,
         "file_copy": #"{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"}},"required":["source","destination"]}"#,
         "file_move": #"{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"}},"required":["source","destination"]}"#,
