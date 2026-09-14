@@ -41,6 +41,12 @@ jobs:
           restore-keys: |
             spm-${{ runner.os }}-
 
+      # As of Xcode 26 the Metal toolchain is a separately downloadable component rather
+      # than part of the base install. mlx-swift compiles .metal kernel sources, so without
+      # this the build fails at CompileMetalFile with "missing Metal Toolchain".
+      - name: Install Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
       # Builds from the committed project.pbxproj rather than regenerating, so CI cannot
       # drift on an xcodegen version difference. If you change project.yml, run
       # `xcodegen generate` and commit the result.
