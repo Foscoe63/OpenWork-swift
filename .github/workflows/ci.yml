@@ -44,6 +44,13 @@ jobs:
       # Builds from the committed project.pbxproj rather than regenerating, so CI cannot
       # drift on an xcodegen version difference. If you change project.yml, run
       # `xcodegen generate` and commit the result.
+      #
+      # mlx-swift ships a CudaBuild build-tool plugin, and swift-huggingface uses macros.
+      # Xcode gates both behind an interactive trust prompt that a developer answers once
+      # per machine; a fresh runner has never answered it and nobody is there to click, so
+      # the build fails with "must be enabled before it can be used". The skip flags accept
+      # them non-interactively — safe here because the plugin set is pinned by
+      # Package.resolved, but it does mean plugins run without a trust gate.
       - name: Test
         run: |
           set -o pipefail
@@ -52,6 +59,8 @@ jobs:
             -scheme OpenWorkSwift \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath .build/ci \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="" \
