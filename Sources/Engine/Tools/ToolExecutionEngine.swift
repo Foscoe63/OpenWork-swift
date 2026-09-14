@@ -265,6 +265,30 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
 
+        case "find_symbol", "symbol_search":
+            let name = (dict["name"] as? String) ?? (dict["symbol"] as? String) ?? (dict["query"] as? String) ?? ""
+            guard !name.isEmpty else {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "find_symbol requires a `name` — the symbol to locate.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            let symbolRootRaw = (dict["path"] as? String) ?? (dict["directory"] as? String) ?? workspace.folderPath
+            let symbolRoot = symbolRootRaw.hasPrefix("/")
+                ? symbolRootRaw
+                : (workspace.folderPath as NSString).appendingPathComponent(symbolRootRaw)
+            if let denial = sandboxDenial(for: symbolRoot, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
+            let symbolLimit = (dict["limit"] as? Int) ?? (dict["max_results"] as? Int) ?? 20
+            let symbols = await SymbolIndex.shared.lookup(name: name, root: symbolRoot, limit: symbolLimit)
+            return ToolExecutionResult(
+                success: true,
+                output: SymbolIndex.format(symbols, name: name),
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
         case "grep", "search_code", "code_search":
             let pattern = (dict["pattern"] as? String) ?? (dict["query"] as? String) ?? (dict["regex"] as? String) ?? ""
             guard !pattern.isEmpty else {

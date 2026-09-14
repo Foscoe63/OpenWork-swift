@@ -70,6 +70,14 @@ public enum ToolSchemaCatalog {
                 parametersJsonSchema: schemas["grep"]!
             ),
             Tool(
+                id: "find_symbol",
+                name: "find_symbol",
+                displayName: "Find Definition",
+                description: "Find where a type, function, property or alias is declared, by name. Use this for \"where is X defined\" — it returns declarations only, not call sites. It is a declaration scan, not a compiler: finding nothing is not proof of absence, so fall back to grep.",
+                category: .files,
+                parametersJsonSchema: schemas["find_symbol"]!
+            ),
+            Tool(
                 id: "glob",
                 name: "glob",
                 displayName: "Find Files",
@@ -180,6 +188,7 @@ public enum ToolSchemaCatalog {
         "grep": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Regular expression to search for"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"include":{"type":"string","description":"Glob limiting which files are searched, e.g. **/*.swift"},"case_insensitive":{"type":"boolean"},"limit":{"type":"integer","description":"Max matching lines (default 100)"}},"required":["pattern"]}"#,
         "glob": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Path glob, e.g. **/*.swift or Sources/**/Tool*.swift"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"limit":{"type":"integer","description":"Max paths (default 200)"}},"required":["pattern"]}"#,
         "build_project": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred build command"}},"required":[]}"#,
+        "find_symbol": #"{"type":"object","properties":{"name":{"type":"string","description":"Symbol name to locate."},"path":{"type":"string","description":"Directory to search; defaults to the workspace."},"limit":{"type":"integer"}},"required":["name"]}"#,
         "run_tests": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred test command"},"only_failing":{"type":"boolean","description":"Re-run only the tests that failed in the previous run. Falls back to the whole suite, and says so, when there is nothing recorded or the runner cannot be narrowed."}},"required":[]}"#,
         "git_status": #"{"type":"object","properties":{}}"#,
         "git_diff": #"{"type":"object","properties":{"path":{"type":"string","description":"Limit the diff to this path"},"staged":{"type":"boolean","description":"Show staged changes instead of the working tree"}},"required":[]}"#,

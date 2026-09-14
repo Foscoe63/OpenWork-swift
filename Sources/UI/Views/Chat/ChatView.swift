@@ -2,6 +2,7 @@ import SwiftUI
 
 public struct ChatView: View {
     @State private var showingChangeReview = false
+    @State private var showingSessionChangeReview = false
     @State private var turnChangeCount = 0
     @ObservedObject var appState: AppState
 
@@ -41,8 +42,9 @@ public struct ChatView: View {
             }
 
             // A turn that touched files gets a review affordance, so the agent's prose is not
-            // the only account of what happened on disk.
-            if turnChangeCount > 0 {
+            // the only account of what happened on disk. The session-wide count comes from the
+            // transcript, so it survives past the turn the checkpoint store covers.
+            if turnChangeCount > 0 || sessionChangeCount > 0 {
                 changeReviewBar
             }
 
@@ -59,6 +61,13 @@ public struct ChatView: View {
             )
             .frame(minWidth: 780, minHeight: 520)
         }
+        .sheet(isPresented: $showingSessionChangeReview) {
+            SessionChangeReviewView(
+                appState: appState,
+                root: appState.currentWorkspace.folderPath
+            )
+            .frame(minWidth: 780, minHeight: 520)
+        }
         .task(id: appState.isGenerating) {
             // Recount when a turn finishes rather than polling.
             await refreshTurnChangeCount()
@@ -71,13 +80,22 @@ public struct ChatView: View {
             Image(systemName: "doc.badge.ellipsis")
                 .font(.system(size: 11))
                 .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
-            Text("\(turnChangeCount) file\(turnChangeCount == 1 ? "" : "s") changed this turn")
+            Text(turnChangeCount > 0
+                 ? "\(turnChangeCount) file\(turnChangeCount == 1 ? "" : "s") changed this turn"
+                 : "\(sessionChangeCount) file\(sessionChangeCount == 1 ? "" : "s") changed this session")
                 .font(.system(size: 11.5))
                 .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
             Spacer()
-            Button("Review changes") { showingChangeReview = true }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+            if turnChangeCount > 0 {
+                Button("Review turn") { showingChangeReview = true }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            if sessionChangeCount > 0 {
+                Button("Review session") { showingSessionChangeReview = true }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
@@ -87,6 +105,14 @@ public struct ChatView: View {
                 .fill(ThemeColors.border(for: appState.settings.theme))
                 .frame(height: 1)
         }
+    }
+
+    /// Read from the transcript rather than the checkpoint store, which only covers this turn.
+    private var sessionChangeCount: Int {
+        SessionChangeSummary.changedFiles(
+            in: appState.currentSession?.messages ?? [],
+            workspaceRoot: appState.currentWorkspace.folderPath
+        ).count
     }
 
     private func refreshTurnChangeCount() async {
