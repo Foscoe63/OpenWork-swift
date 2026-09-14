@@ -50,6 +50,10 @@ targets:
     sources:
       - path: Sources
       - path: Resources
+    scheme:
+      testTargets:
+        - OpenWorkSwiftTests
+      gatherCoverageData: true
     dependencies:
       - package: Yams
         product: Yams
@@ -74,6 +78,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.openwork.OpenWorkSwift
+        # PRODUCT_NAME is "OpenWork" (the shipped .app name), which would otherwise make the
+        # Swift module "OpenWork" too. Tests do `@testable import OpenWorkSwift`, matching the
+        # SPM module, so pin the module name independently of the product name.
+        PRODUCT_MODULE_NAME: OpenWorkSwift
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
         INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 OpenWork. All rights reserved."
         INFOPLIST_KEY_CFBundleDisplayName: "OpenWork"
@@ -87,3 +95,25 @@ targets:
         OTHER_CPLUSPLUSFLAGS: "$(inherited) -std=c++17 -Wno-c++17-extensions"
         OTHER_CFLAGS: "$(inherited) -Wno-c++17-extensions"
         OTHER_METAL_FLAGS: "$(inherited) -Wno-c++17-extensions"
+
+  OpenWorkSwiftTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Tests/OpenWorkSwiftTests
+    dependencies:
+      # Sets TEST_HOST/BUNDLE_LOADER so `@testable import OpenWorkSwift` resolves.
+      - target: OpenWorkSwift
+    settings:
+      base:
+        # The base settings force PRODUCT_NAME to "OpenWork" for every target; the
+        # test bundle needs its own name or it collides with the app product.
+        PRODUCT_NAME: "OpenWorkSwiftTests"
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openwork.OpenWorkSwiftTests
+        GENERATE_INFOPLIST_FILE: YES
+        OTHER_SWIFT_FLAGS: "$(inherited) -strict-concurrency=minimal"
+        # XcodeGen derives TEST_HOST from the target name and lands on OpenWorkSwift.app,
+        # but the app ships as OpenWork.app. Point at the real product.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OpenWork.app/Contents/MacOS/OpenWork"
+        BUNDLE_LOADER: "$(TEST_HOST)"
