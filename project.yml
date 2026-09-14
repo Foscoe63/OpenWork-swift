@@ -90,7 +90,23 @@ targets:
         SWIFT_EMIT_LOC_STRINGS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
         COMBINE_HIDPI_IMAGES: YES
+        # Signing lives here, not in the .xcodeproj. XcodeGen rewrites that file from this spec
+        # on every `xcodegen generate`, so anything set through Xcode's Signing & Capabilities
+        # pane survives only until the next regeneration — and the project file is regenerated
+        # whenever a source file is added.
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 5XKHL47YG3
+        CODE_SIGN_IDENTITY: "Apple Development"
+        # macOS-specific ad-hoc override, which beats the line above on this platform.
+        #
+        # It is here because there is currently no signing certificate installed
+        # (`security find-identity -v` reports none), and without this the build would fail
+        # looking for one. "Apple Development" is also the wrong certificate for distribution:
+        # shipping a notarised app outside the App Store needs "Developer ID Application".
+        #
+        # Once that certificate is installed, delete this line and set
+        # CODE_SIGN_IDENTITY to "Developer ID Application" to produce a signable build.
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
         OTHER_SWIFT_FLAGS: "$(inherited) -strict-concurrency=minimal"
         OTHER_CPLUSPLUSFLAGS: "$(inherited) -std=c++17 -Wno-c++17-extensions"
         OTHER_CFLAGS: "$(inherited) -Wno-c++17-extensions"
