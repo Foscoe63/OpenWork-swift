@@ -6,10 +6,10 @@ Written 2026-09-14. Everything below is verified against the code, not remembere
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` | 331 |
+| OpenWork-Swift | yes, `main` | 362 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
-OpenWork went from 13 tests to 331 over this work. Released as 1.1.0.
+OpenWork went from 13 tests to 362 over this work. Released as 1.1.0.
 
 ---
 
@@ -176,10 +176,16 @@ again. `omlx-local` is enabled, which is the one that matters for in-process MLX
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 331 tests
+$SWIFT test                    # 362 tests
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build   # App Intents metadata
+Scripts/check-curated-models.sh   # after editing the curated model list
 ```
+
+That last one is a script rather than a test because it asks a remote host what exists, and CI
+should not go red because Hugging Face is rate-limiting. It is worth running periodically even
+without a code change: five of the fifteen curated ids had rotted into 401s, so the app was
+offering downloads that could not succeed.
 
 A real agent turn against the local model, without the GUI, is the highest-signal check — drive
 `AgentRunner.shared.run(...)` from a temporary test with the provider and model in settings. That
