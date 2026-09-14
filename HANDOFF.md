@@ -6,16 +6,63 @@ Written 2026-09-14. Everything below is verified against the code, not remembere
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` | 362 |
+| OpenWork-Swift | yes, `main` (`d0c13f0`) | 367 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
-OpenWork went from 13 tests to 362 over this work. Released as 1.1.0.
+OpenWork went from 13 tests to 367 over this work. Released as 1.1.0.
 
 ---
 
 ## What landed since the previous handoff
 
 Every item the previous handoff listed under "Do these" is done, plus the add-ons it listed.
+
+**Local MLX found the weights that were already on disk.** This is the one that mattered: the
+search roots named `/Volumes/Storage/Models` literally, and that path exists on no machine here.
+The real library is `/Volumes/Models/Models`. Every lookup therefore missed a complete 35GB
+`mlx-community/Ornith-1.5-35B-A3B-8bit`, and the chat turn fell through to fetching all 37.7GB
+from Hugging Face — behind a status chip reading `Loading MLX weights: 20%`, which is
+indistinguishable from loading a model you already have. A saved session showed 541MB of one shard
+out of eight. `knownMLXSearchRoots` now sweeps the mounted volumes for the usual library folder
+names instead of asserting one path: discovery went from nothing to 13 installed models, and
+Ornith loads in 5s and answers.
+
+The note below about `customMLXModelsDirectory` in "Settings changed on this machine" was the
+early warning and was read as housekeeping. It was stale — the field reads `""` — and nothing
+compensated for that, because the hardcoded root was wrong too. **A setting recorded there as
+load-bearing is worth re-verifying against the machine, not just against the code.**
+
+**A chat turn no longer downloads anything**, matching GrizzyBot's `MLXLocalGenerator`, which only
+ever loads a local directory URL. A model that does not resolve fails immediately with a message
+naming every root it searched, any partial download it found, and the models that *are* ready to
+run. The old failure could not tell the user that the folder holding their weights was never on
+the list.
+
+**One download mechanism.** `pullModel` shelled out to `huggingface-cli` — a Python tool that is
+not installed on a stock Mac, so the Local Models Download button could not succeed here at all —
+and wrote to `~/.openwork/mlx_models/<org>--<repo>/`, a *different* directory from the one the
+chat path's own downloader used, reporting progress as three hardcoded numbers (5%, 40%, 100%).
+It now calls the same in-process `HubClient`, writing to the hub cache that
+`resolveLocalModelDirectory` already searches, with real byte progress and resume on retry.
+
+**The load watchdog is a size-derived budget, not a stall timer.** Timing silence only works when
+the work reports progress, and `loadContainer(from:)` takes no progress handler — so with the
+download gone the watchdog saw one tick and then nothing, and would have called every load over
+180s wedged, including the 46GB Llama that loads in ~220s and works. The budget is now
+`max(180s, weightBytes / 25MB per s)` — 1508s for Ornith — with a 10s heartbeat so a long load
+looks alive rather than hung. Overrunning still costs only the one turn; the load keeps running
+and populates the cache.
+
+**One model resident at a time**, plus `MLX.Memory.cacheLimit` at half of physical memory, as
+GrizzyBot's generator does. Loading a second multi-gigabyte checkpoint beside the first is the
+fastest way to exhaust unified memory.
+
+**Three tests were passing for the wrong reason.** `LocalModelResolutionTests` called the real
+engine with the real root list, so it only passed on a machine whose scanned roots held no models.
+Name matching returns nil on ambiguity, so once discovery worked, a real library made correct code
+fail. `resolveLocalModelDirectory` and `scanInstalledModels` take an optional `roots:` so a test
+can state exactly where to look. **Any test that touches the file system through these should pass
+its own roots.**
 
 **KV cache reuse actually engages.** `mergeToolMessagesIntoFollowingUser` is append-only now, so
 the prefix only grows; and the comparison is a two-pointer walk that lets the session's *trailing*
@@ -80,6 +127,15 @@ pages. Deleting those is a product decision, not a cleanup — it needs your cal
 
 ### Worth building next
 
+- **Reasoning that never closes its tag.** Ornith sometimes emits its chain of thought with no
+  `</think>` at all, and `AssistantContentSanitizer` — correctly — only strips what it can prove is
+  reasoning, so that text reaches the user as the answer. Observed in a live run, not fixed:
+  guessing where reasoning ends without a delimiter is how you truncate a real answer. The
+  honest fix is probably to consume MLX's own reasoning channel where the model exposes one,
+  rather than to parse harder.
+- **Local Models needs to surface the search roots.** The download UI now works, but a user whose
+  library sits somewhere unusual still has no way to see where the app looked — that list exists
+  only in the not-downloaded error. `knownMLXSearchRoots` is the data; it wants a panel.
 - **Symbol-aware *rename*** on top of `SymbolIndex` — the index now knows where things are
   declared; the next hop is finding references safely.
 - **Narrowed re-runs for more runners.** Only SwiftPM, `go test` and pytest can be narrowed.
@@ -157,16 +213,22 @@ you are bisecting.
 
 ## Settings changed on this machine
 
-Not in git. `settings.json` had reverted to an Ollama default at some point and was set back:
+Not in git, and **verified by reading `settings.json`, not remembered** — the previous version of
+this table claimed `customMLXModelsDirectory` was `/Volumes/Models/Models` when the field was
+actually empty, which is half of why local MLX appeared broken.
 
-| Field | Now |
-|---|---|
-| `customMLXModelsDirectory` | `/Volumes/Models/Models` |
-| `defaultProviderId` | `omlx-local` |
-| `defaultModelId` | `DreamFoundries/Qwen3.6-35B-A3B-8bit` |
+| Field | Actually reads | Note |
+|---|---|---|
+| `customMLXModelsDirectory` | `""` | No longer load-bearing: `/Volumes/Models/Models` is found by the volume sweep. Set it only for a library somewhere else. |
+| `customHFCachePath` | `""` | |
+| `defaultProviderId` | `ollama-local` | Set this to `omlx-local` to exercise in-process MLX. |
+| `defaultModelId` | `llama3:latest` | |
 
 `providers.json`: `lmstudio-local.isEnabled` was flipped to true earlier; it currently reads false
 again. `omlx-local` is enabled, which is the one that matters for in-process MLX.
+
+The model library on this machine is `/Volumes/Models/Models` (13 loadable bundles). Nothing is in
+`~/.openwork/mlx_models/hub` — the abandoned 541MB partial Ornith download was deleted.
 
 ---
 
@@ -176,7 +238,7 @@ again. `omlx-local` is enabled, which is the one that matters for in-process MLX
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 362 tests
+$SWIFT test                    # 367 tests
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list
@@ -192,6 +254,22 @@ A real agent turn against the local model, without the GUI, is the highest-signa
 pattern found four bugs that unit tests could not, because each depended on the shape of real data:
 promotion picking the wrong array, a 40KB catalog truncated before parsing, a string where a list
 was expected, and a model id that matched no folder.
+
+It is cheap now, so there is no excuse for skipping it. A bare `NativeMLXService.shared.streamChat`
+against `mlx-community/Ornith-1.5-35B-A3B-8bit` completes in about 5s — the 35GB bundle is mmapped
+off `/Volumes/Models/Models`, not read through. That check is what showed the discovery bug was
+real rather than theoretical, and what proved the fix: before, the same call started a 37.7GB
+download; after, it answers.
+
+Two gotchas when reading the output of such a run:
+
+- **`streamChat` hands you the raw stream.** Reasoning models put their chain of thought straight
+  into `deltaText`, sometimes closed with a bare `</think>` and sometimes not closed at all. Run it
+  through `AssistantContentSanitizer.splitThinking` before judging what the user would have seen —
+  the app does, and text that looks like a leak in a raw harness is usually not one.
+- **A model whose `config.json` this `mlx-swift-lm` cannot parse fails at load, not at discovery.**
+  `OsaurusAI/Raptor-v0.5-8B-A1B-JANG_6M` resolves fine and then reports
+  `Missing field 'quantization.per_tensor.group_size'`. That is the model, not the lookup.
 
 Write its output to a file — `print` to a pipe is lost when MLX segfaults at exit. Delete the temp
 test afterwards.
