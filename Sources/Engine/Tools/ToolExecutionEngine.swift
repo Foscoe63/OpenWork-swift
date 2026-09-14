@@ -406,6 +406,25 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         case "terminal_command", "run_command":
             let command = dict["command"] as? String ?? ""
             let cwd = dict["cwd"] as? String ?? workspace.folderPath
+            // The shell was gated by command allowlist only, never by path: under
+            // `.allowAll` a redirect could write anywhere, and `cwd` was never checked at all.
+            // File tools have always been contained; this closes the way around them.
+            if let denial = sandboxDenial(for: cwd, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
+            if settings.sandboxAgentFileSystem,
+               let escape = Self.shellWriteTargetOutsideSandbox(
+                   command: command, workspace: workspace, settings: settings
+               ) {
+                return ToolExecutionResult(
+                    success: false,
+                    output: "",
+                    error: "Blocked by Sandbox Agent File System: this command writes to '\(escape)', "
+                        + "which is outside the workspace and authorized folders. Add it under "
+                        + "Settings → Advanced → Authorized Workspace Directories, or disable sandboxing.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
             switch settings.terminalSafetyLevel {
             case .allowAll:
                 break
@@ -959,15 +978,74 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     /// When "Sandbox Agent File System" is on, file tools may only touch the active workspace
     /// folder or a folder the user has explicitly authorized. Returns a failure result if the
     /// resolved path falls outside that set, or nil to allow the call to proceed.
+    /// An absolute path this command writes to that falls outside the sandbox, if any.
+    ///
+    /// Deliberately narrow. A shell command's effects cannot be decided statically, so this looks
+    /// only for the unambiguous cases — a redirect, or a known-mutating command's absolute target.
+    /// It is a guard rail on top of `terminalSafetyLevel`, not a substitute for it: the honest
+    /// containment boundary for arbitrary shell is the OS, not a parser.
+    static func shellWriteTargetOutsideSandbox(
+        command: String,
+        workspace: Workspace,
+        settings: AppSettings
+    ) -> String? {
+        var roots = settings.authorizedFolders.map { canonicalPath($0) }
+        roots.append(canonicalPath(workspace.folderPath))
+        func contained(_ path: String) -> Bool {
+            let p = canonicalPath(path)
+            return roots.contains { p == $0 || p.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
+        }
+
+        var candidates: [String] = []
+
+        // Redirects: > /path, >> /path, and tee /path.
+        if let regex = try? NSRegularExpression(pattern: #"(?:>>?|\btee\s+(?:-a\s+)?)\s*(~?/[^\s;|&'"]+)"#) {
+            let range = NSRange(command.startIndex..<command.endIndex, in: command)
+            for m in regex.matches(in: command, range: range) {
+                if let r = Range(m.range(at: 1), in: command) { candidates.append(String(command[r])) }
+            }
+        }
+
+        // Mutating commands given an absolute target.
+        let mutating = ["rm", "mv", "cp", "install", "ln", "chmod", "chown", "truncate", "dd", "mkdir", "rmdir", "touch"]
+        let head = command.split(whereSeparator: { " \t;|&".contains($0) }).first.map(String.init) ?? ""
+        if mutating.contains((head as NSString).lastPathComponent) {
+            for token in command.split(whereSeparator: { " \t;|&".contains($0) }).dropFirst() {
+                let t = String(token).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                if t.hasPrefix("/") || t.hasPrefix("~/") { candidates.append(t) }
+            }
+        }
+
+        return candidates.first { !contained($0) }
+    }
+
+    /// Resolve a path the way the filesystem will, so a prefix check cannot be walked around.
+    ///
+    /// `standardizingPath` collapses `..` but **does not follow symlinks**, so a link inside the
+    /// workspace pointing at `/etc` passed the containment check. Resolving symlinks closes that;
+    /// the last component is resolved separately because a path that does not exist yet (a file
+    /// about to be written) resolves to nothing otherwise.
+    static func canonicalPath(_ path: String) -> String {
+        let expanded = (path as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded)
+        if FileManager.default.fileExists(atPath: expanded) {
+            return url.resolvingSymlinksInPath().path
+        }
+        let parent = url.deletingLastPathComponent()
+        let resolvedParent = FileManager.default.fileExists(atPath: parent.path)
+            ? parent.resolvingSymlinksInPath()
+            : URL(fileURLWithPath: (parent.path as NSString).standardizingPath)
+        return resolvedParent.appendingPathComponent(url.lastPathComponent).path
+    }
+
     private func sandboxDenial(for rawPath: String, workspace: Workspace, settings: AppSettings, startTime: Double) -> ToolExecutionResult? {
         guard settings.sandboxAgentFileSystem else { return nil }
 
         let cleanPath = rawPath.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
-        let standardized = (cleanPath as NSString).expandingTildeInPath as NSString
-        let standardizedPath = standardized.standardizingPath
+        let standardizedPath = Self.canonicalPath(cleanPath)
 
-        var authorizedRoots = settings.authorizedFolders.map { (($0 as NSString).expandingTildeInPath as NSString).standardizingPath }
-        authorizedRoots.append((workspace.folderPath as NSString).standardizingPath)
+        var authorizedRoots = settings.authorizedFolders.map { Self.canonicalPath($0) }
+        authorizedRoots.append(Self.canonicalPath(workspace.folderPath))
 
         let isAuthorized = authorizedRoots.contains { root in
             standardizedPath == root || standardizedPath.hasPrefix(root.hasSuffix("/") ? root : root + "/")

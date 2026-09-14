@@ -312,7 +312,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         terminalSafetyLevel: TerminalSafetyLevel = .safeOnly,
         terminalShell: String = "/bin/zsh",
         allowWebAccess: Bool = true,
-        sandboxAgentFileSystem: Bool = false,
+        // Secure by default. Existing installs keep whatever they have: settings.json already
+        // carries this key, and decoding prefers the stored value over this default.
+        sandboxAgentFileSystem: Bool = true,
         theme: AppTheme = .dark,
         accentColor: AccentColorChoice = .purple,
         uiScalePercent: Int = 100,
