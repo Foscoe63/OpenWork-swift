@@ -54,6 +54,7 @@
 		6B641ED488E49AAE4395515D /* ToolSchemaCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55E928478698AC46A2D60903 /* ToolSchemaCatalog.swift */; };
 		72251496684DABFCA304890E /* MarkdownRichContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ECA7CF419254C40EF452B6E /* MarkdownRichContentView.swift */; };
 		7326BE3D31A21FA49ECF47DF /* MemoryItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9198D3660374674EB63D1B9B /* MemoryItem.swift */; };
+		7365397593E14ADD2B654C3B /* ProviderSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDF546DA8F25F9797DE2D5AB /* ProviderSelectionTests.swift */; };
 		7541761677F9CDDE431A07B7 /* TurnChangeReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7C609095F0EF9A28731120 /* TurnChangeReviewView.swift */; };
 		7A05CAB75855C32EB8BE173F /* ToolExecutionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33358F95FCB6834E6C3B970F /* ToolExecutionEngine.swift */; };
 		7C99F1F739268C755ED9A957 /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25661E20D282DDBBA1D85437 /* PersistenceManager.swift */; };
@@ -119,6 +120,7 @@
 		F316ACD45FDD8F34AE536B19 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39DBC95F559B997C4EE0A643 /* SettingsView.swift */; };
 		F373D879A0B774422F5344C0 /* ToolCallCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E7FA7A51B91D06DB9DE2451 /* ToolCallCardView.swift */; };
 		F3BF1AC15D981B7D70473970 /* SkillsAndMcpModals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 450CEB362948C974CE49355A /* SkillsAndMcpModals.swift */; };
+		F5E5F2394E0A63B6D6BE1E5F /* ProviderSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 213CD72B6546667365802600 /* ProviderSelection.swift */; };
 		F608B425E1790A0E5F46A357 /* AutomationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B984FB20AF137CEBC5579702 /* AutomationsView.swift */; };
 		F6C60563A07D0E8A3756D520 /* WorkspaceTerminalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A13ADAD85EED1BBBF5E7E55 /* WorkspaceTerminalSession.swift */; };
 		F6FC7E61AC63BFC514A95565 /* LLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA167C407CAC09E24C561388 /* LLMService.swift */; };
@@ -152,6 +154,7 @@
 		19B16487FA42DE1F3D6182EF /* AnthropicService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnthropicService.swift; sourceTree = "<group>"; };
 		1ECA7CF419254C40EF452B6E /* MarkdownRichContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRichContentView.swift; sourceTree = "<group>"; };
 		1F3BEC0D3E6701C736A67186 /* BuildDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildDiagnostics.swift; sourceTree = "<group>"; };
+		213CD72B6546667365802600 /* ProviderSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderSelection.swift; sourceTree = "<group>"; };
 		21443978C8F3B27E40CF280D /* Skill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Skill.swift; sourceTree = "<group>"; };
 		25661E20D282DDBBA1D85437 /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
 		25FB4259DFBB051D4299EAFA /* CodeSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeSearchTests.swift; sourceTree = "<group>"; };
@@ -244,6 +247,7 @@
 		E4A518CAF674B73150115924 /* PromptTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptTemplate.swift; sourceTree = "<group>"; };
 		EAD61E6B1C9B298CAA7C19C9 /* ToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolsView.swift; sourceTree = "<group>"; };
 		EDB91F2FFC2A72F3535B4FDF /* FileReadPaginationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileReadPaginationTests.swift; sourceTree = "<group>"; };
+		EDF546DA8F25F9797DE2D5AB /* ProviderSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderSelectionTests.swift; sourceTree = "<group>"; };
 		EEC0E4C5061C6751F97E4424 /* MockLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockLLMService.swift; sourceTree = "<group>"; };
 		EECEC1D8513ADA84C4FE9609 /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		EFA2E35571097EE51639F56D /* Provider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Provider.swift; sourceTree = "<group>"; };
@@ -296,6 +300,7 @@
 				477E83291DCD2B59F7EB5EC4 /* MCPRoutingTests.swift */,
 				94D02547AAA4FC1098248D6E /* MCPSafetyTests.swift */,
 				9FEA443E3182FF8D1FA28F22 /* NativeMLXServiceTests.swift */,
+				EDF546DA8F25F9797DE2D5AB /* ProviderSelectionTests.swift */,
 				B7E942A791A30BA9823A373E /* SmokeTests.swift */,
 				12558A3EF15E5A2F294ED10C /* ToolSafetyTests.swift */,
 				5E8E78620572CA6E58EAAFB9 /* WorkspaceContextTests.swift */,
@@ -642,6 +647,7 @@
 				BC00DED3C63D6B43FFF14F72 /* Message.swift */,
 				E4A518CAF674B73150115924 /* PromptTemplate.swift */,
 				EFA2E35571097EE51639F56D /* Provider.swift */,
+				213CD72B6546667365802600 /* ProviderSelection.swift */,
 				2A2029692D09A02F95EB9BBE /* Session.swift */,
 				6A8A066203F3679E3128E7F7 /* Settings.swift */,
 				21443978C8F3B27E40CF280D /* Skill.swift */,
@@ -858,6 +864,7 @@
 				9D61CFD407B2B3AC151466F1 /* PromptTemplate.swift in Sources */,
 				B30ED93F3130C5A5F73C1944 /* Provider.swift in Sources */,
 				EF7B02CF91DB2422C835AFE7 /* ProviderRouter.swift in Sources */,
+				F5E5F2394E0A63B6D6BE1E5F /* ProviderSelection.swift in Sources */,
 				EE4B28F7C964275571EA3170 /* ProvidersView.swift in Sources */,
 				8E50EAAFFDA89A19B9E4DECB /* ReasoningDisclosureView.swift in Sources */,
 				41AE2689A5358C591FACE206 /* Session.swift in Sources */,
@@ -912,6 +919,7 @@
 				ECABB9D830B9DD46A37D9969 /* MCPRoutingTests.swift in Sources */,
 				64AB61734C736CC974E6CB18 /* MCPSafetyTests.swift in Sources */,
 				F96E4E166877053ED03969A2 /* NativeMLXServiceTests.swift in Sources */,
+				7365397593E14ADD2B654C3B /* ProviderSelectionTests.swift in Sources */,
 				D603F9B854574906766F5EF8 /* SmokeTests.swift in Sources */,
 				4B4B1DBE7AA4F06E3F192900 /* ToolSafetyTests.swift in Sources */,
 				499DBCE0104E9553F0AD4712 /* WorkspaceContextTests.swift in Sources */,

@@ -240,9 +240,12 @@ public final class AppState: ObservableObject {
         }
 
         // Validate selectedProviderId & selectedModelId are valid and present
-        if !providers.contains(where: { $0.id == selectedProviderId }) {
-            self.selectedProviderId = providers.first(where: { $0.isEnabled })?.id ?? providers.first?.id ?? "ollama-local"
-        }
+        // Existence is not enough: a disabled provider passes that check and then fails every
+        // turn against a server that is deliberately not running.
+        self.selectedProviderId = ProviderSelection.correctedSelectionId(
+            providers: providers,
+            selectedId: selectedProviderId
+        )
         let activeProv = currentProvider
         let isLocalMLX = localMLXModels.contains(where: { $0.id == selectedModelId }) || LocalMLXEngine.curatedModels.contains(where: { $0.id == selectedModelId })
         if !activeProv.models.contains(where: { $0.id == selectedModelId }) && !isLocalMLX {
@@ -273,7 +276,11 @@ public final class AppState: ObservableObject {
     }
 
     public var currentProvider: ModelProvider {
-        providers.first(where: { $0.id == selectedProviderId }) ?? providers.first(where: { $0.isEnabled }) ?? providers.first ?? ModelProvider(name: "Default", type: .local, kind: .ollama)
+        // Matching on id alone would hand back a provider the user switched off — the exact
+        // state a stale `defaultProviderId` produces — and the enabled fallback below would
+        // never run.
+        ProviderSelection.resolve(providers: providers, selectedId: selectedProviderId)?.provider
+            ?? ModelProvider(name: "Default", type: .local, kind: .ollama)
     }
 
     public var currentModel: ModelInfo {
