@@ -997,13 +997,19 @@ public final class AgentRunner {
             let checkEvery = 24
             let sinceLastCheck = StreamTickCounter()
 
+            // Snapshot before the Task exists. Passing `workingMessages` directly would capture
+            // the mutable local rather than evaluating it at the call site, and the loop appends
+            // to it further down — safe only because the stream is awaited first, which the
+            // compiler cannot see and a later edit could quietly break.
+            let messagesForRequest = workingMessages
+
             do {
                 let streamTask = Task<Void, Error> {
                     try await ProviderRouter.shared.stream(
                         provider: provider,
                         model: model,
                         systemPrompt: systemPromptWithTools,
-                        messages: workingMessages,
+                        messages: messagesForRequest,
                         temperature: agent.temperature,
                         maxTokens: agent.maxTokens,
                         reasoningEffort: effectiveReasoningEffort,
@@ -1165,15 +1171,15 @@ public final class AgentRunner {
                 }
             }
 
-            // Execute detected tool calls and feed results back into the conversation.
-            // Radiant keeps calling tools until the model stops; local models often stop
-            // early, so queued follow-up calls are executed in-process.
+            // Execute detected tool calls and feed results back into the conversation. The queue
+            // used to grow mid-loop, when the mail chaining appended follow-up calls the model had
+            // not asked for; that was removed, so what the model emitted is all that runs.
             if !pendingCallsToExecute.isEmpty {
                 // Hide "Let me check…" preamble once tools are underway.
                 accumulator.hideTurnNarration(beforeLength: turnTextBefore.count)
             }
             var stopToolLoop = false
-            var toolQueue = pendingCallsToExecute
+            let toolQueue = pendingCallsToExecute
             var queueIndex = 0
             while queueIndex < toolQueue.count {
                 let callId = toolQueue[queueIndex].id

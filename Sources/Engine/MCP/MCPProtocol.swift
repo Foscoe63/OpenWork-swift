@@ -689,7 +689,7 @@ public actor MCPClientManager {
                 do {
                     _ = try await self.startServer(config: server)
                 } catch {
-                    await self.noteStartFailure(serverId: serverId, message: error.localizedDescription)
+                    self.noteStartFailure(serverId: serverId, message: error.localizedDescription)
                 }
                 once.resume(())
             }

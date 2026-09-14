@@ -33,7 +33,7 @@ public struct ChatView: View {
                     .onMessageCountChanged(count: session.messages.count) {
                         scrollChatToLatest(proxy: proxy, session: session)
                     }
-                    .onChange(of: pendingApprovalScrollKey) { _ in
+                    .onValueChanged(of: pendingApprovalScrollKey) {
                         scrollChatToLatest(proxy: proxy, session: session)
                     }
                 }

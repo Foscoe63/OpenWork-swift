@@ -201,7 +201,7 @@
 		39DBC95F559B997C4EE0A643 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		3C53FADE8AC9AABDD896E489 /* ToolBounds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolBounds.swift; sourceTree = "<group>"; };
 		3FBC0F264259925F14C2AA0D /* SessionChangeReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChangeReviewView.swift; sourceTree = "<group>"; };
-		42F571F271D102A05526EB7F /* OpenWorkSwift.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenWorkSwift.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		42F571F271D102A05526EB7F /* OpenWork.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenWork.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		44F1D2B2F9FC9B552F9BAD48 /* ReasoningDisclosureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningDisclosureView.swift; sourceTree = "<group>"; };
 		450CEB362948C974CE49355A /* SkillsAndMcpModals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillsAndMcpModals.swift; sourceTree = "<group>"; };
 		477E83291DCD2B59F7EB5EC4 /* MCPRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPRoutingTests.swift; sourceTree = "<group>"; };
@@ -627,7 +627,7 @@
 		8CC678F416FECE9E650A3F2A /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				42F571F271D102A05526EB7F /* OpenWorkSwift.app */,
+				42F571F271D102A05526EB7F /* OpenWork.app */,
 				BCCFD285D8208AC60E5DE7C4 /* OpenWorkSwiftTests.xctest */,
 			);
 			name = Products;
@@ -820,7 +820,7 @@
 				A6B91367849C9F4A15CCB48E /* Tokenizers */,
 			);
 			productName = OpenWorkSwift;
-			productReference = 42F571F271D102A05526EB7F /* OpenWorkSwift.app */;
+			productReference = 42F571F271D102A05526EB7F /* OpenWork.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -830,7 +830,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1500;
+				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					DFB7811273379C1CB181C3F6 = {
 						ProvisioningStyle = Automatic;
@@ -1041,8 +1041,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = OpenWork;
 				INFOPLIST_KEY_CFBundleIconFile = AppIcon;
@@ -1053,8 +1055,15 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
-				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-Wno-c++17-extensions",
+				);
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(inherited)",
+					"-std=c++17",
+					"-Wno-c++17-extensions",
+				);
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_SWIFT_FLAGS = "$(inherited) -strict-concurrency=minimal";
 				PRODUCT_BUNDLE_IDENTIFIER = ai.openwork.OpenWorkSwift;
@@ -1098,7 +1107,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 5XKHL47YG3;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -1120,11 +1131,19 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
-				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
-				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-Wno-c++17-extensions",
+				);
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(inherited)",
+					"-std=c++17",
+					"-Wno-c++17-extensions",
+				);
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
 				PRODUCT_NAME = OpenWork;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.9;
@@ -1135,7 +1154,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1146,6 +1169,7 @@
 				OTHER_SWIFT_FLAGS = "$(inherited) -strict-concurrency=minimal";
 				PRODUCT_BUNDLE_IDENTIFIER = ai.openwork.OpenWorkSwiftTests;
 				PRODUCT_NAME = OpenWorkSwiftTests;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OpenWork.app/Contents/MacOS/OpenWork";
 			};
@@ -1155,7 +1179,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1166,6 +1194,7 @@
 				OTHER_SWIFT_FLAGS = "$(inherited) -strict-concurrency=minimal";
 				PRODUCT_BUNDLE_IDENTIFIER = ai.openwork.OpenWorkSwiftTests;
 				PRODUCT_NAME = OpenWorkSwiftTests;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OpenWork.app/Contents/MacOS/OpenWork";
 			};
@@ -1205,7 +1234,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 5XKHL47YG3;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -1220,11 +1251,19 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
-				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
-				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-Wno-c++17-extensions",
+				);
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(inherited)",
+					"-std=c++17",
+					"-Wno-c++17-extensions",
+				);
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
 				PRODUCT_NAME = OpenWork;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.9;
@@ -1235,8 +1274,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = OpenWork;
 				INFOPLIST_KEY_CFBundleIconFile = AppIcon;
@@ -1247,8 +1288,15 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
-				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-Wno-c++17-extensions",
+				);
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(inherited)",
+					"-std=c++17",
+					"-Wno-c++17-extensions",
+				);
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_SWIFT_FLAGS = "$(inherited) -strict-concurrency=minimal";
 				PRODUCT_BUNDLE_IDENTIFIER = ai.openwork.OpenWorkSwift;
