@@ -1029,8 +1029,12 @@ public final class AgentRunner {
                 stopper.attach(streamTask)
                 do {
                     try await streamTask.value
-                } catch is CancellationError {
-                    // Our own stop, not a provider failure. The partial text stands.
+                } catch {
+                    // Cancelling a stream surfaces differently per transport — `CancellationError`
+                    // in-process, `URLError.cancelled` over HTTP. If we asked for the stop, none of
+                    // them is a failure, and reporting one would blame the provider for our own
+                    // decision. Anything else is a real error and rethrows.
+                    guard stopper.stoppedReason != nil else { throw error }
                 }
             } catch {
                 let snap = textBridge.snapshot()
