@@ -13,6 +13,9 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
 
     private var loadedContainers: [String: ModelContainer] = [:]
     private var recentLoadFailures: [String: Date] = [:]
+    /// Loads already running. A load that overran its deadline keeps going, and the next turn
+    /// waits on the same task instead of starting a second copy of a 48GB read.
+    private var inFlightLoads: [String: Task<ModelContainer, Error>] = [:]
     private let lock = NSLock()
 
     /// A model with no local weights on disk yet requires a Hugging Face download, which can be
@@ -195,9 +198,9 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             container,
             instructions: sanitizedInstructions,
             history: history,
-            generateParameters: GenerateParameters(
-                maxTokens: maxTokens > 0 ? maxTokens : 4096,
-                temperature: Float(temperature)
+            generateParameters: Self.generateParameters(
+                maxTokens: maxTokens,
+                temperature: temperature
             ),
             tools: toolSpecs.isEmpty ? nil : toolSpecs
             // No toolDispatch — AgentRunner owns approval + MCP execution (Radiant shape).
@@ -255,6 +258,35 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     }
 
     /// Map OpenWork `Tool` models into mlx-swift-lm `ToolSpec` dictionaries.
+    /// Sampling parameters for the in-process path.
+    ///
+    /// This path previously passed only maxTokens and temperature, so every penalty setting was
+    /// silently inert — including `autoAdjustPenaltiesForLocalModels`, which exists precisely for
+    /// local models and which the Ollama and OpenAI paths both honour. Repetition penalties are
+    /// what stop a local model looping, so the one path most in need of them had none.
+    static func generateParameters(
+        maxTokens: Int,
+        temperature: Double,
+        settings: AppSettings? = nil
+    ) -> GenerateParameters {
+        let s = settings ?? PersistenceManager.shared.loadSettings()
+        let boost = s.autoAdjustPenaltiesForLocalModels
+        // Same floors the Ollama path applies for local endpoints.
+        let repetition = boost ? max(1.20, s.defaultRepeatPenalty) : s.defaultRepeatPenalty
+        let presence = boost ? max(0.30, s.defaultPresencePenalty) : s.defaultPresencePenalty
+        let frequency = boost ? max(0.30, s.defaultFrequencyPenalty) : s.defaultFrequencyPenalty
+
+        return GenerateParameters(
+            maxTokens: maxTokens > 0 ? maxTokens : 4096,
+            temperature: Float(temperature),
+            topP: Float(s.defaultTopP > 0 ? s.defaultTopP : 1.0),
+            // A penalty of 1.0 / 0.0 is a no-op; pass nil so MLX skips the processor entirely.
+            repetitionPenalty: repetition > 1.0 ? Float(repetition) : nil,
+            presencePenalty: presence > 0 ? Float(presence) : nil,
+            frequencyPenalty: frequency > 0 ? Float(frequency) : nil
+        )
+    }
+
     private static func mlxToolSpecs(from tools: [Tool]) -> [ToolSpec] {
         tools.filter(\.isEnabled).compactMap { tool -> ToolSpec? in
             var parameters: [String: any Sendable] = [
@@ -325,33 +357,45 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             )
         }
 
+        // One load per model, shared by every caller. MLX's loader never checks for cancellation,
+        // so racing it inside a task group blocked on the load it was meant to abandon: the
+        // "falling back for this turn" message could not be honoured, and a 48GB read hung the
+        // turn instead. The load now runs on its own task, outlives the deadline, and caches
+        // itself when it finishes — so overrunning once makes the next turn fast rather than
+        // starting over.
+        let task: Task<ModelContainer, Error> = lock.withLock {
+            if let existing = inFlightLoads[modelId] { return existing }
+            let created = Task<ModelContainer, Error> {
+                let container = try await self.loadContainerFromDiskOrDownload(
+                    modelId: modelId, onProgress: onProgress
+                )
+                self.lock.withLock {
+                    self.loadedContainers[modelId] = container
+                    self.recentLoadFailures[modelId] = nil
+                    self.inFlightLoads[modelId] = nil
+                }
+                NotificationCenter.default.post(name: .mlxLoadedModelsDidChange, object: nil)
+                return container
+            }
+            inFlightLoads[modelId] = created
+            return created
+        }
+
         do {
-            let container = try await withThrowingTaskGroup(of: ModelContainer.self) { group in
-                group.addTask {
-                    try await self.loadContainerFromDiskOrDownload(modelId: modelId, onProgress: onProgress)
-                }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: UInt64(Self.loadTimeoutSeconds * 1_000_000_000))
-                    throw NSError(
-                        domain: "NativeMLXService",
-                        code: 3,
-                        userInfo: [NSLocalizedDescriptionKey: "Loading '\(modelId)' in-process took longer than \(Int(Self.loadTimeoutSeconds))s (likely still downloading weights). Falling back for this turn."]
-                    )
-                }
-                guard let result = try await group.next() else {
-                    throw CancellationError()
-                }
-                group.cancelAll()
-                return result
-            }
-            lock.withLock {
-                loadedContainers[modelId] = container
-                recentLoadFailures[modelId] = nil
-            }
-            NotificationCenter.default.post(name: .mlxLoadedModelsDidChange, object: nil)
-            return container
+            return try await AsyncDeadline.wait(for: task, seconds: Self.loadTimeoutSeconds)
+        } catch is AsyncDeadline.TimedOut {
+            // Deliberately not recorded as a failure: the load is still running and will be
+            // waiting in the cache shortly.
+            throw NSError(
+                domain: "NativeMLXService",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Loading '\(modelId)' in-process is taking longer than \(Int(Self.loadTimeoutSeconds))s and is still running in the background. Falling back for this turn; try again once it finishes."]
+            )
         } catch {
-            lock.withLock { recentLoadFailures[modelId] = Date() }
+            lock.withLock {
+                recentLoadFailures[modelId] = Date()
+                inFlightLoads[modelId] = nil
+            }
             throw error
         }
     }
