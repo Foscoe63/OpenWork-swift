@@ -17,6 +17,11 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     public var totalPromptTokens: Int
     public var totalCompletionTokens: Int
     public var estimatedCost: Double
+    /// Set when this session was branched from another. Optional so sessions saved before forking
+    /// existed still decode.
+    public var forkedFromSessionId: String?
+    /// The message in the parent that this session ends at.
+    public var forkedAtMessageId: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -34,7 +39,9 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         interAgentMessages: [AgentMessage] = [],
         totalPromptTokens: Int = 0,
         totalCompletionTokens: Int = 0,
-        estimatedCost: Double = 0.0
+        estimatedCost: Double = 0.0,
+        forkedFromSessionId: String? = nil,
+        forkedAtMessageId: String? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -52,5 +59,7 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         self.totalPromptTokens = totalPromptTokens
         self.totalCompletionTokens = totalCompletionTokens
         self.estimatedCost = estimatedCost
+        self.forkedFromSessionId = forkedFromSessionId
+        self.forkedAtMessageId = forkedAtMessageId
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 public struct MessageBubbleView: View {
     let message: ChatMessage
@@ -19,6 +20,31 @@ public struct MessageBubbleView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
+        .contextMenu {
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message.content, forType: .string)
+            } label: {
+                Label("Copy Message", systemImage: "doc.on.doc")
+            }
+
+            if canForkHere {
+                Divider()
+                Button {
+                    guard let session = appState.currentSession else { return }
+                    appState.forkSession(session, at: message.id)
+                } label: {
+                    Label("Fork Conversation From Here", systemImage: "arrow.triangle.branch")
+                }
+            }
+        }
+    }
+
+    /// Forking at the last message would copy the session rather than branch it.
+    private var canForkHere: Bool {
+        guard let session = appState.currentSession,
+              let index = session.messages.firstIndex(where: { $0.id == message.id }) else { return false }
+        return index < session.messages.count - 1
     }
 
     // MARK: - User Message

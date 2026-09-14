@@ -185,6 +185,12 @@ public struct AppSidebar: View {
                             Image(systemName: "pin.fill")
                                 .font(.system(size: 9))
                                 .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                        } else if session.forkedFromSessionId != nil {
+                            // A fork shares its opening messages with another session; the icon is
+                            // what stops the two looking like unrelated conversations in the list.
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 10))
+                                .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                         } else {
                             Image(systemName: "bubble.left")
                                 .font(.system(size: 10))

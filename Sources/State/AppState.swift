@@ -454,6 +454,31 @@ public final class AppState: ObservableObject {
         navigationDestination = .chat
     }
 
+    /// Branch the current session at `messageId` into a new one, and switch to it.
+    ///
+    /// Only the conversation branches. See `SessionFork` for why the working tree deliberately does
+    /// not, and how the fork says so rather than pretending otherwise.
+    @discardableResult
+    public func forkSession(_ session: Session, at messageId: String) -> Session? {
+        guard let outcome = SessionFork.fork(session, at: messageId) else {
+            showToast("Nothing after this message to fork away from")
+            return nil
+        }
+        sessions.insert(outcome.session, at: 0)
+        persistence.saveSessions(sessions)
+        selectSession(outcome.session)
+        navigationDestination = .chat
+
+        if outcome.divergedFiles.isEmpty {
+            showToast("Forked to '\(outcome.session.title)'")
+        } else {
+            // Naming the count here, not just in the transcript: a user who forks and immediately
+            // types a new instruction should not first have to notice a note.
+            showToast("Forked — \(outcome.divergedFiles.count) file(s) changed after this point are still on disk")
+        }
+        return outcome.session
+    }
+
     public func selectSession(_ session: Session) {
         currentSessionId = session.id
         selectedAgentId = session.agentId
