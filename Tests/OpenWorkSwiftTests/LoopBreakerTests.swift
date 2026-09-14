@@ -114,10 +114,39 @@ final class BlankAnswerRecoveryTests: XCTestCase {
         XCTAssertEqual(final?.content, "I replaced both string literals.")
     }
 
-    func testNothingIsInventedWhenThereIsNothingToSurface() {
+    /// Originally this pinned "stay blank when there is nothing to surface". A real export showed
+    /// that case is reachable and unhelpful: the user asked "Good Day", got three identical date
+    /// lookups and then nothing, and an empty bubble cannot be told apart from a broken app. It
+    /// now reports which happened — a statement of fact, not invented content.
+    func testABlankTurnSaysSoRatherThanRenderingNothing() {
         var final: ChatMessage?
         let acc = accumulator { final = $0 }
         acc.finalize()
+
+        let content = final?.content ?? ""
+        XCTAssertFalse(content.isEmpty)
+        XCTAssertTrue(content.contains("without producing any output"))
+    }
+
+    func testABlankTurnThatRanToolsPointsAtTheResults() {
+        var final: ChatMessage?
+        let acc = accumulator { final = $0 }
+        acc.addToolCall(ToolCallInfo(
+            id: "t1", toolName: "get_current_date", argumentsJson: "{}", status: .success
+        ))
+        acc.finalize()
+
+        XCTAssertTrue(final?.content.contains("ran tools") == true)
+    }
+
+    /// The error path states its own case; adding a second explanation would contradict it.
+    func testAnErroredTurnIsLeftToTheErrorPath() {
+        var final: ChatMessage?
+        let acc = accumulator { final = $0 }
+        acc.handleError(NSError(domain: "t", code: 1))
+        acc.finalize()
+
         XCTAssertEqual(final?.content ?? "", "")
+        XCTAssertTrue(final?.isError == true)
     }
 }

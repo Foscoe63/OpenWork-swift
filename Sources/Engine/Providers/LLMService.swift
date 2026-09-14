@@ -3,6 +3,9 @@ import Foundation
 public struct LLMStreamChunk: Sendable {
     public var deltaText: String
     public var deltaReasoning: String?
+    /// Provider-side status — a model load, a cache reset. Shown as a status chip, because it is
+    /// infrastructure, not something the model thought.
+    public var deltaNotice: String?
     public var isFinished: Bool
     public var finishReason: String?
     public var promptTokens: Int?
@@ -12,6 +15,7 @@ public struct LLMStreamChunk: Sendable {
     public init(
         deltaText: String = "",
         deltaReasoning: String? = nil,
+        deltaNotice: String? = nil,
         isFinished: Bool = false,
         finishReason: String? = nil,
         promptTokens: Int? = nil,
@@ -20,6 +24,7 @@ public struct LLMStreamChunk: Sendable {
     ) {
         self.deltaText = deltaText
         self.deltaReasoning = deltaReasoning
+        self.deltaNotice = deltaNotice
         self.isFinished = isFinished
         self.finishReason = finishReason
         self.promptTokens = promptTokens

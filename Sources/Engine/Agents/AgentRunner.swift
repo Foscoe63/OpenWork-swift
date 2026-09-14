@@ -18,6 +18,9 @@ public final class AgentStreamAccumulator {
     }
 
     public func applyChunk(_ chunk: LLMStreamChunk) {
+        if let notice = chunk.deltaNotice, !notice.isEmpty {
+            appendNotice(notice)
+        }
         if let deltaR = chunk.deltaReasoning {
             fullReasoning += deltaR
             message.reasoning = fullReasoning
@@ -208,7 +211,9 @@ public final class AgentStreamAccumulator {
 
     /// Split leaked model thinking out of the visible bubble; keep raw `fullText` for tool parsing.
     private func publishVisibleContent() {
-        let split = AssistantContentSanitizer.splitThinking(from: fullText)
+        var split = AssistantContentSanitizer.splitThinking(from: fullText)
+        split.thinking = AssistantContentSanitizer.stripControlTokens(split.thinking)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if !split.thinking.isEmpty {
             if fullReasoning.isEmpty {
                 fullReasoning = split.thinking
@@ -235,7 +240,10 @@ public final class AgentStreamAccumulator {
         // Drop routine MCP status chips once the answer is on screen.
         message.notices.removeAll { notice in
             let n = notice.lowercased()
-            return n.contains("listing configured mcp")
+            return n.contains("loading mlx weights")
+                || n.contains("loading local mlx weights")
+                || n.contains("downloading mlx weights")
+                || n.contains("listing configured mcp")
                 || n.contains("mcp ready")
                 || n.contains("warming mcp")
                 || n.contains("connecting ")
@@ -253,15 +261,28 @@ public final class AgentStreamAccumulator {
     /// tail of what it said, labelled, beats showing silence.
     private func recoverAnswerFromReasoningIfBlank() {
         guard message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // The error path states its own case; a halt has already appended its text.
+        guard !message.isError else { return }
+
         let reasoning = fullReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !reasoning.isEmpty else { return }
+        if !reasoning.isEmpty {
+            let tail = String(reasoning.suffix(1200)).trimmingCharacters(in: .whitespacesAndNewlines)
+            message.content = """
+            *(The model produced no separate answer, only its own reasoning. Its closing thoughts:)*
 
-        let tail = String(reasoning.suffix(1200)).trimmingCharacters(in: .whitespacesAndNewlines)
-        message.content = """
-        *(The model produced no separate answer, only its own reasoning. Its closing thoughts:)*
+            \(tail)
+            """
+            return
+        }
 
-        \(tail)
-        """
+        // Nothing at all: no answer, no reasoning, no halt, no error. Seen for real — a Llama
+        // model answered "Good Day" with three identical date lookups and then a bare
+        // `<|python_tag|>`, which is a tool-call marker with no call behind it. An empty bubble
+        // is indistinguishable from the app having broken, so say which happened.
+        let ranTools = !message.toolCalls.isEmpty
+        message.content = ranTools
+            ? "*(The model ran tools but ended its turn without writing an answer. The tool results are above; ask it to summarise them, or try again.)*"
+            : "*(The model ended its turn without producing any output. Try again, or switch models.)*"
     }
 
     /// When the model narrates then emits tools, hide that preamble in the bubble (keep raw text for parsing).
@@ -354,8 +375,27 @@ enum AssistantContentSanitizer {
         return (text, thinking)
     }
 
+    /// Chat-template control tokens, e.g. Llama's `<|python_tag|>` / `<|eot_id|>` and Qwen's
+    /// `<|im_start|>`.
+    ///
+    /// These are template scaffolding, not content. When a model emits one the tokenizer did not
+    /// consume — Llama 3 marks a tool call with `<|python_tag|>` — it lands in the answer verbatim,
+    /// and a user who said "Good Day" gets `<|python_tag|>` back as the entire reply.
+    ///
+    /// Stripping matters beyond display: this text is fed back as conversation history, and a
+    /// stray control token in a rendered prompt is not inert.
+    ///
+    /// The shape is `<|` identifier `|>`, which is deliberately narrow — prose does not contain it.
+    private static let controlTokenPattern = #"<\|[A-Za-z0-9_\-]{1,40}\|>"#
+
+    static func stripControlTokens(_ raw: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: controlTokenPattern) else { return raw }
+        let range = NSRange(location: 0, length: (raw as NSString).length)
+        return regex.stringByReplacingMatches(in: raw, options: [], range: range, withTemplate: "")
+    }
+
     static func sanitizeVisible(_ raw: String) -> String {
-        var cleaned = raw
+        var cleaned = stripControlTokens(raw)
 
         // Remove TOOL_CALL = { ... }
         let assignPattern = "TOOL_CALL\\s*=\\s*\\{[\\s\\S]*?\\}"

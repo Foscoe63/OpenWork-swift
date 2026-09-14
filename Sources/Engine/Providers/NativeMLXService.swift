@@ -162,9 +162,11 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws {
         let container = try await getOrLoadContainer(modelId: model.id) { status in
-            // Surface download/load progress as reasoning so a first-run model fetch is visible
-            // instead of looking like a hang; it never pollutes the final answer text.
-            onChunk(LLMStreamChunk(deltaReasoning: status + "\n"))
+            // A status chip, not reasoning. Loading a 50GB checkpoint needs to be visible so a
+            // first run does not look like a hang, but it is the app's status, not the model's
+            // thinking — and filed as reasoning it both polluted that transcript and could be
+            // surfaced as the answer when a turn produced nothing else.
+            onChunk(LLMStreamChunk(deltaNotice: status))
         }
         let sanitizedInstructions = sanitizeForHFChatTemplate(systemPrompt)
         let preparedMessages = mergeToolMessagesIntoFollowingUser(messages)
@@ -239,7 +241,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
 
         case .rebuild(let reason):
             if reason != "no cached session" {
-                onChunk(LLMStreamChunk(deltaReasoning: "[context cache reset: \(reason)]\n"))
+                onChunk(LLMStreamChunk(deltaNotice: "Context cache reset: \(reason)"))
             }
             let history = Array(mlxMessages.dropLast())
             let fresh = ChatSession(
