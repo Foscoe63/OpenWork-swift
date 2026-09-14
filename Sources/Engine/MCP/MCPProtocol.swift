@@ -149,31 +149,6 @@ public enum MCPNamespacedTool {
     }
 }
 
-// MARK: - Identity Resolution & Disambiguation (from GrizzyClaw & Osaurus)
-public enum MCPIdentityResolution {
-    /// Normalizes server names from model outputs (e.g. `macuse[id=123]`, `mcp-macuse`, `mac_use`, `MacUse`) to match configured servers
-    public static func canonicalServerName(modelOutput: String, knownServers: [String]) -> String {
-        var trimmed = modelOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let bracketIdx = trimmed.firstIndex(of: "[") {
-            trimmed = String(trimmed[..<bracketIdx]).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        let lower = trimmed.lowercased()
-        let clean = lower.replacingOccurrences(of: "-", with: "_").replacingOccurrences(of: " ", with: "_")
-        let stripMcp = clean.hasPrefix("mcp_") ? String(clean.dropFirst(4)) : clean
-
-        for known in knownServers {
-            let kLower = known.lowercased()
-            let kClean = kLower.replacingOccurrences(of: "-", with: "_").replacingOccurrences(of: " ", with: "_")
-            let kStripMcp = kClean.hasPrefix("mcp_") ? String(kClean.dropFirst(4)) : kClean
-
-            if kLower == lower || kClean == clean || kStripMcp == stripMcp {
-                return known
-            }
-        }
-        return trimmed
-    }
-}
-
 // MARK: - Argument Normalization (from GrizzyClaw & Osaurus)
 public enum MCPToolArgumentDefaults {
     /// Normalizes tool call arguments and injects required defaults
@@ -621,51 +596,45 @@ public actor MCPClientManager {
     }
 
     private func buildToolModels(from enabled: [MCPServerConfig], order: [MCPServerConfig]) -> [Tool] {
+        // `order` is a preference, not a filter — append any enabled server it leaves out.
+        var sequence = order.isEmpty ? enabled : order
+        let ordered = Set(sequence.map(\.id))
+        sequence.append(contentsOf: enabled.filter { !ordered.contains($0.id) })
+
         var result: [Tool] = []
-        var seenIds = Set<String>()
-        let sequence = order.isEmpty ? enabled : order
-        for server in sequence where seenIds.insert(server.id).inserted {
-            let defs = discoveredTools[server.id] ?? []
-            for t in defs {
-                let namespaced = MCPNamespacedTool.name(serverId: server.id, toolName: t.name)
-                let schema = t.inputSchemaJson
-                    ?? #"{"type":"object","properties":{}}"#
-                let leaf = t.name.lowercased()
-                let readOnly = Self.isReadOnlyMCPTool(leaf)
-                result.append(Tool(
-                    id: namespaced,
-                    name: namespaced,
-                    displayName: "\(server.name): \(t.name)",
-                    description: "[\(server.name)] \(t.description ?? t.name)",
-                    category: .mcp,
-                    parametersJsonSchema: schema,
-                    isEnabled: true,
-                    requiresApproval: !readOnly
-                ))
-            }
-        }
-        // Include any other enabled servers already cached but not in `order`.
-        for server in enabled where seenIds.insert(server.id).inserted {
-            let defs = discoveredTools[server.id] ?? []
-            for t in defs {
-                let namespaced = MCPNamespacedTool.name(serverId: server.id, toolName: t.name)
-                let schema = t.inputSchemaJson
-                    ?? #"{"type":"object","properties":{}}"#
-                let leaf = t.name.lowercased()
-                let readOnly = Self.isReadOnlyMCPTool(leaf)
-                result.append(Tool(
-                    id: namespaced,
-                    name: namespaced,
-                    displayName: "\(server.name): \(t.name)",
-                    description: "[\(server.name)] \(t.description ?? t.name)",
-                    category: .mcp,
-                    parametersJsonSchema: schema,
-                    isEnabled: true,
-                    requiresApproval: !readOnly
-                ))
+        var seenServerIds = Set<String>()
+        for server in sequence where seenServerIds.insert(server.id).inserted {
+            for def in discoveredTools[server.id] ?? [] {
+                // A tool the user switched off is not advertised to the model at all.
+                guard MCPToolGate.isToolEnabled(server: server, toolName: def.name) else { continue }
+                result.append(toolModel(server: server, def: def))
             }
         }
         return result
+    }
+
+    private func toolModel(server: MCPServerConfig, def: MCPToolDefinition) -> Tool {
+        let namespaced = MCPNamespacedTool.name(serverId: server.id, toolName: def.name)
+        let effect = MCPEffectCatalog.classify(server: server, toolName: def.name, advertised: true)
+        return Tool(
+            id: namespaced,
+            name: namespaced,
+            displayName: "\(server.name): \(def.name)",
+            description: "[\(server.name)] \(def.description ?? def.name)",
+            category: .mcp,
+            parametersJsonSchema: def.inputSchemaJson ?? #"{"type":"object","properties":{}}"#,
+            isEnabled: true,
+            requiresApproval: effect == .write
+        )
+    }
+
+    /// Advertised tool names per server id, for routing and effect classification.
+    public func advertisedToolNames() -> [String: [String]] {
+        discoveredTools.mapValues { $0.map(\.name) }
+    }
+
+    public func advertisedToolNames(serverId: String) -> [String] {
+        (discoveredTools[serverId] ?? []).map(\.name)
     }
 
     private func warmServers(_ servers: [MCPServerConfig], perServerTimeout: Duration) async {
@@ -802,16 +771,6 @@ public actor MCPClientManager {
             }
         }
         return false
-    }
-
-    nonisolated static func isReadOnlyMCPTool(_ leafName: String) -> Bool {
-        let leaf = leafName.lowercased()
-        if ["get_tool_definitions", "list_tools", "tools_list", "search", "fetch_content",
-            "codegraph_explore", "fetch", "read_resource"].contains(leaf) {
-            return true
-        }
-        return leaf.hasPrefix("list_") || leaf.hasPrefix("get_") || leaf.hasPrefix("search")
-            || leaf.hasPrefix("fetch") || leaf.hasPrefix("read_") || leaf.hasPrefix("find_")
     }
 
     /// Resolve the MCP `tools/call` name + arguments.
@@ -1138,6 +1097,11 @@ public actor MCPClientManager {
     }
 
     // MARK: - Universal Tool Dispatcher
+    /// Run an MCP tool and return text for the model.
+    ///
+    /// Transient transport failures are retried once here rather than costing the model a step,
+    /// and every failed result carries a recovery hint so the next step is a fix instead of a
+    /// verbatim retry.
     public func dispatchToolCall(
         serverConfig: MCPServerConfig? = nil,
         serverIdentifier: String? = nil,
@@ -1145,51 +1109,109 @@ public actor MCPClientManager {
         arguments: [String: Any],
         workspace: Workspace
     ) async -> String {
-        let loadedSettings = PersistenceManager.shared.loadSettings()
-        let servers = loadedSettings.mcpServers
-        let knownServerNames = servers.map(\.name)
+        var output = await dispatchToolCallOnce(
+            serverConfig: serverConfig,
+            serverIdentifier: serverIdentifier,
+            toolName: toolName,
+            arguments: arguments,
+            workspace: workspace
+        )
 
-        // 1. Identify target server using canonical resolution
+        if MCPFailureClassifier.failed(text: output),
+           MCPFailureClassifier.isTransientFailure(output) {
+            try? await Task.sleep(for: .milliseconds(400))
+            let retry = await dispatchToolCallOnce(
+                serverConfig: serverConfig,
+                serverIdentifier: serverIdentifier,
+                toolName: toolName,
+                arguments: arguments,
+                workspace: workspace
+            )
+            // Keep the retry only if it actually did better.
+            if !MCPFailureClassifier.failed(text: retry) {
+                return retry
+            }
+            output = retry
+        }
+
+        return MCPFailureClassifier.annotate(output)
+    }
+
+    private func dispatchToolCallOnce(
+        serverConfig: MCPServerConfig? = nil,
+        serverIdentifier: String? = nil,
+        toolName: String,
+        arguments: [String: Any],
+        workspace: Workspace
+    ) async -> String {
+        let loadedSettings = PersistenceManager.shared.loadSettings()
+        let enabledServers = loadedSettings.mcpServers.filter(\.isEnabled)
+        let advertised = advertisedToolNames()
+
+        // 1. Identify the target server. An ambiguous or unknown identifier is an error, not a
+        //    guess — dispatching to the wrong server produces confident, wrong answers.
         var targetServer: MCPServerConfig? = serverConfig
         if targetServer == nil {
-            let requestedName = serverIdentifier ?? arguments["server"] as? String ?? arguments["server_name"] as? String ?? ""
-            if !requestedName.isEmpty {
-                let canonicalName = MCPIdentityResolution.canonicalServerName(modelOutput: requestedName, knownServers: knownServerNames)
-                targetServer = servers.first(where: { (s: MCPServerConfig) in
-                    if s.name.localizedCaseInsensitiveCompare(canonicalName) == .orderedSame { return true }
-                    if s.id.localizedCaseInsensitiveCompare(canonicalName) == .orderedSame { return true }
-                    let normalizedName = s.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
-                    return normalizedName == canonicalName.lowercased()
-                })
+            let requested = serverIdentifier
+                ?? arguments["server"] as? String
+                ?? arguments["server_name"] as? String
+                ?? ""
+            switch MCPToolRouting.resolveServer(
+                requested: requested,
+                toolName: toolName,
+                enabled: enabledServers,
+                advertised: advertised
+            ) {
+            case .resolved(let server):
+                targetServer = server
+            case .failed(let message):
+                return message
             }
         }
 
-        if targetServer == nil {
-            targetServer = servers.first(where: { s in
-                let clean = s.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
-                return toolName.lowercased().contains(clean)
-            })
+        guard let resolvedServer = targetServer else {
+            return MCPToolRouting.unroutableToolMessage(tool: toolName, enabled: enabledServers)
         }
 
-        let sName = targetServer?.name ?? serverIdentifier ?? "MCP"
+        let sName = resolvedServer.name
         let normArgs = MCPToolArgumentDefaults.normalizeArguments(
             serverName: sName,
             toolName: toolName,
             arguments: arguments
         )
 
-        let isMacServer = sName.localizedCaseInsensitiveContains("mac") ||
-                          toolName.localizedCaseInsensitiveContains("macuse") ||
-                          toolName.localizedCaseInsensitiveContains("calendar") ||
-                          toolName.localizedCaseInsensitiveContains("reminder") ||
-                          toolName.localizedCaseInsensitiveContains("applescript")
+        // 2. Per-tool gate: a tool the user switched off must not run, and the model needs to be
+        //    told so it can route around it instead of retrying.
+        let gateTarget = Self.resolveMCPCall(toolName: toolName, arguments: normArgs).name
+        if !MCPToolGate.isToolEnabled(server: resolvedServer, toolName: gateTarget) {
+            return MCPToolGate.disabledMessage(server: resolvedServer, toolName: gateTarget)
+        }
 
-        // 2. If configured stdio or HTTP server is present, dispatch JSON-RPC 2.0 tools/call
-        if let server = targetServer {
+        // Verify the tool exists before sending a doomed call, but only once the server has
+        // actually reported a catalog — an empty list means "not discovered yet", not "no tools".
+        let serverTools = advertised[resolvedServer.id] ?? []
+        if !serverTools.isEmpty,
+           MCPToolRouting.canonicalTool(gateTarget, known: serverTools) == nil,
+           !MCPEffectCatalog.universalReadTools.contains(gateTarget) {
+            return MCPToolRouting.unknownToolMessage(
+                tool: gateTarget,
+                server: resolvedServer,
+                advertised: serverTools
+            )
+        }
+
+        // 3. Dispatch JSON-RPC 2.0 tools/call over the server's transport.
+        do {
+            let server = resolvedServer
             // Check server health before attempting call
             let status = getServerStatus(serverId: server.id)
             if case .crashed = status {
-                return "Error: MCP Server '\(server.name)' has crashed. Please restart the server or check logs."
+                let err = serverErrors[server.id].map { ": \($0)" } ?? "."
+                return """
+                Error: MCP server '\(server.name)' has crashed and did not run '\(toolName)'\(err) \
+                Do not retry this call. Use a different tool, or tell the user the server needs \
+                restarting from Settings → Tools & MCP.
+                """
             }
 
             if server.transportType == .stdio && !server.command.isEmpty {
@@ -1339,29 +1361,21 @@ public actor MCPClientManager {
             }
         }
 
-        // 3. Native macOS automations fallback (Calendar, Reminders, AppleScript)
-        if isMacServer {
-            let action = (normArgs["action"] as? String ??
-                          normArgs["tool"] as? String ??
-                          normArgs["name"] as? String ??
-                          normArgs["command"] as? String ??
-                          toolName).lowercased()
-
-            if action.contains("calendar") || action.contains("event") || toolName.contains("calendar") {
-                return await executeMacCalendarQuery(arguments: normArgs)
-            } else if action.contains("reminder") || action.contains("todo") || toolName.contains("reminder") {
-                return await executeMacRemindersQuery(arguments: normArgs)
-            } else if action.contains("applescript") || normArgs["script"] != nil {
-                let script = normArgs["script"] as? String ?? normArgs["code"] as? String ?? ""
-                return await executeAppleScript(script)
-            } else if action.contains("app") || action.contains("open") {
-                let appName = normArgs["app"] as? String ?? normArgs["name"] as? String ?? "Calendar"
-                return await executeAppleScript("tell application \"\(appName)\" to activate")
-            }
-            return await executeMacCalendarQuery(arguments: normArgs)
+        // The server resolved but has no usable transport — a misconfiguration, not a call we can
+        // quietly substitute something else for. Say so; do not report success.
+        let detail: String
+        switch resolvedServer.transportType {
+        case .stdio:
+            detail = "it is configured as stdio but has no command."
+        case .httpSse:
+            detail = "it is configured as HTTP/SSE but has no URL."
+        case .websocket:
+            detail = "the WebSocket transport is not implemented yet — reconfigure it as stdio or HTTP/SSE."
         }
-
-        return "MCP Server '\(sName)' processed tool '\(toolName)'."
+        return """
+        Error: MCP server '\(sName)' cannot be called because \(detail) Nothing was executed. \
+        Fix the server in Settings → Tools & MCP, or use a different tool.
+        """
     }
 
     // MARK: - Timeout Helper

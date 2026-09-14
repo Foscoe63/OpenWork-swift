@@ -87,25 +87,48 @@ public final class ToolExecutionEngine: @unchecked Sendable {
 
         let settings = PersistenceManager.shared.loadSettings()
 
-        // Radiant-style namespaced MCP tools: mcp__{serverId}__{toolName}
-        if let parsed = MCPNamespacedTool.parse(toolName) {
-            let servers = settings.mcpServers
-            let matched = servers.first(where: { $0.id == parsed.serverId })
-                ?? servers.first(where: { $0.name.localizedCaseInsensitiveCompare(parsed.serverId) == .orderedSame })
+        // A tool promoted from a meta-tool catalog this turn: the model calls it directly, we
+        // rewrite it back into the dispatcher call the server actually accepts.
+        if let promoted = await MCPPromotedToolRegistry.shared.lookup(toolName) {
+            let enabled = settings.mcpServers.filter(\.isEnabled)
+            guard let server = enabled.first(where: { $0.id == promoted.serverId }) else {
+                return Self.mcpFailure(
+                    MCPToolRouting.unknownServerMessage(requested: promoted.serverName, enabled: enabled),
+                    startTime: startTime
+                )
+            }
             let output = await MCPClientManager.shared.dispatchToolCall(
-                serverConfig: matched,
-                serverIdentifier: matched?.name ?? parsed.serverId,
-                toolName: parsed.toolName,
-                arguments: dict,
+                serverConfig: server,
+                serverIdentifier: server.name,
+                toolName: promoted.executeTool,
+                arguments: MCPCatalogPromote.dispatchArguments(for: promoted, raw: dict),
                 workspace: workspace
             )
-            let failed = output.lowercased().hasPrefix("error:")
-            return ToolExecutionResult(
-                success: !failed,
-                output: output,
-                error: failed ? output : nil,
-                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-            )
+            return Self.mcpResult(output, startTime: startTime)
+        }
+
+        // Namespaced MCP tools: mcp__{serverId}__{toolName}
+        if let parsed = MCPNamespacedTool.parse(toolName) {
+            let enabled = settings.mcpServers.filter(\.isEnabled)
+            let advertised = await MCPClientManager.shared.advertisedToolNames()
+            switch MCPToolRouting.resolveServer(
+                requested: parsed.serverId,
+                toolName: toolName,
+                enabled: enabled,
+                advertised: advertised
+            ) {
+            case .resolved(let server):
+                let output = await MCPClientManager.shared.dispatchToolCall(
+                    serverConfig: server,
+                    serverIdentifier: server.name,
+                    toolName: parsed.toolName,
+                    arguments: dict,
+                    workspace: workspace
+                )
+                return Self.mcpResult(output, startTime: startTime)
+            case .failed(let message):
+                return Self.mcpFailure(message, startTime: startTime)
+            }
         }
 
         switch toolName {
@@ -606,20 +629,49 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             )
 
         case "mcp_call", "call_mcp_tool":
-            let serverName = dict["server"] as? String ?? dict["server_name"] as? String ?? "macuse"
-            let targetTool = dict["tool"] as? String ?? dict["tool_name"] as? String ?? dict["action"] as? String ?? "query"
-            let args = dict["arguments"] as? [String: Any] ?? dict["parameters"] as? [String: Any] ?? dict
-            let output = await MCPClientManager.shared.dispatchToolCall(
-                serverIdentifier: serverName,
+            // No default server: dispatching to a guessed server runs the wrong tool and reports
+            // success. An unnamed server with more than one enabled is an error the model can fix.
+            let serverName = dict["server"] as? String ?? dict["server_name"] as? String ?? ""
+            let targetTool = dict["tool"] as? String
+                ?? dict["tool_name"] as? String
+                ?? dict["action"] as? String
+                ?? ""
+            let enabled = settings.mcpServers.filter(\.isEnabled)
+
+            guard !targetTool.isEmpty else {
+                let names = enabled.map(\.name).joined(separator: ", ")
+                return Self.mcpFailure(
+                    """
+                    mcp_call needs tool=<an exact tool name>. Nothing was executed. \
+                    Enabled MCP servers: \(names.isEmpty ? "none" : names). Prefer calling the \
+                    namespaced tool from your tool list directly (mcp__<serverId>__<tool>).
+                    """,
+                    startTime: startTime
+                )
+            }
+
+            let advertised = await MCPClientManager.shared.advertisedToolNames()
+            switch MCPToolRouting.resolveServer(
+                requested: serverName,
                 toolName: targetTool,
-                arguments: args,
-                workspace: workspace
-            )
-            return ToolExecutionResult(
-                success: true,
-                output: output,
-                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-            )
+                enabled: enabled,
+                advertised: advertised
+            ) {
+            case .resolved(let server):
+                let args = dict["arguments"] as? [String: Any]
+                    ?? dict["parameters"] as? [String: Any]
+                    ?? dict
+                let output = await MCPClientManager.shared.dispatchToolCall(
+                    serverConfig: server,
+                    serverIdentifier: server.name,
+                    toolName: targetTool,
+                    arguments: args,
+                    workspace: workspace
+                )
+                return Self.mcpResult(output, startTime: startTime)
+            case .failed(let message):
+                return Self.mcpFailure(message, startTime: startTime)
+            }
 
         case "gmail_list", "gmail_search":
             let settings = PersistenceManager.shared.loadSettings()
@@ -673,63 +725,79 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             )
 
         default:
-            // Check if this tool uses dot notation like server.tool_name
+            // Not a built-in. The only legitimate way to get here is an MCP tool the model named
+            // without its namespace — so resolve it against the advertised catalogs, and require
+            // an unambiguous owner. Anything else is an error: a tool that did not run must never
+            // report that it ran.
+            let enabledServers = settings.mcpServers.filter(\.isEnabled)
+            let advertised = await MCPClientManager.shared.advertisedToolNames()
+
+            // Dot notation (`server.tool_name`) still has to name a real server.
             let dotComponents = toolName.components(separatedBy: ".")
-            if dotComponents.count == 2 {
-                let serverPart = dotComponents[0]
-                let toolPart = dotComponents[1]
-                let output = await MCPClientManager.shared.dispatchToolCall(
-                    serverIdentifier: serverPart,
-                    toolName: toolPart,
-                    arguments: dict,
-                    workspace: workspace
-                )
-                return ToolExecutionResult(
-                    success: true,
-                    output: output,
-                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                )
+            if dotComponents.count == 2, !dotComponents[0].isEmpty, !dotComponents[1].isEmpty {
+                switch MCPToolRouting.resolveServer(
+                    requested: dotComponents[0],
+                    toolName: dotComponents[1],
+                    enabled: enabledServers,
+                    advertised: advertised
+                ) {
+                case .resolved(let server):
+                    let output = await MCPClientManager.shared.dispatchToolCall(
+                        serverConfig: server,
+                        serverIdentifier: server.name,
+                        toolName: dotComponents[1],
+                        arguments: dict,
+                        workspace: workspace
+                    )
+                    return Self.mcpResult(output, startTime: startTime)
+                case .failed(let message):
+                    return Self.mcpFailure(message, startTime: startTime)
+                }
             }
 
-            // Check if this tool is serviced by an active MCP server or system automation
-            let loadedSettings = PersistenceManager.shared.loadSettings()
-            let enabledServers = loadedSettings.mcpServers.filter { $0.isEnabled }
-
-            if let matchedServer = enabledServers.first(where: { s in
-                let clean = s.name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
-                return toolName.lowercased().contains(clean)
-            }) {
+            if let owned = MCPToolRouting.serverOwning(
+                tool: toolName,
+                servers: enabledServers,
+                advertised: advertised
+            ) {
                 let output = await MCPClientManager.shared.dispatchToolCall(
-                    serverConfig: matchedServer,
-                    toolName: toolName,
+                    serverConfig: owned.server,
+                    serverIdentifier: owned.server.name,
+                    toolName: owned.tool,
                     arguments: dict,
                     workspace: workspace
                 )
-                return ToolExecutionResult(
-                    success: true,
-                    output: output,
-                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                )
-            } else if toolName.hasPrefix("mcp_") || toolName.contains("macuse") || ((toolName.contains("calendar") || toolName.contains("reminder")) && !toolName.hasPrefix("google_")) {
-                let output = await MCPClientManager.shared.dispatchToolCall(
-                    serverIdentifier: "macuse",
-                    toolName: toolName,
-                    arguments: dict,
-                    workspace: workspace
-                )
-                return ToolExecutionResult(
-                    success: true,
-                    output: output,
-                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                )
+                return Self.mcpResult(output, startTime: startTime)
             }
 
-            return ToolExecutionResult(
-                success: true,
-                output: "Executed tool \(toolName) with parameters: \(argumentsJson)",
-                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            return Self.mcpFailure(
+                MCPToolRouting.unroutableToolMessage(tool: toolName, enabled: enabledServers),
+                startTime: startTime
             )
         }
+    }
+
+    // MARK: - MCP result plumbing
+
+    /// Wrap an MCP dispatch result, honouring the failure classifier rather than assuming success.
+    private static func mcpResult(_ output: String, startTime: Double) -> ToolExecutionResult {
+        let failed = MCPFailureClassifier.failed(text: output)
+        return ToolExecutionResult(
+            success: !failed,
+            output: output,
+            error: failed ? output : nil,
+            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        )
+    }
+
+    /// A call that never reached a server. Always a failure — never a success with an excuse.
+    private static func mcpFailure(_ message: String, startTime: Double) -> ToolExecutionResult {
+        ToolExecutionResult(
+            success: false,
+            output: "",
+            error: message,
+            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        )
     }
 
     /// When "Sandbox Agent File System" is on, file tools may only touch the active workspace

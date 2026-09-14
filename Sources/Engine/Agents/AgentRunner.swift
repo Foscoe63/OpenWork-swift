@@ -769,6 +769,15 @@ public final class AgentRunner {
         var macUseAccountsJSON = ""
         var macUseSearchJSON = ""
         var macUseMessageJSON = ""
+        // Consecutive MCP results that will not finish the job by being retried. Escalates to a
+        // nudge, then to pulling MCP out of the tool list for the rest of the turn.
+        var mcpDeadEnds = 0
+        var warnedMcpStall = false
+        var mcpDisabledThisTurn = false
+
+        // Promotion is turn-scoped: a catalog harvested against an earlier server set must not
+        // leak into this turn as callable tools that no longer resolve.
+        await MCPPromotedToolRegistry.shared.reset()
 
         // System prompt with modern tool-calling instructions (supports both native API tools & markdown ReAct schemas)
         let systemPromptWithTools: String
@@ -1228,6 +1237,67 @@ public final class AgentRunner {
                 callInfo.durationMs = (CFAbsoluteTimeGetCurrent() - startTool) * 1000
                 accumulator.updateToolCall(callInfo)
 
+                // Track MCP failures that repeating will not fix. A model that keeps re-sending a
+                // broken call burns the whole step budget without noticing.
+                let isMCPCall = MCPNamespacedTool.isNamespaced(toolName)
+                    || toolName == "mcp_call"
+                    || toolName == "call_mcp_tool"
+                if isMCPCall {
+                    let combined = resultOutput + (resultError ?? "")
+                    if MCPFailureClassifier.isDeadEnd(combined) {
+                        mcpDeadEnds += 1
+                    } else {
+                        mcpDeadEnds = 0
+                    }
+                }
+
+                // A meta-tool catalog came back: promote its entries to directly callable tools so
+                // the next step is one hop instead of a hand-nested dispatcher call.
+                if resultSuccess,
+                   MCPCatalogPromote.isCatalogSource(toolName),
+                   let parsed = MCPNamespacedTool.parse(toolName),
+                   let server = loadedSettings.mcpServers.first(where: { $0.id == parsed.serverId }) {
+                    let dispatcher = Self.dispatcherToolName(
+                        for: server,
+                        among: availableTools,
+                        fallbackLeaf: parsed.toolName
+                    )
+                    let harvested = MCPCatalogPromote.harvest(
+                        server: server,
+                        executeTool: dispatcher,
+                        resultText: bounded.text
+                    ).filter { MCPToolGate.isToolEnabled(server: server, toolName: $0.injectName) }
+
+                    let newcomers = await MCPPromotedToolRegistry.shared.register(harvested)
+                    if !newcomers.isEmpty {
+                        for promoted in newcomers {
+                            let effect = MCPEffectCatalog.classifyNested(
+                                server: server,
+                                nestedToolName: promoted.injectName
+                            )
+                            let model = MCPCatalogPromote.toolModel(for: promoted, effect: effect)
+                            if !availableTools.contains(where: { $0.name == model.name }) {
+                                availableTools.append(model)
+                            }
+                        }
+                        let names = newcomers.prefix(8).map(\.injectName).joined(separator: ", ")
+                        let more = newcomers.count > 8 ? " (+\(newcomers.count - 8) more)" : ""
+                        accumulator.appendNotice("Promoted \(newcomers.count) \(server.name) tools to direct calls.")
+                        workingMessages.append(
+                            ChatMessage(
+                                sessionId: session.id,
+                                role: .user,
+                                content: """
+                                \(newcomers.count) tools on \(server.name) are now directly callable \
+                                this turn: \(names)\(more). Call them by their full \
+                                `mcp__\(server.id)__<tool>` name with that tool's own arguments — \
+                                do not wrap them in \(dispatcher) again.
+                                """
+                            )
+                        )
+                    }
+                }
+
                 if resultSuccess {
                     let leaf = MCPNamespacedTool.parse(toolName)?.toolName ?? toolName
                     if leaf.contains("get_tool_definitions") {
@@ -1350,6 +1420,40 @@ public final class AgentRunner {
                 break
             }
 
+            // MCP escalation. Repeating a call that cannot succeed is the most common way a turn
+            // burns its whole step budget, so warn once, then take the tools away.
+            if !warnedMcpStall, mcpDeadEnds >= 3 {
+                warnedMcpStall = true
+                workingMessages.append(ChatMessage(
+                    sessionId: session.id,
+                    role: .user,
+                    content: """
+                    [System]: MCP calls have failed \(mcpDeadEnds) times in a row. Stop retrying the \
+                    same call. Fix the arguments using the recovery hint in the last tool result, \
+                    use a different enabled server, use a built-in tool, or answer from what you \
+                    already have.
+                    """
+                ))
+            }
+            if !mcpDisabledThisTurn, mcpDeadEnds >= 5 {
+                mcpDisabledThisTurn = true
+                availableTools.removeAll { tool in
+                    MCPNamespacedTool.isNamespaced(tool.name)
+                        || tool.name == "mcp_call"
+                        || tool.name == "call_mcp_tool"
+                }
+                accumulator.appendNotice("MCP tools disabled for this turn after \(mcpDeadEnds) failures.")
+                workingMessages.append(ChatMessage(
+                    sessionId: session.id,
+                    role: .user,
+                    content: """
+                    [System]: MCP tools are disabled for the rest of this turn after \(mcpDeadEnds) \
+                    consecutive failures. Do not attempt another MCP call. Finish with built-in \
+                    tools or tell the user plainly which MCP server failed and what it reported.
+                    """
+                ))
+            }
+
             // Mail check already wrote a deterministic summary — don't keep looping the model.
             if macUseMailCheckComplete {
                 finishedNaturally = true
@@ -1391,6 +1495,26 @@ public final class AgentRunner {
         accumulator.finalize()
     }
 
+    /// The meta-tool on `server` that executes catalog entries by name.
+    ///
+    /// Servers vary (`call_tool_by_name`, `call_tool`); prefer one that is actually advertised,
+    /// and fall back to the tool whose catalog we just read.
+    private static func dispatcherToolName(
+        for server: MCPServerConfig,
+        among tools: [Tool],
+        fallbackLeaf: String
+    ) -> String {
+        let leaves = tools.compactMap { tool -> String? in
+            guard let parsed = MCPNamespacedTool.parse(tool.name),
+                  parsed.serverId == server.id else { return nil }
+            return parsed.toolName
+        }
+        for candidate in ["call_tool_by_name", "call_tool"] where leaves.contains(candidate) {
+            return candidate
+        }
+        return fallbackLeaf
+    }
+
     private static func filterToolsForPlanMode(_ tools: [Tool]) -> [Tool] {
         let blocked: Set<String> = [
             "file_write", "write_file", "create_file", "save_file",
@@ -1404,8 +1528,9 @@ public final class AgentRunner {
             if tool.name == "exit_plan_mode" || tool.name == "ask_user" { return true }
             if blocked.contains(tool.name) { return false }
             if MCPNamespacedTool.isNamespaced(tool.name) {
-                let leaf = MCPNamespacedTool.parse(tool.name)?.toolName ?? tool.name
-                return MCPClientManager.isReadOnlyMCPTool(leaf)
+                // Plan mode allows reads only, and classification is fail-closed: an MCP tool we
+                // cannot positively identify as a read stays out.
+                return !tool.requiresApproval
             }
             if tool.name == "mcp_call" || tool.name == "call_mcp_tool" { return false }
             return true
@@ -1462,31 +1587,32 @@ public final class AgentRunner {
             }
             return nil
         default:
-            // MCP read/list/search tools auto-run; mutating ones still ask.
+            // MCP reads auto-run; writes ask. Classification is fail-closed — anything we cannot
+            // positively identify as a read on a known server counts as a write.
             if MCPNamespacedTool.isNamespaced(toolName) {
-                let leaf = MCPNamespacedTool.parse(toolName)?.toolName ?? toolName
-                if MCPClientManager.isReadOnlyMCPTool(leaf) {
-                    return nil
+                guard let parsed = MCPNamespacedTool.parse(toolName) else {
+                    return "Runs an unidentified Model Context Protocol (MCP) tool."
                 }
-                // MacUse meta-tool: decide from the nested target name.
+                let server = settings.mcpServers.first { $0.id == parsed.serverId }
+                let leaf = parsed.toolName
+
+                // Meta-tools say nothing about what they do — `call_tool_by_name` is a read when
+                // it lists mailboxes and a write when it sends mail. Classify the nested target.
                 if leaf == "call_tool_by_name" || leaf == "call_tool" {
-                    if let nested = macUseNestedToolName(from: argumentsJson),
-                       MCPClientManager.isReadOnlyMCPTool(nested)
-                        || nested.hasPrefix("mail_list_")
-                        || nested.hasPrefix("mail_search_")
-                        || nested.hasPrefix("mail_get_")
-                        || nested == "mail_list_accounts"
-                        || nested == "mail_list_mailboxes"
-                        || nested == "mail_search_messages"
-                        || nested == "mail_get_messages"
-                        || nested == "mail_get_thread"
-                        || nested == "mail_get_attachment" {
+                    let nested = macUseNestedToolName(from: argumentsJson)
+                    if MCPEffectCatalog.classifyNested(server: server, nestedToolName: nested) == .read {
                         return nil
                     }
+                    let label = nested.map { "'\($0)'" } ?? "an unnamed tool"
+                    return "Runs \(label) on MCP server '\(server?.name ?? parsed.serverId)', which may change apps or data on this Mac."
                 }
-                return "Runs a Model Context Protocol (MCP) tool that may change apps or data on this Mac."
+
+                if MCPEffectCatalog.classify(server: server, toolName: leaf, advertised: true) == .read {
+                    return nil
+                }
+                return "Runs '\(leaf)' on MCP server '\(server?.name ?? parsed.serverId)', which may change apps or data on this Mac."
             }
-            if toolName == "mcp_call" {
+            if toolName == "mcp_call" || toolName == "call_mcp_tool" {
                 return "Runs a Model Context Protocol (MCP) tool."
             }
             return nil

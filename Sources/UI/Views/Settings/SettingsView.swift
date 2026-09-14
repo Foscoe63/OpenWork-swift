@@ -13,6 +13,8 @@ public struct SettingsView: View {
     @State private var selectedMcpForEdit: MCPServerConfig? = nil
     @State private var mcpStatusReports: [MCPServerReport] = []
     @State private var mcpStatusBusy = false
+    /// Server ids whose per-tool switches are expanded.
+    @State private var expandedMcpToolLists: Set<String> = []
     @State private var showingAddPlugin = false
     @State private var selectedPluginForDetail: AppExtensionPlugin? = nil
     @State private var pluginSearchText = ""
@@ -2581,10 +2583,7 @@ public struct SettingsView: View {
                                             .foregroundColor(.red.opacity(0.85))
                                             .lineLimit(3)
                                     } else if let tools = report?.tools, !tools.isEmpty {
-                                        Text("Tools: \(tools.prefix(8).joined(separator: ", "))\(tools.count > 8 ? "…" : "")")
-                                            .font(.system(size: 10.5))
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(2)
+                                        mcpToolGateSection(server: mcp, advertised: tools)
                                     }
                                 }
 
@@ -2698,6 +2697,80 @@ public struct SettingsView: View {
     }
 
     // MARK: - Helpers
+    /// Per-tool switches for one connected server. Collapsed to a summary line until opened, so a
+    /// server advertising 40 tools does not bury the rest of the list.
+    @ViewBuilder
+    private func mcpToolGateSection(server: MCPServerConfig, advertised: [String]) -> some View {
+        let expanded = expandedMcpToolLists.contains(server.id)
+        let offCount = advertised.filter { server.disabledTools.contains($0) }.count
+
+        VStack(alignment: .leading, spacing: 5) {
+            Button {
+                if expanded {
+                    expandedMcpToolLists.remove(server.id)
+                } else {
+                    expandedMcpToolLists.insert(server.id)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                    Text("Tools: \(advertised.count)")
+                        .font(.system(size: 10.5))
+                    if offCount > 0 {
+                        Text("\(offCount) off")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(Color.orange.opacity(0.18))
+                            .cornerRadius(4)
+                    }
+                }
+                .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            if !expanded {
+                Text(advertised.prefix(8).joined(separator: ", ") + (advertised.count > 8 ? "…" : ""))
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.secondary.opacity(0.8))
+                    .lineLimit(2)
+            } else {
+                HStack(spacing: 8) {
+                    Button("Enable all") {
+                        var updated = server
+                        MCPToolGate.setAllTools(true, advertised: advertised, in: &updated)
+                        appState.saveMcpServer(updated)
+                    }
+                    Button("Disable all") {
+                        var updated = server
+                        MCPToolGate.setAllTools(false, advertised: advertised, in: &updated)
+                        appState.saveMcpServer(updated)
+                    }
+                }
+                .buttonStyle(.link)
+                .font(.system(size: 10))
+
+                ForEach(advertised.sorted(), id: \.self) { toolName in
+                    Toggle(isOn: Binding(
+                        get: { MCPToolGate.isToolEnabled(server: server, toolName: toolName) },
+                        set: { isOn in
+                            var updated = server
+                            MCPToolGate.setTool(isOn, named: toolName, in: &updated)
+                            appState.saveMcpServer(updated)
+                        }
+                    )) {
+                        Text(toolName)
+                            .font(.system(size: 10.5, design: .monospaced))
+                    }
+                    .toggleStyle(.checkbox)
+                    .controlSize(.mini)
+                    .disabled(!server.isEnabled)
+                }
+            }
+        }
+    }
+
     private func mcpStatusBadge(for mcp: MCPServerConfig, report: MCPServerReport?) -> some View {
         let label: String
         let color: Color

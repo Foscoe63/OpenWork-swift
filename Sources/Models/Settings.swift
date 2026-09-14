@@ -106,6 +106,10 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
     public var headers: [String: String]
     public var env: [String: String]
     public var isEnabled: Bool
+    /// Advertised tool names turned off individually while the server itself stays enabled.
+    /// Storing the *disabled* names (rather than the enabled ones) means tools a server adds
+    /// later are exposed by default instead of silently hidden. See `MCPToolGate`.
+    public var disabledTools: [String]
 
     public init(
         id: String = UUID().uuidString,
@@ -117,7 +121,8 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
         url: String = "",
         headers: [String: String] = [:],
         env: [String: String] = [:],
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        disabledTools: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -129,6 +134,7 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
         self.headers = headers
         self.env = env
         self.isEnabled = isEnabled
+        self.disabledTools = disabledTools
     }
 
     public init(from decoder: Decoder) throws {
@@ -143,6 +149,7 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
         self.headers = try container.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
         self.env = try container.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
         self.isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        self.disabledTools = try container.decodeIfPresent([String].self, forKey: .disabledTools) ?? []
     }
 }
 
