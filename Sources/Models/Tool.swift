@@ -112,6 +112,9 @@ public struct ToolCallInfo: Identifiable, Codable, Hashable, Sendable {
     public var errorMessage: String?
     public var durationMs: Double
     public var timestamp: Date
+    /// Human-readable reason this call was routed through interactive user approval (set only while
+    /// status == .waitingApproval / .pendingApproval, or after the user has responded to that request).
+    public var approvalReason: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -121,7 +124,8 @@ public struct ToolCallInfo: Identifiable, Codable, Hashable, Sendable {
         resultOutput: String? = nil,
         errorMessage: String? = nil,
         durationMs: Double = 0,
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        approvalReason: String? = nil
     ) {
         self.id = id
         self.toolName = toolName
@@ -131,5 +135,6 @@ public struct ToolCallInfo: Identifiable, Codable, Hashable, Sendable {
         self.errorMessage = errorMessage
         self.durationMs = durationMs
         self.timestamp = timestamp
+        self.approvalReason = approvalReason
     }
 }

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & test (macOS)
+    # mlx-swift declares `swift-tools-version: 6.3;(experimentalCGen)`, which needs Xcode 27.
+    # macos-26 ships Xcode 26.x and cannot resolve the package graph, and MLX needs arm64.
+    # `xcode-27` is a preview image label — if it is retired, move to whichever GA image
+    # carries Xcode 27 or newer rather than downgrading it.
+    runs-on: xcode-27
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun swift --version
+
+      # The package graph is large (MLX, swift-nio, transformers); a cold resolve plus
+      # Metal kernel compilation dominates the run.
+      - name: Cache SwiftPM checkouts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            .build/ci/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('OpenWorkSwift.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            spm-${{ runner.os }}-
+
+      # As of Xcode 26 the Metal toolchain is a separately downloadable component rather
+      # than part of the base install. mlx-swift compiles .metal kernel sources, so without
+      # this the build fails at CompileMetalFile with "missing Metal Toolchain".
+      - name: Install Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      # Builds from the committed project.pbxproj rather than regenerating, so CI cannot
+      # drift on an xcodegen version difference. If you change project.yml, run
+      # `xcodegen generate` and commit the result.
+      #
+      # mlx-swift ships a CudaBuild build-tool plugin, and swift-huggingface uses macros.
+      # Xcode gates both behind an interactive trust prompt that a developer answers once
+      # per machine; a fresh runner has never answered it and nobody is there to click, so
+      # the build fails with "must be enabled before it can be used". The skip flags accept
+      # them non-interactively — safe here because the plugin set is pinned by
+      # Package.resolved, but it does mean plugins run without a trust gate.
+      - name: Test
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project OpenWorkSwift.xcodeproj \
+            -scheme OpenWorkSwift \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/ci \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="" \
+            | tee xcodebuild.log
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
+          retention-days: 7

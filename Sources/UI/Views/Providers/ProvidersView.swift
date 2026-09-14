@@ -603,7 +603,7 @@ public struct ProviderEditModalView: View {
                             }
                         }
                         .pickerStyle(.menu)
-                        .onChange(of: draft.kind) { newKind in
+                        .onChange(of: draft.kind) { _, newKind in
                             draft.baseUrl = newKind.defaultBaseUrl
                             draft.name = newKind.displayName
                         }

@@ -139,6 +139,9 @@ public struct LocalModelsView: View {
             }
         }
         .background(Color(hex: "#0C0B14"))
+        .onAppear {
+            appState.refreshLoadedMLXModels()
+        }
         .sheet(isPresented: $showingImportModal) {
             importModelModal
         }
@@ -153,7 +156,10 @@ public struct LocalModelsView: View {
                         .font(.system(size: 28, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
 
-                    Text("\(downloadedModels.count) downloaded • \(formattedTotalDownloadedSize)")
+                    Text("\(downloadedModels.count) downloaded • \(formattedTotalDownloadedSize)"
+                         + (appState.loadedMLXModelIds.isEmpty
+                            ? ""
+                            : " • \(appState.loadedMLXModelIds.count) loaded in memory"))
                         .font(.system(size: 13))
                         .foregroundColor(Color.white.opacity(0.65))
                 }
@@ -161,6 +167,30 @@ public struct LocalModelsView: View {
                 Spacer()
 
                 HStack(spacing: 10) {
+                    if !appState.loadedMLXModelIds.isEmpty {
+                        Button {
+                            appState.unloadAllMLXModels()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "memorychip")
+                                    .font(.system(size: 12))
+                                Text("Unload All")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.orange.opacity(0.2))
+                            .foregroundColor(Color.orange)
+                            .cornerRadius(6)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.orange.opacity(0.45), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .help("Free Metal/RAM used by in-process MLX models so you can load a different one")
+                    }
+
                     // Rescan button
                     Button {
                         appState.rescanMLXModels()
@@ -669,6 +699,20 @@ public struct LocalModelCardView: View {
                                 .clipShape(Capsule())
                         }
 
+                        if appState.loadedMLXModelIds.contains(model.id) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "memorychip")
+                                    .font(.system(size: 9.5))
+                                Text("In Memory")
+                                    .font(.system(size: 10, weight: .bold))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.orange.opacity(0.55))
+                            .clipShape(Capsule())
+                        }
+
                         Spacer()
 
                         if model.isTopPick {
@@ -768,8 +812,31 @@ public struct LocalModelCardView: View {
                         }
                         .buttonStyle(.plain)
 
+                        if appState.loadedMLXModelIds.contains(model.id) {
+                            Button {
+                                appState.unloadMLXModel(id: model.id)
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "eject.fill")
+                                        .font(.system(size: 10))
+                                    Text("Unload")
+                                        .font(.system(size: 11, weight: .bold))
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5.5)
+                                .background(Color.orange.opacity(0.22))
+                                .foregroundColor(Color.orange)
+                                .cornerRadius(5)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Unload this model from Metal/RAM")
+                        }
+
                         Button {
                             do {
+                                if appState.loadedMLXModelIds.contains(model.id) {
+                                    appState.unloadMLXModel(id: model.id)
+                                }
                                 try LocalMLXEngine.shared.deleteModel(model: model)
                                 appState.rescanMLXModels()
                                 appState.showToast("Removed \(model.name)")

@@ -72,7 +72,14 @@ public struct MessageBubbleView: View {
 
     // MARK: - Assistant Message
     private var assistantMessageLayout: some View {
-        HStack(alignment: .top, spacing: 12) {
+        let pendingApprovals = message.toolCalls.filter {
+            $0.status == .waitingApproval || $0.status == .pendingApproval
+        }
+        let otherToolCalls = message.toolCalls.filter {
+            $0.status != .waitingApproval && $0.status != .pendingApproval
+        }
+
+        return HStack(alignment: .top, spacing: 12) {
             // Agent Avatar
             Image(systemName: message.agentAvatar ?? "sparkles")
                 .font(.system(size: 16))
@@ -143,34 +150,135 @@ public struct MessageBubbleView: View {
                     }
                 }
 
-                // Interactive Plan Confirmation Preview (Golden Rule #1: "Always review the plan before approval")
-                if message.content.contains("Proposed Execution Plan:") || message.content.contains("Plan:") && message.role == .assistant && !message.toolCalls.isEmpty {
-                    PlanApprovalCardView(appState: appState, proposedPlanText: "1. Scan staged workspace files\n2. Execute autonomous tool operations\n3. Format clean output artifacts")
+                // Completed / running tool calls stay above the answer (collapsed when many).
+                if !otherToolCalls.isEmpty {
+                    toolCallsSection(otherToolCalls, collapsedLabel: "\(otherToolCalls.count) tool calls")
                 }
 
-                // Tool Calls (if any)
-                if !message.toolCalls.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(message.toolCalls) { toolCall in
-                            ToolCallCardView(toolCall: toolCall)
+                if !message.notices.isEmpty && (message.isStreaming || message.content.isEmpty) {
+                    FlowNoticeChipsView(notices: message.notices, theme: appState.settings.theme)
+                }
+
+                if let haltText = message.haltText, !haltText.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11))
+                            Text(haltText)
+                                .font(.system(size: 12, weight: .medium))
                         }
+                        .foregroundColor(.orange)
+                        Text("Press Continue to resume from where the agent stopped.")
+                            .font(.system(size: 11))
+                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                        Button {
+                            appState.continueAfterHalt()
+                        } label: {
+                            Text("Continue")
+                                .font(.system(size: 12, weight: .semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.orange.opacity(0.2))
+                                .foregroundColor(.orange)
+                                .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(appState.isGenerating)
                     }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+                    )
+                    .cornerRadius(8)
                 }
 
-                // Main Markdown / Content Text
+                // Main Markdown / Content Text — read this first.
                 if !message.content.isEmpty {
                     MarkdownRichContentView(content: message.content, appState: appState)
                 } else if message.isStreaming {
                     HStack(spacing: 4) {
                         ProgressView()
                             .scaleEffect(0.6)
-                        Text("Generating response...")
+                        Text(message.notices.last ?? "Generating response...")
                             .font(.system(size: 11))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                            .lineLimit(2)
                     }
+                }
+
+                // Pending approvals AFTER the answer so scroll-to-bottom lands on Approve/Reject
+                // instead of burying them under a long MCP tool list + reply.
+                if !pendingApprovals.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(pendingApprovals.count == 1 ? "Approval needed" : "Approvals needed")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.orange)
+                        ForEach(pendingApprovals) { toolCall in
+                            ToolCallCardView(toolCall: toolCall, preferExpanded: true)
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.orange.opacity(0.4), lineWidth: 1)
+                    )
+                    .cornerRadius(8)
+                    .id("approval-\(message.id)")
                 }
             }
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func toolCallsSection(_ calls: [ToolCallInfo], collapsedLabel: String) -> some View {
+        if calls.count > 3 {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(calls) { toolCall in
+                        ToolCallCardView(toolCall: toolCall)
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: 10))
+                    Text(collapsedLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                    Spacer()
+                }
+                .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(calls) { toolCall in
+                    ToolCallCardView(toolCall: toolCall)
+                }
+            }
+        }
+    }
+}
+
+private struct FlowNoticeChipsView: View {
+    let notices: [String]
+    let theme: AppTheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(notices.enumerated()), id: \.offset) { _, notice in
+                Text(notice)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(ThemeColors.textSecondary(for: theme))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(ThemeColors.border(for: theme).opacity(0.45))
+                    .cornerRadius(10)
+            }
+        }
     }
 }

@@ -2,10 +2,18 @@ import SwiftUI
 
 public struct ToolCallCardView: View {
     let toolCall: ToolCallInfo
-    @State private var isExpanded: Bool = false
+    let preferExpanded: Bool
+    @State private var isExpanded: Bool
 
-    public init(toolCall: ToolCallInfo) {
+    public init(toolCall: ToolCallInfo, preferExpanded: Bool = false) {
         self.toolCall = toolCall
+        self.preferExpanded = preferExpanded
+        let needsApproval = toolCall.status == .waitingApproval || toolCall.status == .pendingApproval
+        _isExpanded = State(initialValue: preferExpanded || needsApproval)
+    }
+
+    private var needsApproval: Bool {
+        toolCall.status == .waitingApproval || toolCall.status == .pendingApproval
     }
 
     public var body: some View {
@@ -27,7 +35,7 @@ public struct ToolCallCardView: View {
                     Text("(\(toolCall.argumentsJson))")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(needsApproval ? 3 : 1)
 
                     Spacer()
 
@@ -37,9 +45,11 @@ public struct ToolCallCardView: View {
                             .foregroundColor(.secondary)
                     }
 
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                    if !needsApproval {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -47,6 +57,10 @@ public struct ToolCallCardView: View {
                 .cornerRadius(6)
             }
             .buttonStyle(.plain)
+
+            if needsApproval {
+                approvalPrompt
+            }
 
             if isExpanded, let output = toolCall.resultOutput {
                 Text(output)
@@ -58,6 +72,39 @@ public struct ToolCallCardView: View {
                     .cornerRadius(6)
             }
         }
+    }
+
+    private var approvalPrompt: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let reason = toolCall.approvalReason, !reason.isEmpty {
+                Text(reason)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            HStack(spacing: 8) {
+                Button {
+                    ToolApprovalManager.shared.resolve(callId: toolCall.id, approved: true)
+                } label: {
+                    Label("Approve", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+
+                Button {
+                    ToolApprovalManager.shared.resolve(callId: toolCall.id, approved: false)
+                } label: {
+                    Label("Reject", systemImage: "xmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .cornerRadius(6)
     }
 
     private var statusColor: Color {

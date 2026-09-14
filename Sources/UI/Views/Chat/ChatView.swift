@@ -28,11 +28,10 @@ public struct ChatView: View {
                         .padding(.vertical, 12)
                     }
                     .onMessageCountChanged(count: session.messages.count) {
-                        if let last = session.messages.last {
-                            withAnimation {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
-                        }
+                        scrollChatToLatest(proxy: proxy, session: session)
+                    }
+                    .onChange(of: pendingApprovalScrollKey) { _ in
+                        scrollChatToLatest(proxy: proxy, session: session)
                     }
                 }
             } else {
@@ -42,7 +41,32 @@ public struct ChatView: View {
             // Composer Dock
             ComposerView(appState: appState)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ThemeColors.bg(for: appState.settings.theme))
+    }
+
+    /// Changes when the latest message gains/loses a pending Approve/Reject — scroll so it stays on screen.
+    private var pendingApprovalScrollKey: String {
+        guard let last = appState.currentSession?.messages.last else { return "" }
+        let pending = last.toolCalls
+            .filter { $0.status == .waitingApproval || $0.status == .pendingApproval }
+            .map(\.id)
+            .sorted()
+        return pending.joined(separator: ",")
+    }
+
+    private func scrollChatToLatest(proxy: ScrollViewProxy, session: Session) {
+        guard let last = session.messages.last else { return }
+        let hasPending = last.toolCalls.contains {
+            $0.status == .waitingApproval || $0.status == .pendingApproval
+        }
+        withAnimation {
+            if hasPending {
+                proxy.scrollTo("approval-\(last.id)", anchor: .bottom)
+            } else {
+                proxy.scrollTo(last.id, anchor: .bottom)
+            }
+        }
     }
 
     // MARK: - Header Bar
@@ -65,76 +89,24 @@ public struct ChatView: View {
                 }
             }
 
-            // Quick Model Selector in Header
-            Menu {
-                let downloadedLocal = appState.localMLXModels.filter { $0.isDownloaded }
-                Section("⚡️ Local Apple Silicon (MLX)") {
-                    if !downloadedLocal.isEmpty {
-                        ForEach(downloadedLocal) { localModel in
-                            Button {
-                                appState.selectLocalMLXModel(localModel)
-                            } label: {
-                                HStack {
-                                    Text(localModel.name)
-                                    if let q = localModel.quantization {
-                                        Text("[\(q)]")
-                                    }
-                                    if localModel.id == appState.selectedModelId {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        ForEach(LocalMLXEngine.curatedModels.prefix(6)) { localModel in
-                            Button {
-                                appState.selectLocalMLXModel(localModel)
-                            } label: {
-                                HStack {
-                                    Text(localModel.name)
-                                    if let q = localModel.quantization {
-                                        Text("[\(q)]")
-                                    }
-                                    if localModel.id == appState.selectedModelId {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Button {
-                        appState.navigationDestination = .localModels
-                    } label: {
-                        Label("Manage Local Models...", systemImage: "cube.fill")
-                    }
+            // Session workspace — synced with sidebar "Core Workspaces & Research"
+            WorkspaceSwitcherMenu(
+                appState: appState,
+                showsManagementActions: true,
+                onSelectWorkspace: { id in
+                    appState.assignCurrentSessionWorkspace(to: id)
                 }
-
-                ForEach(appState.providers.filter { $0.isEnabled && $0.kind != .omlx && $0.kind != .vmlx }) { prov in
-                    Section(prov.name) {
-                        ForEach(prov.models) { m in
-                            Button {
-                                appState.selectedProviderId = prov.id
-                                appState.selectedModelId = m.id
-                            } label: {
-                                HStack {
-                                    Text(m.name)
-                                    if m.id == appState.selectedModelId && prov.id == appState.selectedProviderId {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } label: {
+            ) {
                 HStack(spacing: 5) {
-                    let isMLX = appState.currentProvider.kind == .omlx || appState.currentProvider.kind == .vmlx || appState.localMLXModels.contains(where: { $0.id == appState.selectedModelId })
-                    Image(systemName: isMLX ? "cpu.fill" : appState.currentProvider.kind.icon)
-                        .font(.system(size: 10))
-                        .foregroundColor(isMLX ? Color(hex: "#C084FC") : ThemeColors.accent(for: appState.settings.accentColor))
+                    Circle()
+                        .fill(Color(hex: appState.currentWorkspace.color))
+                        .frame(width: 7, height: 7)
 
-                    Text(appState.currentModel.name)
+                    Image(systemName: appState.currentWorkspace.icon)
+                        .font(.system(size: 10))
+                        .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+
+                    Text(appState.currentWorkspace.name)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
                         .lineLimit(1)
@@ -152,7 +124,10 @@ public struct ChatView: View {
                         .stroke(ThemeColors.border(for: appState.settings.theme).opacity(0.8), lineWidth: 1)
                 )
             }
-            .menuStyle(.borderlessButton)
+            .help("Workspace for this session (synced with sidebar)")
+
+            // Quick Model Selector in Header (searchable)
+            ModelPickerButton(appState: appState, style: .header)
 
             Spacer()
 

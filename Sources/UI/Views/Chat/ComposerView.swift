@@ -130,8 +130,10 @@ final class CustomChatNSTextView: NSTextView {
 public struct ComposerView: View {
     @ObservedObject var appState: AppState
     @ObservedObject var voiceEngine = VoiceSpeechEngine.shared
+    @ObservedObject private var userChoiceManager = UserChoiceManager.shared
     @State private var attachments: [MessageAttachment] = []
     @State private var showingSlashCommands = false
+    @State private var askUserFreeText: String = ""
 
     private var matchingPromptTemplates: [PromptTemplate] {
         let trimmed = appState.composerText.trimmingCharacters(in: .whitespaces)
@@ -153,6 +155,74 @@ public struct ComposerView: View {
 
     public var body: some View {
         VStack(spacing: 8) {
+            if let pending = userChoiceManager.pending {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "questionmark.circle.fill")
+                            .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                        Text("Agent is asking you")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                    }
+                    Text(pending.question)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if pending.options.isEmpty {
+                        HStack(spacing: 8) {
+                            TextField("Type your answer…", text: $askUserFreeText)
+                                .textFieldStyle(.roundedBorder)
+                            Button("Submit") {
+                                let answer = askUserFreeText
+                                askUserFreeText = ""
+                                userChoiceManager.resolve(answer: answer)
+                            }
+                            .disabled(askUserFreeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(pending.options, id: \.self) { option in
+                                Button {
+                                    userChoiceManager.resolve(answer: option)
+                                } label: {
+                                    Text(option)
+                                        .font(.system(size: 12.5, weight: .medium))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 7)
+                                        .background(ThemeColors.cardBg(for: appState.settings.theme))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(ThemeColors.border(for: appState.settings.theme), lineWidth: 1)
+                                        )
+                                        .cornerRadius(6)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            HStack(spacing: 8) {
+                                TextField("Or type a custom answer…", text: $askUserFreeText)
+                                    .textFieldStyle(.roundedBorder)
+                                Button("Send") {
+                                    let answer = askUserFreeText
+                                    askUserFreeText = ""
+                                    userChoiceManager.resolve(answer: answer)
+                                }
+                                .disabled(askUserFreeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+                .background(ThemeColors.cardBg(for: appState.settings.theme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(ThemeColors.accent(for: appState.settings.accentColor).opacity(0.45), lineWidth: 1)
+                )
+                .cornerRadius(10)
+                .padding(.horizontal, 16)
+            }
+
             // Slash Command Autocomplete Popover / Overlay
             if !matchingPromptTemplates.isEmpty && appState.composerText.hasPrefix("/") {
                 VStack(alignment: .leading, spacing: 2) {
@@ -360,101 +430,8 @@ public struct ComposerView: View {
                 }
                 .menuStyle(.borderlessButton)
 
-                // Model Picker Pill (with Local Apple Silicon MLX models support)
-                Menu {
-                    // 1. Local MLX On-Device Models Section
-                    let downloadedLocal = appState.localMLXModels.filter { $0.isDownloaded }
-                    Section("⚡️ Local Apple Silicon (MLX)") {
-                        if !downloadedLocal.isEmpty {
-                            ForEach(downloadedLocal) { localModel in
-                                Button {
-                                    appState.selectLocalMLXModel(localModel)
-                                } label: {
-                                    HStack {
-                                        Text(localModel.name)
-                                        if let q = localModel.quantization {
-                                            Text("[\(q)]")
-                                        }
-                                        if localModel.isVLM {
-                                            Text("👁")
-                                        }
-                                        if localModel.useCase == .reasoning {
-                                            Text("🧠")
-                                        }
-                                        if localModel.id == appState.selectedModelId {
-                                            Image(systemName: "checkmark")
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            // Show curated presets if scan is still empty
-                            ForEach(LocalMLXEngine.curatedModels.prefix(6)) { localModel in
-                                Button {
-                                    appState.selectLocalMLXModel(localModel)
-                                } label: {
-                                    HStack {
-                                        Text(localModel.name)
-                                        if let q = localModel.quantization {
-                                            Text("[\(q)]")
-                                        }
-                                        if localModel.id == appState.selectedModelId {
-                                            Image(systemName: "checkmark")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Button {
-                            appState.navigationDestination = .localModels
-                        } label: {
-                            Label("Manage Local Models Catalog...", systemImage: "cube.fill")
-                        }
-                    }
-
-                    // 2. Other Configured & Enabled Providers
-                    ForEach(appState.providers.filter { $0.isEnabled && $0.kind != .omlx && $0.kind != .vmlx }) { prov in
-                        Section(prov.name) {
-                            ForEach(prov.models) { m in
-                                Button {
-                                    appState.selectedProviderId = prov.id
-                                    appState.selectedModelId = m.id
-                                } label: {
-                                    HStack {
-                                        Text(m.name)
-                                        if m.supportsReasoning {
-                                            Text("🧠")
-                                        }
-                                        if m.id == appState.selectedModelId && prov.id == appState.selectedProviderId {
-                                            Image(systemName: "checkmark")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        let isMLX = appState.currentProvider.kind == .omlx || appState.currentProvider.kind == .vmlx || appState.localMLXModels.contains(where: { $0.id == appState.selectedModelId })
-                        Image(systemName: isMLX ? "cpu.fill" : appState.currentProvider.kind.icon)
-                            .font(.system(size: 10))
-                            .foregroundColor(isMLX ? Color(hex: "#C084FC") : ThemeColors.textSecondary(for: appState.settings.theme))
-
-                        Text(appState.currentModel.name)
-                            .font(.system(size: 11, weight: .medium))
-                            .lineLimit(1)
-
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 8))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3.5)
-                    .background(ThemeColors.cardBg(for: appState.settings.theme))
-                    .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
-                    .cornerRadius(6)
-                }
-                .menuStyle(.borderlessButton)
+                // Model Picker Pill (searchable)
+                ModelPickerButton(appState: appState, style: .composer)
 
                 // Reasoning Effort Switch
                 Button {
@@ -473,6 +450,9 @@ public struct ComposerView: View {
                     .cornerRadius(4)
                 }
                 .buttonStyle(.plain)
+                .help(appState.isReasoningEnabled
+                    ? "Reasoning is on for this chat — models that support it will think before answering. Click to disable."
+                    : "Reasoning is off for this chat — models will answer directly without a thinking step. Click to enable.")
 
                 Spacer()
 

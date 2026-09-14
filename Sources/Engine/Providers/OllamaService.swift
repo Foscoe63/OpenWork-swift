@@ -108,10 +108,19 @@ public final class OllamaService: LLMProviderClient, @unchecked Sendable {
         }
         for msg in messages {
             if msg.role == .tool {
-                formattedMessages.append([
-                    "role": "user",
-                    "content": "[Tool Result]:\n\(msg.content)\n\nPlease continue your response incorporating the tool result above."
-                ])
+                // Prefer native tool role when the request includes tools (Radiant parity).
+                if !tools.isEmpty {
+                    formattedMessages.append([
+                        "role": "tool",
+                        "content": msg.content,
+                        "tool_call_id": msg.id
+                    ])
+                } else {
+                    formattedMessages.append([
+                        "role": "user",
+                        "content": "[Tool Result]:\n\(msg.content)\n\nPlease continue your response incorporating the tool result above."
+                    ])
+                }
             } else {
                 formattedMessages.append(["role": msg.role.rawValue, "content": msg.content])
             }

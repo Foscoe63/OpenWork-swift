@@ -106,6 +106,10 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
     public var headers: [String: String]
     public var env: [String: String]
     public var isEnabled: Bool
+    /// Advertised tool names turned off individually while the server itself stays enabled.
+    /// Storing the *disabled* names (rather than the enabled ones) means tools a server adds
+    /// later are exposed by default instead of silently hidden. See `MCPToolGate`.
+    public var disabledTools: [String]
 
     public init(
         id: String = UUID().uuidString,
@@ -117,7 +121,8 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
         url: String = "",
         headers: [String: String] = [:],
         env: [String: String] = [:],
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        disabledTools: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -129,6 +134,7 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
         self.headers = headers
         self.env = env
         self.isEnabled = isEnabled
+        self.disabledTools = disabledTools
     }
 
     public init(from decoder: Decoder) throws {
@@ -143,6 +149,7 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
         self.headers = try container.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
         self.env = try container.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
         self.isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        self.disabledTools = try container.decodeIfPresent([String].self, forKey: .disabledTools) ?? []
     }
 }
 
@@ -168,6 +175,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var streamResponses: Bool
     public var autoCompactContext: Bool
     public var contextCompactionThresholdTokens: Int
+    public var planModeEnabled: Bool
+    public var maxTurnTokens: Int
     public var playNotificationSounds: Bool
 
     // Permissions & Shell
@@ -198,6 +207,11 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var voiceSynthesisEnabled: Bool
     public var speechVoiceIdentifier: String
     public var imageGenerationEnabled: Bool
+
+    // Google Integrations (secrets live in Keychain; these are non-secret toggles/metadata)
+    public var googleAccountEmail: String
+    public var gmailExtensionEnabled: Bool
+    public var googleCalendarExtensionEnabled: Bool
 
     // MLX Local Runtime & External Models (GrizzyClaw & Osaurus Parity)
     public var customMLXModelsDirectory: String
@@ -233,7 +247,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
                 command: "npx",
                 args: ["-y", "@modelcontextprotocol/server-filesystem", workspaceMain],
                 workingDirectory: workspaceMain,
-                isEnabled: true
+                isEnabled: false
             ),
             MCPServerConfig(
                 id: "mcp-fetch",
@@ -241,7 +255,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
                 transportType: .stdio,
                 command: "npx",
                 args: ["-y", "@modelcontextprotocol/server-fetch"],
-                isEnabled: true
+                isEnabled: false
             ),
             MCPServerConfig(
                 id: "mcp-memory",
@@ -249,7 +263,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
                 transportType: .stdio,
                 command: "npx",
                 args: ["-y", "@modelcontextprotocol/server-memory"],
-                isEnabled: true
+                isEnabled: false
             ),
             MCPServerConfig(
                 id: "mcp-git",
@@ -258,7 +272,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
                 command: "npx",
                 args: ["-y", "@modelcontextprotocol/server-git", "--repository", workspaceMain],
                 workingDirectory: workspaceMain,
-                isEnabled: true
+                isEnabled: false
             ),
             MCPServerConfig(
                 id: "mcp-macuse",
@@ -267,7 +281,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
                 command: "npx",
                 args: ["-y", "macuse-mcp"],
                 workingDirectory: workspaceMain,
-                isEnabled: true
+                isEnabled: false
             )
         ]
     }
@@ -291,6 +305,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         streamResponses: Bool = true,
         autoCompactContext: Bool = true,
         contextCompactionThresholdTokens: Int = 32000,
+        planModeEnabled: Bool = false,
+        maxTurnTokens: Int = 2_000_000,
         playNotificationSounds: Bool = true,
         authorizedFolders: [String] = [FileManager.default.homeDirectoryForCurrentUser.path],
         terminalSafetyLevel: TerminalSafetyLevel = .safeOnly,
@@ -313,7 +329,12 @@ public struct AppSettings: Codable, Hashable, Sendable {
         voiceSynthesisEnabled: Bool = false,
         speechVoiceIdentifier: String = "com.apple.speech.synthesis.voice.Alex",
         imageGenerationEnabled: Bool = true,
-        customMLXModelsDirectory: String = "",
+        googleAccountEmail: String = "",
+        gmailExtensionEnabled: Bool = false,
+        googleCalendarExtensionEnabled: Bool = false,
+        customMLXModelsDirectory: String = FileManager.default.fileExists(atPath: "/Volumes/Storage/Models")
+            ? "/Volumes/Storage/Models"
+            : "",
         scanHuggingFaceCache: Bool = true,
         scanLMStudioModels: Bool = true,
         customHFCachePath: String = "",
@@ -347,6 +368,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.streamResponses = streamResponses
         self.autoCompactContext = autoCompactContext
         self.contextCompactionThresholdTokens = contextCompactionThresholdTokens
+        self.planModeEnabled = planModeEnabled
+        self.maxTurnTokens = maxTurnTokens
         self.playNotificationSounds = playNotificationSounds
         self.authorizedFolders = authorizedFolders
         self.terminalSafetyLevel = terminalSafetyLevel
@@ -369,6 +392,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.voiceSynthesisEnabled = voiceSynthesisEnabled
         self.speechVoiceIdentifier = speechVoiceIdentifier
         self.imageGenerationEnabled = imageGenerationEnabled
+        self.googleAccountEmail = googleAccountEmail
+        self.gmailExtensionEnabled = gmailExtensionEnabled
+        self.googleCalendarExtensionEnabled = googleCalendarExtensionEnabled
         self.customMLXModelsDirectory = customMLXModelsDirectory
         self.scanHuggingFaceCache = scanHuggingFaceCache
         self.scanLMStudioModels = scanLMStudioModels
@@ -409,6 +435,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.streamResponses = try container.decodeIfPresent(Bool.self, forKey: .streamResponses) ?? def.streamResponses
         self.autoCompactContext = try container.decodeIfPresent(Bool.self, forKey: .autoCompactContext) ?? def.autoCompactContext
         self.contextCompactionThresholdTokens = try container.decodeIfPresent(Int.self, forKey: .contextCompactionThresholdTokens) ?? def.contextCompactionThresholdTokens
+        self.planModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .planModeEnabled) ?? false
+        self.maxTurnTokens = try container.decodeIfPresent(Int.self, forKey: .maxTurnTokens) ?? 2_000_000
         self.playNotificationSounds = try container.decodeIfPresent(Bool.self, forKey: .playNotificationSounds) ?? def.playNotificationSounds
 
         self.authorizedFolders = try container.decodeIfPresent([String].self, forKey: .authorizedFolders) ?? def.authorizedFolders
@@ -437,6 +465,10 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.voiceSynthesisEnabled = try container.decodeIfPresent(Bool.self, forKey: .voiceSynthesisEnabled) ?? def.voiceSynthesisEnabled
         self.speechVoiceIdentifier = try container.decodeIfPresent(String.self, forKey: .speechVoiceIdentifier) ?? def.speechVoiceIdentifier
         self.imageGenerationEnabled = try container.decodeIfPresent(Bool.self, forKey: .imageGenerationEnabled) ?? def.imageGenerationEnabled
+
+        self.googleAccountEmail = try container.decodeIfPresent(String.self, forKey: .googleAccountEmail) ?? def.googleAccountEmail
+        self.gmailExtensionEnabled = try container.decodeIfPresent(Bool.self, forKey: .gmailExtensionEnabled) ?? def.gmailExtensionEnabled
+        self.googleCalendarExtensionEnabled = try container.decodeIfPresent(Bool.self, forKey: .googleCalendarExtensionEnabled) ?? def.googleCalendarExtensionEnabled
 
         self.customMLXModelsDirectory = try container.decodeIfPresent(String.self, forKey: .customMLXModelsDirectory) ?? def.customMLXModelsDirectory
         self.scanHuggingFaceCache = try container.decodeIfPresent(Bool.self, forKey: .scanHuggingFaceCache) ?? def.scanHuggingFaceCache

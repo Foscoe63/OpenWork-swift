@@ -306,6 +306,11 @@ public struct McpServerEditModalView: View {
     @State private var newEnvValue: String = ""
     @State private var newEnvSecret: Bool = false
 
+    // Fields this form does not expose, kept so saving cannot silently reset them.
+    private let preservedHeaders: [String: String]
+    private let preservedIsEnabled: Bool
+    private let preservedDisabledTools: [String]
+
     public init(appState: AppState, isPresented: Binding<Bool>, editingConfig: MCPServerConfig? = nil) {
         self.appState = appState
         self._isPresented = isPresented
@@ -318,6 +323,9 @@ public struct McpServerEditModalView: View {
         self._argsText = State(initialValue: initial.args.joined(separator: " "))
         self._workingDirectory = State(initialValue: initial.workingDirectory)
         self._url = State(initialValue: initial.url)
+        self.preservedHeaders = initial.headers
+        self.preservedIsEnabled = initial.isEnabled
+        self.preservedDisabledTools = initial.disabledTools
 
         var list: [(id: UUID, key: String, value: String, isSecret: Bool)] = []
         for (k, v) in initial.env {
@@ -404,6 +412,8 @@ public struct McpServerEditModalView: View {
                         }
                     }
 
+                    // Carry over state this form does not edit — headers, the enabled switch and
+                    // per-tool gates all live on the same record and were previously reset here.
                     let config = MCPServerConfig(
                         id: serverId,
                         name: name,
@@ -412,7 +422,10 @@ public struct McpServerEditModalView: View {
                         args: argsText.components(separatedBy: " ").filter { !$0.isEmpty },
                         workingDirectory: workingDirectory,
                         url: url,
-                        env: envDict
+                        headers: preservedHeaders,
+                        env: envDict,
+                        isEnabled: preservedIsEnabled,
+                        disabledTools: preservedDisabledTools
                     )
 
                     appState.saveMcpServer(config)
