@@ -46,9 +46,9 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 | | Capability |
 |:---:|---|
 | 🔁 | Multi-turn ReAct with **native tool / function calling** (OpenAI, Ollama, in-process MLX) plus markdown / XML fallbacks |
-| 📁 | Filesystem — `file_read` (paginated, numbered), `file_write`, `edit_file`, `file_list`, `file_copy`, `file_move`, `file_delete` |
-| 🔎 | Code search — `grep` (regex → `path:line: text`), `glob` (`**/*.swift`), `search_workspace` (BM25 index) |
-| 🔨 | Build & test — `build_project`, `run_tests` — failures come back as `file:line: message` |
+| 📁 | Filesystem — `file_read` (paginated, numbered), `file_write`, `edit_file`, `multi_edit` (several edits, all or nothing), `file_list`, `file_copy`, `file_move`, `file_delete` |
+| 🔎 | Code search — `grep` (regex → `path:line: text`), `glob` (`**/*.swift`), `find_symbol` (declarations only), `search_workspace` (BM25 index) |
+| 🔨 | Build & test — `build_project`, `run_tests` — failures come back as `file:line: message`, and `run_tests(only_failing: true)` re-runs just the ones that failed |
 | 🌿 | Git — `git_status`, `git_diff`, `git_log` (read-only; committing stays yours) |
 | ↩️ | Undo — `changed_files`, `revert_changes` restore everything a turn touched |
 | 💻 | Shell — `terminal_command` / `run_command` |
@@ -60,8 +60,10 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 - Full JSON parameter schemas via `ToolSchemaCatalog` (critical for local-model tool use)
 - **Workspace context** in the system prompt — path, project type, layout, git branch and dirty count
 - **Per-repo instructions** — `OPENWORK.md` / `AGENTS.md` / `CLAUDE.md` at the workspace root
-- **Turn-change review** — a footer appears when a turn touched files; per-file diffs, revert one or all
-- Context compaction keeps a factual digest of what dropped turns did (files edited, commands run, failures), so a long session does not forget its own work
+- **Turn-change review** — a footer appears when a turn touched files; per-file diffs, revert one or all. A session-wide view lists everything the session touched, with git's diff — read-only, because undo covers the current turn only
+- **Fork a conversation** from any message — right-click it. The branch is the conversation only: files the discarded turns changed are still on disk, and the fork says which
+- Context compaction keeps a factual digest of what dropped turns did (files edited, commands run, failures), so a long session does not forget its own work. It fires at *milestones* — a green test run, a clean tree — as well as on token pressure, so it trades detail for room when history is most disposable
+- **Shortcuts & Siri** — "Ask OpenWork" and "Run Automation" App Intents run the same agent loop. Approvals are refused rather than awaited when nothing is on screen to grant them, and the result reports what it skipped
 - **Plan mode** (read-only tools + `exit_plan_mode`)
 - Approval gates for destructive / MCP write actions. MCP read/write classification is **fail-closed**: a tool is a read only when a known server advertises it and it is absent from that server's write list, so unknown servers ask. Expect more prompts than a name-prefix heuristic would produce — that is the point
 - Sub-agent spawning and inter-agent messaging in the Side Inspector
@@ -71,6 +73,7 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 
 - **Local Models** tab (On Device / Catalog) for MLX discovery and selection
 - Built-in Apple Silicon path (`NativeMLXService` / `LocalMLXEngine`) with real `ToolSpec` + `streamDetails` tool calls
+- **KV cache reuse** — a continued conversation is appended to the live `ChatSession` rather than re-prefilled. Measured on a 48B model, time-to-first-token goes from 1.5s at three messages and climbing ~0.67s per exchange, to a flat 0.9s. Any rewrite of earlier history (compaction, a fork) rebuilds instead, because a cache describing text no longer in the conversation would keep steering the model invisibly
 - Optional servers: oMLX, mlx_lm, Osaurus, Ollama, LM Studio
 - Cloud & remote: OpenAI-compatible, Anthropic, Groq, OpenRouter, DeepSeek, Mistral, Gemini, custom endpoints
 - Provider probing, model listing, Keychain-backed API keys
