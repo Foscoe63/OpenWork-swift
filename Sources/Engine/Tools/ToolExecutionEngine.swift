@@ -152,6 +152,35 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             await FileCheckpointStore.shared.record(path: fullPath)
             return writeFile(path: fullPath, content: content, startTime: startTime)
 
+        case "build_project", "run_tests":
+            let action: BuildDiagnostics.Action = toolName == "run_tests" ? .test : .build
+            let root = workspace.folderPath
+            let explicit = (dict["command"] as? String)?.trimmingCharacters(in: .whitespaces)
+            let kinds = WorkspaceContext.detectProjectKinds(at: root)
+            guard let command = (explicit?.isEmpty == false ? explicit : nil)
+                ?? BuildDiagnostics.command(forProjectKinds: kinds, action: action) else {
+                let detected = kinds.isEmpty ? "none detected" : kinds.joined(separator: ", ")
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "Cannot infer a \(action.rawValue) command for this project (\(detected)). "
+                        + "Pass `command` explicitly, or use terminal_command.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            let run = runProcess(command: command, cwd: root, timeoutSeconds: 600)
+            let summary = BuildDiagnostics.summarize(
+                command: command,
+                exitCode: run.exitCode,
+                output: run.output,
+                root: root
+            )
+            return ToolExecutionResult(
+                success: run.exitCode == 0,
+                output: summary,
+                error: run.exitCode == 0 ? nil : summary,
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
         case "git_status":
             let out = GitTools.status(in: workspace.folderPath)
             return ToolExecutionResult(
@@ -1126,6 +1155,67 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
         }
+    }
+
+    struct ProcessRun {
+        var output: String
+        var exitCode: Int32
+        var timedOut: Bool
+    }
+
+    /// Run a shell command, draining output as it arrives so a chatty build cannot deadlock on a
+    /// full pipe buffer. Used by the build/test tools, which need a longer budget than the
+    /// interactive shell tool.
+    func runProcess(command: String, cwd: String, timeoutSeconds: TimeInterval) -> ProcessRun {
+        let settings = PersistenceManager.shared.loadSettings()
+        let shellPath = settings.terminalShell.isEmpty ? "/bin/zsh" : settings.terminalShell
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: shellPath)
+        process.arguments = ["-c", command]
+        process.environment = ToolExecutionEngine.defaultEnvironment(custom: settings.customEnvironmentVariables)
+        process.currentDirectoryURL = URL(fileURLWithPath: (cwd as NSString).expandingTildeInPath)
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        let state = ShellOutputState(maxBytes: 1_000_000)
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty { state.append(chunk) }
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + timeoutSeconds)
+        timer.setEventHandler {
+            if process.isRunning {
+                state.markTimedOut()
+                process.terminate()
+            }
+        }
+        timer.resume()
+
+        do {
+            try process.run()
+        } catch {
+            timer.cancel()
+            pipe.fileHandleForReading.readabilityHandler = nil
+            return ProcessRun(output: "Failed to launch: \(error.localizedDescription)", exitCode: -1, timedOut: false)
+        }
+        process.waitUntilExit()
+        timer.cancel()
+        pipe.fileHandleForReading.readabilityHandler = nil
+        let remainder = pipe.fileHandleForReading.readDataToEndOfFile()
+        if !remainder.isEmpty { state.append(remainder) }
+
+        let (output, didTimeOut) = state.finalize()
+        return ProcessRun(
+            output: didTimeOut
+                ? output + "\n\n[timed out after \(Int(timeoutSeconds))s and was terminated]"
+                : output,
+            exitCode: didTimeOut ? -2 : process.terminationStatus,
+            timedOut: didTimeOut
+        )
     }
 
     private func executeShell(command: String, cwd: String, startTime: Double) -> ToolExecutionResult {

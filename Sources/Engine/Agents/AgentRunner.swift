@@ -819,6 +819,10 @@ public final class AgentRunner {
             \(skillsSection)
 
             CRITICAL:
+            0. When you change code: locate it with grep/glob rather than guessing, then verify with
+               build_project (and run_tests when behaviour changed) before saying it is done. A
+               compiler error is yours to fix, not to report. If an edit goes wrong, revert_changes
+               undoes everything this turn touched.
             1. Do not narrate ("I will check…" / "Let me…"). Call the tool immediately, then answer.
             2. Prefer native tool calls. Markdown fallback only if needed:
             ```tool_call

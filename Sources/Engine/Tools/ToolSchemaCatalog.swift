@@ -69,6 +69,22 @@ public enum ToolSchemaCatalog {
                 parametersJsonSchema: schemas["glob"]!
             ),
             Tool(
+                id: "build_project",
+                name: "build_project",
+                displayName: "Build Project",
+                description: "Build this project and report compiler errors as file:line: message. Run this after editing code — do not report work as done without it.",
+                category: .terminal,
+                parametersJsonSchema: schemas["build_project"]!
+            ),
+            Tool(
+                id: "run_tests",
+                name: "run_tests",
+                displayName: "Run Tests",
+                description: "Run this project's tests and report failures as file:line: message.",
+                category: .terminal,
+                parametersJsonSchema: schemas["run_tests"]!
+            ),
+            Tool(
                 id: "git_status",
                 name: "git_status",
                 displayName: "Git Status",
@@ -153,6 +169,8 @@ public enum ToolSchemaCatalog {
         "file_edit": #"{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}"#,
         "grep": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Regular expression to search for"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"include":{"type":"string","description":"Glob limiting which files are searched, e.g. **/*.swift"},"case_insensitive":{"type":"boolean"},"limit":{"type":"integer","description":"Max matching lines (default 100)"}},"required":["pattern"]}"#,
         "glob": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Path glob, e.g. **/*.swift or Sources/**/Tool*.swift"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"limit":{"type":"integer","description":"Max paths (default 200)"}},"required":["pattern"]}"#,
+        "build_project": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred build command"}},"required":[]}"#,
+        "run_tests": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred test command"}},"required":[]}"#,
         "git_status": #"{"type":"object","properties":{}}"#,
         "git_diff": #"{"type":"object","properties":{"path":{"type":"string","description":"Limit the diff to this path"},"staged":{"type":"boolean","description":"Show staged changes instead of the working tree"}},"required":[]}"#,
         "git_log": #"{"type":"object","properties":{"count":{"type":"integer","description":"How many commits (default 10)"}},"required":[]}"#,
