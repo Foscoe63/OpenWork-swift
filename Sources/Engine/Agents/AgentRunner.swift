@@ -48,6 +48,19 @@ public final class AgentStreamAccumulator {
     }
 
     private func checkRepetitionLoop(in text: String) -> Bool {
+        Self.detectsRepetitionLoop(in: text)
+    }
+
+    /// Whether `text` has degenerated into repetition.
+    ///
+    /// `nonisolated` so the streaming callback can run it as tokens arrive, off the MainActor.
+    /// Detecting the loop only after the model has finished is not breaking it — the user still
+    /// waits for the whole budget to burn, which is what happened before this was callable here.
+    ///
+    /// Only the tail is examined. Every check below already looks at the end of the output, and
+    /// re-splitting the entire transcript on every token made the cost grow with the answer.
+    public nonisolated static func detectsRepetitionLoop(in fullText: String) -> Bool {
+        let text = String(fullText.suffix(4000))
         guard text.count >= 150 else { return false }
         
         // 1. Check for exact repeating sentences or phrase patterns (30-150 chars repeating 3+ times at tail)
@@ -218,6 +231,7 @@ public final class AgentStreamAccumulator {
     public func finalize() {
         message.isStreaming = false
         publishVisibleContent()
+        recoverAnswerFromReasoningIfBlank()
         // Drop routine MCP status chips once the answer is on screen.
         message.notices.removeAll { notice in
             let n = notice.lowercased()
@@ -228,6 +242,26 @@ public final class AgentStreamAccumulator {
                 || n.hasPrefix("connecting")
         }
         onUpdate(message)
+    }
+
+    /// A turn that produced only reasoning must not render as an empty bubble.
+    ///
+    /// `hideTurnNarration` moves a narrated preamble into Reasoning and resets the visible text,
+    /// on the assumption that a final answer still follows. When the turn ends instead — a
+    /// reasoning-heavy local model that never closed its think block, or a loop that was cut off —
+    /// the user is left with nothing on screen while the model plainly said something. Showing the
+    /// tail of what it said, labelled, beats showing silence.
+    private func recoverAnswerFromReasoningIfBlank() {
+        guard message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let reasoning = fullReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reasoning.isEmpty else { return }
+
+        let tail = String(reasoning.suffix(1200)).trimmingCharacters(in: .whitespacesAndNewlines)
+        message.content = """
+        *(The model produced no separate answer, only its own reasoning. Its closing thoughts:)*
+
+        \(tail)
+        """
     }
 
     /// When the model narrates then emits tools, hide that preamble in the bubble (keep raw text for parsing).
@@ -438,6 +472,22 @@ private final class AgentToolCallCollector: @unchecked Sendable {
         defer { lock.unlock() }
         return items
     }
+
+}
+
+/// A thread-safe "every Nth call" gate, for work too costly to do per token.
+final class StreamTickCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func tick(every n: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        guard count >= n else { return false }
+        count = 0
+        return true
+    }
 }
 
 /// Aggregates stream text off the MainActor so a delayed UI Task cannot lose the turn.
@@ -469,6 +519,60 @@ private final class AgentStreamTextBridge: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return (text, reasoning, promptTokens, completionTokens)
+    }
+
+    /// The tail of the visible text, for the repetition check.
+    func textTail(_ count: Int = 4000) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(text.suffix(count))
+    }
+
+    /// A reasoning-heavy model spirals inside its think block, where the visible text never grows.
+    /// Watching only `deltaText` would let exactly that run to the end of the token budget.
+    func reasoningTail(_ count: Int = 4000) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(reasoning.suffix(count))
+    }
+}
+
+/// Lets the streaming callback stop the generation it is reading.
+///
+/// The loop detector used to set a flag that was only read *after* the stream finished, so a
+/// degenerating model still burned its whole token budget — 219 seconds, in the run that prompted
+/// this — before anything acted on it. Detecting a runaway and then waiting for it is not breaking
+/// it. Cancelling works because the MLX generation loop checks `Task.isCancelled` between tokens.
+private final class AgentStreamStopper: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<Void, Error>?
+    private var stopRequested = false
+    private var reason: String?
+
+    /// Attach the task once it exists. If the stop already fired — possible, since the first
+    /// chunks can arrive before this returns — cancel immediately rather than losing the request.
+    func attach(_ task: Task<Void, Error>) {
+        lock.lock()
+        self.task = task
+        let alreadyStopped = stopRequested
+        lock.unlock()
+        if alreadyStopped { task.cancel() }
+    }
+
+    func stop(reason: String) {
+        lock.lock()
+        guard !stopRequested else { lock.unlock(); return }
+        stopRequested = true
+        self.reason = reason
+        let task = self.task
+        lock.unlock()
+        task?.cancel()
+    }
+
+    var stoppedReason: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return reason
     }
 }
 
@@ -851,6 +955,12 @@ public final class AgentRunner {
             // the work behind it is settled. Compacting here trades detail for room at the
             // cheapest possible moment, instead of waiting for the token budget to force it at a
             // worse one, mid-task.
+            //
+            // It does cost one KV cache rebuild: rewriting history is exactly what
+            // `MLXSessionReuse` refuses to continue through, and correctly so. The rebuild is over
+            // the *compacted* prefix, though, so it is cheaper than the prefill that would have
+            // been paid on the uncompacted one — and it happens at a milestone rather than
+            // mid-task.
             if loadedSettings.autoCompactContext, reachedMilestoneThisIteration {
                 let compacted = ContextCompactor.compactAtMilestone(workingMessages)
                 workingMessages = compacted.messages
@@ -878,25 +988,49 @@ public final class AgentRunner {
             let toolCallCollector = AgentToolCallCollector()
             let textBridge = AgentStreamTextBridge()
             let turnTextBefore = accumulator.fullText
+            let stopper = AgentStreamStopper()
+            let breakLoops = loadedSettings.autoLoopBreakerEnabled
+            // The check is not free, and running it on every token made its cost grow with the
+            // answer. Every pattern it looks for needs dozens of tokens to form, so sampling the
+            // tail periodically catches the same loops far earlier than waiting for the stream to
+            // end, which is what used to happen.
+            let checkEvery = 24
+            let sinceLastCheck = StreamTickCounter()
 
             do {
-                try await ProviderRouter.shared.stream(
-                    provider: provider,
-                    model: model,
-                    systemPrompt: systemPromptWithTools,
-                    messages: workingMessages,
-                    temperature: agent.temperature,
-                    maxTokens: agent.maxTokens,
-                    reasoningEffort: effectiveReasoningEffort,
-                    tools: availableTools
-                ) { chunk in
-                    for tc in chunk.toolCalls {
-                        toolCallCollector.add(tc)
+                let streamTask = Task<Void, Error> {
+                    try await ProviderRouter.shared.stream(
+                        provider: provider,
+                        model: model,
+                        systemPrompt: systemPromptWithTools,
+                        messages: workingMessages,
+                        temperature: agent.temperature,
+                        maxTokens: agent.maxTokens,
+                        reasoningEffort: effectiveReasoningEffort,
+                        tools: availableTools
+                    ) { chunk in
+                        for tc in chunk.toolCalls {
+                            toolCallCollector.add(tc)
+                        }
+                        textBridge.ingest(chunk)
+                        let grewText = !chunk.deltaText.isEmpty
+                        let grewReasoning = !(chunk.deltaReasoning ?? "").isEmpty
+                        if breakLoops, grewText || grewReasoning, sinceLastCheck.tick(every: checkEvery) {
+                            if AgentStreamAccumulator.detectsRepetitionLoop(in: textBridge.textTail())
+                                || AgentStreamAccumulator.detectsRepetitionLoop(in: textBridge.reasoningTail()) {
+                                stopper.stop(reason: "repetition")
+                            }
+                        }
+                        Task { @MainActor in
+                            accumulator.applyChunk(chunk)
+                        }
                     }
-                    textBridge.ingest(chunk)
-                    Task { @MainActor in
-                        accumulator.applyChunk(chunk)
-                    }
+                }
+                stopper.attach(streamTask)
+                do {
+                    try await streamTask.value
+                } catch is CancellationError {
+                    // Our own stop, not a provider failure. The partial text stands.
                 }
             } catch {
                 let snap = textBridge.snapshot()
@@ -920,7 +1054,10 @@ public final class AgentRunner {
             )
             await Task.yield()
 
-            if accumulator.isLoopDetected {
+            if stopper.stoppedReason != nil || accumulator.isLoopDetected {
+                // Say so. A silently truncated repetitive answer looks like the model simply
+                // stopped, and the user has no way to know the app cut it off or why.
+                accumulator.appendNotice("Stopped: the model was repeating itself.")
                 break
             }
 
