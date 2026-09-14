@@ -191,9 +191,16 @@ public enum MCPToolArgumentDefaults {
         if tLower == "get_tool_definitions"
             || sLower.contains("macuse")
             || tLower.contains("macuse") {
-            if tLower == "get_tool_definitions"
-                && (result["names"] == nil || (result["names"] as? [Any])?.isEmpty == true) {
-                result["names"] = ["*"]
+            if tLower == "get_tool_definitions" {
+                // `names` is a list. Models routinely pass a bare string, which the server
+                // rejects with "expected a sequence" — observed costing a real turn a wasted
+                // step. Coerce rather than let a well-formed intent fail on shape.
+                if let single = result["names"] as? String {
+                    let trimmed = single.trimmingCharacters(in: .whitespacesAndNewlines)
+                    result["names"] = trimmed.isEmpty ? ["*"] : [trimmed]
+                } else if result["names"] == nil || (result["names"] as? [Any])?.isEmpty == true {
+                    result["names"] = ["*"]
+                }
             }
         }
 

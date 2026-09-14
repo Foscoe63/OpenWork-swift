@@ -217,3 +217,30 @@ final class MCPSafetyTests: XCTestCase {
         XCTAssertEqual(MCPFailureClassifier.annotate(success), success)
     }
 }
+
+/// Argument shims for dispatcher servers, pinned from a real local-model turn.
+final class MCPArgumentShimTests: XCTestCase {
+    private func normalized(_ args: [String: Any]) -> [String: Any] {
+        MCPToolArgumentDefaults.normalizeArguments(
+            serverName: "MacUse", toolName: "get_tool_definitions", arguments: args
+        )
+    }
+
+    /// Observed in a real turn: the model sent names as a string and MacUse replied
+    /// "invalid type: string … expected a sequence", costing a wasted step.
+    func testNamesGivenAsAStringIsWrappedInAList() {
+        let out = normalized(["names": "mail_list_accounts"])
+        XCTAssertEqual(out["names"] as? [String], ["mail_list_accounts"])
+    }
+
+    func testMissingOrEmptyNamesBecomesWildcard() {
+        XCTAssertEqual(normalized([:])["names"] as? [String], ["*"])
+        XCTAssertEqual(normalized(["names": [String]()])["names"] as? [String], ["*"])
+        XCTAssertEqual(normalized(["names": "  "])["names"] as? [String], ["*"])
+    }
+
+    func testAListOfNamesIsLeftAlone() {
+        let out = normalized(["names": ["mail_list_accounts", "mail_search_messages"]])
+        XCTAssertEqual(out["names"] as? [String], ["mail_list_accounts", "mail_search_messages"])
+    }
+}
