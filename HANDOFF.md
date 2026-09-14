@@ -6,16 +6,69 @@ Written 2026-09-14. Everything below is verified against the code, not remembere
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` (`d0c13f0`) | 367 |
+| OpenWork-Swift | yes, `main` (`c7dc849`) | 374 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
-OpenWork went from 13 tests to 367 over this work. Released as 1.1.0.
+OpenWork went from 13 tests to 374 over this work. Released as 1.1.0.
 
 ---
 
 ## What landed since the previous handoff
 
 Every item the previous handoff listed under "Do these" is done, plus the add-ons it listed.
+
+**The built-in provider was never the default, and was not always the built-in provider.**
+
+Two sources of truth disagreed. `defaultProviders` marks the Apple Silicon MLX provider
+`isDefault: true`; `AppSettings.default` named `ollama-local` — a separate app that need not be
+installed, rather than the engine compiled into the binary. On this machine that Ollama provider
+was *also* disabled, so `ProviderSelection.resolve` fell through to its "first enabled in array
+order" rule and landed on **`openrouter-cloud`**. A cloud provider was answering turns the user
+believed were local, with `omlx-local` enabled three slots further down the array. That is a
+privacy fault, not a preference one.
+
+Routing is on `kind`, never on id — `ProviderRouter.client(for:)` switches on `.omlx`/`.vmlx` — so
+any provider of that kind reaches the in-process engine whatever it is called. That matters
+because the ids have drifted: the seed creates `builtin-mlx-local`, existing installs carry
+`omlx-local`, and `PersistenceManager` still holds migration code renaming `.omlx` providers to
+"Apple Silicon (Built-in)". Four tests now pin `AppSettings.default` and `defaultProviders` to the
+same provider, and assert a fresh install cannot resolve to a cloud one.
+
+**`.omlx` means in-process MLX and nothing else now.** `NativeMLXService.streamChat` used to fall
+through, on any in-process failure, to probing ports 1337, 8000, 8080, 11434, 1234 and 5243 and
+letting whatever answered serve the turn — reported as if the built-in engine had produced it. A
+turn sent to "Apple Silicon (Built-in)" could be answered by Ollama. The branch for builds without
+MLX linked did the same thing *unconditionally*, so a misconfigured build looked like it was
+working. Both now run in-process or fail with the reason. Ollama, LM Studio and the rest lost
+nothing: they are separate providers in the picker, chosen deliberately, through their own clients.
+
+The provider's stored `baseUrl` (`http://127.0.0.1:8000/v1`) is dead and always was — the
+in-process path never reads `provider`. It is left in place because `ProvidersView` already hides
+the URL field for `.omlx`, so nothing can edit it into something misleading. **`ProviderKind.omlx`
+is named after the third-party oMLX *server* app** and still carries its display name and port;
+the "Apple Silicon (Built-in)" label users see comes from the migration, not the kind. Worth a
+rename if anyone touches this again.
+
+**The test suite was resetting the developer's own settings.** This is the answer to a mystery
+this handoff recorded twice without solving: *"settings.json had reverted to an Ollama default at
+some point and was set back"*. Nothing reverted. `SandboxContainmentTests` saved a fresh
+`AppSettings.default` through the real `PersistenceManager.shared` — the running app's own
+`~/Library/Application Support/OpenWorkSwift/settings.json` — and its `defer` "restored" another
+fresh default. **Every full test run reset the real settings to stock.** It now captures and
+restores what was actually there, and `SettingsAreNotClobberedByTestsTests` plants a sentinel to
+prove the suite leaves the file intact.
+
+**Any test using `PersistenceManager.shared` is touching live configuration**, not a fixture. Read
+first, restore exactly, or use a temporary directory. This one cost two rounds of hand-editing and
+a false lead about the MLX default.
+
+**GrizzyBot is the reference for this subsystem.** Its Local MLX is a provider in the ordinary
+rail with an enable toggle, no base URL (`mlx://in-process` is a sentinel nothing dials), one
+routing branch (`Store.defaultClient` → `MLXChatClient` vs `OpenAIChatClient`), the model id as an
+absolute bundle path, and `GrizzyBotMLXBootstrap.install()` at launch gating on arm64 and
+colocating the metallib. It has no server concept for MLX, which is why nothing can quietly
+substitute for it. OpenWork now matches on the parts that matter; the bundle-path-as-id idea is
+still worth stealing.
 
 **Local MLX found the weights that were already on disk.** This is the one that mattered: the
 search roots named `/Volumes/Storage/Models` literally, and that path exists on no machine here.
@@ -127,6 +180,14 @@ pages. Deleting those is a product decision, not a cleanup — it needs your cal
 
 ### Worth building next
 
+- **The stale-selection fallback still prefers array order over locality.** Fixing the default
+  means it no longer fires here, but `ProviderSelection.resolve` will still hand a turn to the
+  first *enabled* provider when the selected one is off — and that can be a cloud provider while
+  a local one sits later in the array. Left deliberately: the decision was that Local MLX should
+  be an ordinary provider rather than a special case, and "prefer local, never silently reach the
+  network" is a product rule that wants stating explicitly, not smuggled into a sort order. If it
+  is adopted, the honest version fails the turn when no local provider is available rather than
+  substituting a cloud one.
 - **Reasoning that never closes its tag.** Ornith sometimes emits its chain of thought with no
   `</think>` at all, and `AssistantContentSanitizer` — correctly — only strips what it can prove is
   reasoning, so that text reaches the user as the answer. Observed in a live run, not fixed:
@@ -219,13 +280,16 @@ actually empty, which is half of why local MLX appeared broken.
 
 | Field | Actually reads | Note |
 |---|---|---|
-| `customMLXModelsDirectory` | `""` | No longer load-bearing: `/Volumes/Models/Models` is found by the volume sweep. Set it only for a library somewhere else. |
+| `defaultProviderId` | `omlx-local` | The built-in in-process MLX engine. Routing is by `kind`, so the id drift against the seed's `builtin-mlx-local` does not matter. |
+| `defaultModelId` | `mlx-community/Ornith-1.5-35B-A3B-8bit` | On disk, loads in ~3s. |
+| `customMLXModelsDirectory` | `""` | Not load-bearing: `/Volumes/Models/Models` is found by the volume sweep. Set it only for a library somewhere else. |
 | `customHFCachePath` | `""` | |
-| `defaultProviderId` | `ollama-local` | Set this to `omlx-local` to exercise in-process MLX. |
-| `defaultModelId` | `llama3:latest` | |
+| `sandboxAgentFileSystem` | `false` | |
 
-`providers.json`: `lmstudio-local.isEnabled` was flipped to true earlier; it currently reads false
-again. `omlx-local` is enabled, which is the one that matters for in-process MLX.
+`providers.json`: two providers are enabled — `omlx-local` and `openrouter-cloud`. That pairing is
+what made the default bug dangerous rather than merely wrong, because `openrouter-cloud` sits
+*earlier* in the array and won the array-order fallback. Worth knowing if you disable `omlx-local`
+while testing.
 
 The model library on this machine is `/Volumes/Models/Models` (13 loadable bundles). Nothing is in
 `~/.openwork/mlx_models/hub` — the abandoned 541MB partial Ornith download was deleted.
@@ -238,7 +302,7 @@ The model library on this machine is `/Volumes/Models/Models` (13 loadable bundl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 367 tests
+$SWIFT test                    # 374 tests
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list
