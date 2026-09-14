@@ -46,7 +46,11 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 | | Capability |
 |:---:|---|
 | 🔁 | Multi-turn ReAct with **native tool / function calling** (OpenAI, Ollama, in-process MLX) plus markdown / XML fallbacks |
-| 📁 | Filesystem — `file_read`, `file_write`, `edit_file`, `file_list`, `file_copy`, `file_move`, `file_delete` |
+| 📁 | Filesystem — `file_read` (paginated, numbered), `file_write`, `edit_file`, `file_list`, `file_copy`, `file_move`, `file_delete` |
+| 🔎 | Code search — `grep` (regex → `path:line: text`), `glob` (`**/*.swift`), `search_workspace` (BM25 index) |
+| 🔨 | Build & test — `build_project`, `run_tests` — failures come back as `file:line: message` |
+| 🌿 | Git — `git_status`, `git_diff`, `git_log` (read-only; committing stays yours) |
+| ↩️ | Undo — `changed_files`, `revert_changes` restore everything a turn touched |
 | 💻 | Shell — `terminal_command` / `run_command` |
 | 🌐 | Network — `fetch_url`, `web_search` |
 | 💬 | Interaction — `ask_user`, `exit_plan_mode`, `todo_write` |
@@ -54,9 +58,12 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 | 📧 | Optional Google — `gmail_*`, `google_calendar_*` |
 
 - Full JSON parameter schemas via `ToolSchemaCatalog` (critical for local-model tool use)
-- Context compaction, turn token budget, identical-tool stuck breaker
+- **Workspace context** in the system prompt — path, project type, layout, git branch and dirty count
+- **Per-repo instructions** — `OPENWORK.md` / `AGENTS.md` / `CLAUDE.md` at the workspace root
+- **Turn-change review** — a footer appears when a turn touched files; per-file diffs, revert one or all
+- Context compaction keeps a factual digest of what dropped turns did (files edited, commands run, failures), so a long session does not forget its own work
 - **Plan mode** (read-only tools + `exit_plan_mode`)
-- Approval gates for destructive / MCP write actions — read-only MCP tools auto-run
+- Approval gates for destructive / MCP write actions. MCP read/write classification is **fail-closed**: a tool is a read only when a known server advertises it and it is absent from that server's write list, so unknown servers ask. Expect more prompts than a name-prefix heuristic would produce — that is the point
 - Sub-agent spawning and inter-agent messaging in the Side Inspector
 - Clean chat UX: leaked model thinking moves to **Reasoning**, approvals sit **below** the answer, routine MCP status chips stay out of the way
 
@@ -95,21 +102,35 @@ OpenWork-Swift speaks the [Model Context Protocol](https://modelcontextprotocol.
 | 🏷️ | Live tools injected as `mcp__{serverId}__{toolName}` |
 | ⚡ | Cache-first discovery; background warm-up — chat is **not** blocked on every `npx` cold start |
 | ⏱️ | Real deadlines that kill hung connects (structured cancel alone is not enough) |
+| 🧭 | Server/tool routing refuses ambiguity — a name two enabled servers could answer is an error naming both, never a guess |
+| 🧱 | Failed calls come back classified, with a recovery hint. Transient failures retry once; a rejected token or protocol mismatch does not |
+| 🎚️ | Per-tool switches under each server, so you can enable a server without enabling everything on it |
 | 📋 | “What MCP servers are available?” answers from config + live status — **no tool thrash** |
 | 🩺 | Settings → Skills & MCP shows connected / error / tool counts; **Test** probes a server |
 | 🔒 | Stock servers ship **disabled** — enable only what you trust |
 | 🌍 | Remote HTTP MCP with clearer 401 messaging and optional bearer token (`MCP_TOKEN` / headers) |
 
-**MacUse** (mail / calendar-style apps) stays a guided, **read-only** auto-follow:
+### Dispatcher servers and catalog promotion
 
-1. `get_tool_definitions` (e.g. `mail_*`)
-2. `call_tool_by_name` → `mail_list_accounts`
-3. `call_tool_by_name` → `mail_search_messages`
-4. Deterministic inbox summary in chat
+Some servers — [MacUse.app](https://macuse.app) among them — advertise only two meta-tools,
+`get_tool_definitions` and `call_tool_by_name`, with the real work hidden behind them. Asking a
+model to hand-nest every call through a dispatcher is exactly what local models get wrong.
 
-Write actions (reply / send / mark-read) are never auto-run.
+So the catalog is **promoted**. When a listing comes back, its entries become directly callable
+tools with real schemas for the rest of the turn, and the model is told they are available:
 
-> Tip: keep [MacUse.app](https://macuse.app) installed and grant Accessibility / Automation when you need write tools. For mail reads, Mail.app can stay closed if MacUse uses its local DB path.
+```
+macuse.get_tool_definitions   →  64 tools harvested, 13 of them mail_*
+macuse.mail_list_accounts     →  called directly, not wrapped
+```
+
+No sequence is hardcoded and no workflow is special-cased — the model picks the tool. Write
+actions still route through the same approval gate as anything else, classified by the *nested*
+target rather than the dispatcher's name, because `call_tool_by_name` is a read when it lists
+mailboxes and a write when it sends mail.
+
+> Tip: keep MacUse.app installed and grant Accessibility / Automation when you need write tools.
+> For mail reads, Mail.app can stay closed if MacUse uses its local DB path.
 
 ---
 
@@ -123,17 +144,22 @@ OpenWork-Swift/
 ├── Resources/                         # App icon & assets
 ├── Tests/
 └── Sources/
-    ├── App/                 # Entry + window frame autosave
-    ├── Models/              # Agent, Workspace, Session, Settings, …
+    ├── App/                 # Entry + window frame persistence
+    ├── Models/              # Agent, Workspace, Session, Settings, ProviderSelection
     ├── State/               # AppState
     ├── Storage/             # Persistence, Keychain, WindowLayoutStore
+    ├── Utils/               # AsyncDeadline (timeouts for uncancellable work)
     ├── Engine/
-    │   ├── Agents/          # AgentRunner, approvals, compaction, hub
-    │   ├── Providers/       # OpenAI, Anthropic, Ollama, NativeMLX, …
-    │   ├── Tools/           # Execution, schemas, bounds, docs
-    │   ├── MCP/             # MCPClientManager, MCPSDKSession
+    │   ├── Agents/          # AgentRunner, approvals, ContextCompactor
+    │   ├── Providers/       # OpenAI, Anthropic, Ollama, NativeMLX, LocalMLXEngine
+    │   ├── Tools/           # Execution, schemas, CodeSearch, GitTools,
+    │   │                    # BuildDiagnostics, FileCheckpointStore,
+    │   │                    # WorkspaceContext, ProjectInstructions
+    │   ├── MCP/             # Client, routing, effect catalog, tool gate,
+    │   │                    # catalog promotion, failure classifier
     │   ├── Integrations/    # Google (Gmail / Calendar)
-    │   ├── RAG/ · Terminal/ · Voice/ · Watch/
+    │   ├── RAG/             # CodeIndex (BM25 over the workspace)
+    │   └── Terminal/ · Voice/ · Watch/
     └── UI/
         ├── Navigation/      # Sidebar, Spotlight
         ├── Theme/ · Components/
@@ -215,7 +241,8 @@ Quit any running OpenWork-Swift instance before replacing the bundle.
 | 🔑 | **Providers** | Settings → AI Providers — cloud keys in Keychain; local base URLs for Ollama / LM Studio / MLX servers |
 | 🧊 | **Local Models** | Local Models tab — pick an on-device MLX model |
 | 🔌 | **MCP** | Settings → Skills & MCP — enable servers, **Refresh Status** / **Test**, restore defaults (disabled) |
-| 📬 | **MacUse mail** | e.g. `use the macuse mcp-server and check the mail on this computer` |
+| 📬 | **Dispatcher MCP servers** | e.g. `use the macuse mcp-server and check the mail on this computer` — the catalog is promoted on first listing |
+| 📄 | **Per-repo rules** | Drop `OPENWORK.md` or `AGENTS.md` at the workspace root — build commands, house style, what not to touch |
 | 🤖 | **Agents & skills** | Per-agent tools; enabled skills land in the system prompt |
 | 🎛️ | **Advanced** | Plan Mode, Max Turn Tokens, auto context compaction |
 | 🗓️ | **Schedules** | Automations — Morning Brief–style prompts, frequency text (`Daily at 6:00 AM`), Run Now |

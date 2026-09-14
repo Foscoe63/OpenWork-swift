@@ -13,27 +13,14 @@ Both working trees are clean. OpenWork went from 13 tests to 193 this session.
 
 ---
 
-## Do this first: the README is wrong
+## README
 
-`README.md` documents the MacUse mail auto-chaining **as current behaviour**:
+Brought up to date in the same session (see git log). It now documents catalog promotion rather
+than the deleted mail chain, lists the search / build / git / undo tools, and says plainly that
+fail-closed classification means more approval prompts.
 
-> MacUse stays a guided, read-only auto-follow: 1. `get_tool_definitions` 2. → `mail_list_accounts` 3. → `mail_search_messages` 4. Deterministic inbox summary in chat
-
-That code was deleted in `23b80ec`. There is no forced sequence and no deterministic summary — the model calls promoted catalog tools itself. The Configuration table repeats the assumption (`📬 MacUse mail`).
-
-Documenting removed code as shipping behaviour is the same class of problem as a tool reporting success without running. Fix this before anything else.
-
-Also missing from the README — all shipped, none documented:
-
-- Tools: `grep`, `glob`, `git_status`, `git_diff`, `git_log`, `build_project`, `run_tests`, `changed_files`, `revert_changes`
-- `file_read` pagination (`offset` / `limit`, numbered lines)
-- Workspace context block in the system prompt
-- Per-repo instructions (`OPENWORK.md` / `AGENTS.md` / `CLAUDE.md`)
-- Turn-change review panel with per-file diffs and undo
-- Per-tool MCP gating; fail-closed read/write classification (**approvals are now more frequent** — worth telling users)
-- MCP catalog promotion, failure classification with recovery hints, uniqueness-checked routing
-
-The architecture tree also omits `Engine/RAG/CodeIndex.swift`, `Utils/`, and the new `Engine/MCP` and `Engine/Tools` files.
+If you add a tool, add it to the Features table — every tool named there was verified to exist in
+`ToolExecutionEngine` when this was written.
 
 ---
 
