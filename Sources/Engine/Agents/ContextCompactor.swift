@@ -117,6 +117,44 @@ public enum ContextCompactor {
         return dict
     }
 
+    // MARK: - Milestones
+
+    /// A tool result that marks settled progress: everything before it can be summarised without
+    /// losing anything the next step needs.
+    ///
+    /// Token-count compaction fires whenever the budget says so, which can be mid-task — right
+    /// after reading three files and before using them. A milestone is the opposite: a green test
+    /// run or a clean tree means the work behind it is *finished*, so that is the cheapest possible
+    /// moment to trade detail for room.
+    public static func isMilestone(toolName: String, succeeded: Bool, output: String) -> Bool {
+        guard succeeded else { return false }
+        let name = toolName.lowercased()
+        let text = output.lowercased()
+
+        if name == "run_tests" || name == "build_project" {
+            // `succeeded` already reflects the exit code; the summary states it too.
+            return text.contains("succeeded") && !text.contains("error")
+        }
+        if name == "git_status" {
+            return text.contains("working tree clean")
+        }
+        return false
+    }
+
+    /// Compact at a milestone even when the token budget has not been reached.
+    ///
+    /// Uses a lower bar than the budget path — there is no point summarising four messages — but
+    /// does not wait for pressure, because waiting means compacting at a worse moment later.
+    public static func compactAtMilestone(
+        _ messages: [ChatMessage],
+        minimumMessages: Int = 12,
+        keepRecent: Int = 6
+    ) -> (messages: [ChatMessage], didCompact: Bool) {
+        guard messages.count >= minimumMessages else { return (messages, false) }
+        // Threshold 0 forces the existing path to act; it already keeps the task and a digest.
+        return compactIfNeeded(messages, thresholdTokens: 0, keepRecent: keepRecent)
+    }
+
     // MARK: - Compaction
 
     /// Drop the middle of the conversation when it exceeds the budget, keeping the original task,

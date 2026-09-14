@@ -95,6 +95,7 @@
 		B30ED93F3130C5A5F73C1944 /* Provider.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFA2E35571097EE51639F56D /* Provider.swift */; };
 		B4FC1B362637B29CD76B3E1D /* AppSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C921F2067565A25DB554BD9C /* AppSidebar.swift */; };
 		B5ACC10445B7C5CEE56804AD /* WatchFolderEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3161F2BC6E83591AEACC9C2F /* WatchFolderEngine.swift */; };
+		BA2F2E2FEC7DD6D8BA1CD353 /* MilestoneCompactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBF25D440702579EF6A73800 /* MilestoneCompactionTests.swift */; };
 		BA43F7CCB78BDE2F1CBAB474 /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E8CC7261C1E412E6BB67264A /* HuggingFace */; };
 		BAF7C1357EEF98A51B64ADCA /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15661ED260AC4F0891B83D4F /* KeychainManager.swift */; };
 		C01E763454F537D1C41EF042 /* LiveCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82AB78D3CC578FFD2E1BBAC8 /* LiveCanvasView.swift */; };
@@ -265,6 +266,7 @@
 		F6FA9C73ADACF50B1E5BC144 /* MCPToolRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPToolRouting.swift; sourceTree = "<group>"; };
 		F8B2EB429B26E78BD7A370C6 /* MCPCatalogPromoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPCatalogPromoteTests.swift; sourceTree = "<group>"; };
 		F9005726C9B604715DFA6253 /* AgentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsView.swift; sourceTree = "<group>"; };
+		FBF25D440702579EF6A73800 /* MilestoneCompactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MilestoneCompactionTests.swift; sourceTree = "<group>"; };
 		FD248504D919D2436DA6F22C /* CodeIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeIndex.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -309,6 +311,7 @@
 				F8B2EB429B26E78BD7A370C6 /* MCPCatalogPromoteTests.swift */,
 				477E83291DCD2B59F7EB5EC4 /* MCPRoutingTests.swift */,
 				94D02547AAA4FC1098248D6E /* MCPSafetyTests.swift */,
+				FBF25D440702579EF6A73800 /* MilestoneCompactionTests.swift */,
 				7E9D1E20410D7274AB6A4558 /* MLXParametersAndDeadlineTests.swift */,
 				0D28CAED402CDC58FE07CE46 /* MLXSessionReuseTests.swift */,
 				9FEA443E3182FF8D1FA28F22 /* NativeMLXServiceTests.swift */,
@@ -937,6 +940,7 @@
 				64AB61734C736CC974E6CB18 /* MCPSafetyTests.swift in Sources */,
 				AACE3AD1B1C99DB89FFABFEF /* MLXParametersAndDeadlineTests.swift in Sources */,
 				F9003343129CB9A6613784C5 /* MLXSessionReuseTests.swift in Sources */,
+				BA2F2E2FEC7DD6D8BA1CD353 /* MilestoneCompactionTests.swift in Sources */,
 				F96E4E166877053ED03969A2 /* NativeMLXServiceTests.swift in Sources */,
 				7365397593E14ADD2B654C3B /* ProviderSelectionTests.swift in Sources */,
 				5DD66CAF2F3DED5353861B03 /* SandboxContainmentTests.swift in Sources */,

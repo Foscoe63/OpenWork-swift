@@ -774,6 +774,9 @@ public final class AgentRunner {
         var askUserStreak = 0
         var halted = false
         var finishedNaturally = false
+        // Set when a tool result this iteration marked settled progress — a green test run, a
+        // clean tree — which is the cheapest moment to compact.
+        var reachedMilestoneThisIteration = false
         // Consecutive MCP results that will not finish the job by being retried. Escalates to a
         // nudge, then to pulling MCP out of the tool list for the rest of the turn.
         var mcpDeadEnds = 0
@@ -835,6 +838,20 @@ public final class AgentRunner {
             iteration += 1
 
             workingMessages = ContextCompactor.foldOldToolResults(workingMessages)
+
+            // A milestone reached this iteration — a green build or test run, a clean tree — means
+            // the work behind it is settled. Compacting here trades detail for room at the
+            // cheapest possible moment, instead of waiting for the token budget to force it at a
+            // worse one, mid-task.
+            if loadedSettings.autoCompactContext, reachedMilestoneThisIteration {
+                let compacted = ContextCompactor.compactAtMilestone(workingMessages)
+                workingMessages = compacted.messages
+                if compacted.didCompact {
+                    accumulator.appendNotice("Milestone reached — earlier steps compacted.")
+                }
+            }
+            reachedMilestoneThisIteration = false
+
             if loadedSettings.autoCompactContext {
                 let compacted = ContextCompactor.compactIfNeeded(
                     workingMessages,
@@ -1183,6 +1200,14 @@ public final class AgentRunner {
                 callInfo.errorMessage = resultError
                 callInfo.durationMs = (CFAbsoluteTimeGetCurrent() - startTool) * 1000
                 accumulator.updateToolCall(callInfo)
+
+                if ContextCompactor.isMilestone(
+                    toolName: toolName,
+                    succeeded: resultSuccess,
+                    output: resultOutput
+                ) {
+                    reachedMilestoneThisIteration = true
+                }
 
                 // Track MCP failures that repeating will not fix. A model that keeps re-sending a
                 // broken call burns the whole step budget without noticing.
