@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import SwiftUI
 import Combine
 
@@ -437,7 +438,12 @@ public final class AppState: ObservableObject {
 
     // MARK: - Sessions Operations
     public func createNewSession(agentId: String? = nil) {
-        let chosenAgent = agentId ?? selectedAgentId
+        // Settings' default agent is the fallback when the selection no longer names a real
+        // agent — previously the setting existed and nothing ever read it.
+        let fallbackAgent = agents.contains(where: { $0.id == selectedAgentId })
+            ? selectedAgentId
+            : (agents.contains(where: { $0.id == settings.defaultAgentId }) ? settings.defaultAgentId : selectedAgentId)
+        let chosenAgent = agentId ?? fallbackAgent
         let newSession = Session(
             workspaceId: activeWorkspaceId,
             title: "New Session",
@@ -774,6 +780,7 @@ public final class AppState: ObservableObject {
                 self.currentExecutionTask = nil
                 self.persistence.saveSessions(self.sessions)
                 self.refreshLoadedMLXModels()
+                self.announceTurnFinished()
             }
         }
     }
@@ -1614,6 +1621,17 @@ public final class AppState: ObservableObject {
         updated.lastResultSummary = summary
         automations[idx] = updated
         persistence.saveAutomations(automations)
+    }
+
+    /// Sound the end of a turn, if the user asked for it.
+    ///
+    /// The setting existed and nothing read it. Only when the app is in the background: a chime
+    /// for something the user is already watching happen is noise, and the reason to want one is
+    /// that a local model can take minutes.
+    private func announceTurnFinished() {
+        guard settings.playNotificationSounds else { return }
+        guard !NSApplication.shared.isActive else { return }
+        NSSound(named: "Glass")?.play()
     }
 
     // MARK: - Settings

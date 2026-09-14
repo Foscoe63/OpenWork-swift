@@ -49,6 +49,7 @@
 		5BA745CDDBE7DDEC2C75A8DB /* LocalMLXModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B67ABFC0B439CECE12C6F01 /* LocalMLXModel.swift */; };
 		5C9A060311F505CAF5B7D449 /* MCPToolGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D691A836C9699A65D695417 /* MCPToolGate.swift */; };
 		5DD66CAF2F3DED5353861B03 /* SandboxContainmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDE26DEDE11B950E5C7F21FF /* SandboxContainmentTests.swift */; };
+		5DFBF4A7EF40C3C879C3C7F3 /* DeadSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14CC02C864C94E2DDFAAFB6F /* DeadSettingsTests.swift */; };
 		5F082771807891EC0A4A0D11 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A8A066203F3679E3128E7F7 /* Settings.swift */; };
 		603BEED5AA92E917B0C06661 /* ThemeColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74A153BB1364F29D25C7A88A /* ThemeColors.swift */; };
 		6059DA7F984B77CF3201012E /* Agent.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD2774B81FE1C66B496750EF /* Agent.swift */; };
@@ -71,6 +72,7 @@
 		831D1338D040051952544CD0 /* WatchItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B907E9C3CF8549560D45D9C4 /* WatchItem.swift */; };
 		865C184332349383E90C1598 /* NativeMLXService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B96B01A154745D329502E1 /* NativeMLXService.swift */; };
 		8C4670ECBEFE2DAD5CAB8B23 /* LocalModelResolutionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FC37FE031701372991230B0 /* LocalModelResolutionTests.swift */; };
+		8DE0F07DF928B610D5C2BCA9 /* LaunchAtLogin.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9D4BEB27831CFE0CBF62046 /* LaunchAtLogin.swift */; };
 		8E50B86B7DAB7141B1003137 /* CodeSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25FB4259DFBB051D4299EAFA /* CodeSearchTests.swift */; };
 		8E50EAAFFDA89A19B9E4DECB /* ReasoningDisclosureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44F1D2B2F9FC9B552F9BAD48 /* ReasoningDisclosureView.swift */; };
 		8F0CA6A718DE480831FA36FB /* ProjectInstructions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95EE0C5B9DA70765E69EF862 /* ProjectInstructions.swift */; };
@@ -172,6 +174,7 @@
 		0F73C8C952CA227CAAA869D4 /* VisualDiffInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualDiffInspectorView.swift; sourceTree = "<group>"; };
 		10FCA6AABD3D43D781863A97 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		12558A3EF15E5A2F294ED10C /* ToolSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolSafetyTests.swift; sourceTree = "<group>"; };
+		14CC02C864C94E2DDFAAFB6F /* DeadSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeadSettingsTests.swift; sourceTree = "<group>"; };
 		15661ED260AC4F0891B83D4F /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
 		15B631E70DD7A685312F512E /* MCPProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPProtocol.swift; sourceTree = "<group>"; };
 		19B16487FA42DE1F3D6182EF /* AnthropicService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnthropicService.swift; sourceTree = "<group>"; };
@@ -273,6 +276,7 @@
 		D123165576004A20F3BBB7DB /* DocumentExtractionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentExtractionEngine.swift; sourceTree = "<group>"; };
 		D17110B18311226129C130B9 /* ToolApprovalManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolApprovalManager.swift; sourceTree = "<group>"; };
 		D5DFEC829CAED5CDA56BB9D4 /* AgentRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunner.swift; sourceTree = "<group>"; };
+		D9D4BEB27831CFE0CBF62046 /* LaunchAtLogin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLogin.swift; sourceTree = "<group>"; };
 		DA167C407CAC09E24C561388 /* LLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMService.swift; sourceTree = "<group>"; };
 		DD2774B81FE1C66B496750EF /* Agent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent.swift; sourceTree = "<group>"; };
 		DDF21317A739E5A2F7C43F5D /* SubAgentTreeVisualizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubAgentTreeVisualizer.swift; sourceTree = "<group>"; };
@@ -332,6 +336,7 @@
 				B69C267E54AB247F8545E8E7 /* CheckpointAndGitTests.swift */,
 				CEEC8F8318BAD62B0D7A3010 /* CodeIndexAndCompactionTests.swift */,
 				25FB4259DFBB051D4299EAFA /* CodeSearchTests.swift */,
+				14CC02C864C94E2DDFAAFB6F /* DeadSettingsTests.swift */,
 				EDB91F2FFC2A72F3535B4FDF /* FileReadPaginationTests.swift */,
 				2FC37FE031701372991230B0 /* LocalModelResolutionTests.swift */,
 				F8B2EB429B26E78BD7A370C6 /* MCPCatalogPromoteTests.swift */,
@@ -683,6 +688,7 @@
 			isa = PBXGroup;
 			children = (
 				56AAA06FB40C914404F6276E /* AsyncDeadline.swift */,
+				D9D4BEB27831CFE0CBF62046 /* LaunchAtLogin.swift */,
 				029050CBBECD5CCE3CF55123 /* ViewExtensions.swift */,
 			);
 			path = Utils;
@@ -903,6 +909,7 @@
 				BAF7C1357EEF98A51B64ADCA /* KeychainManager.swift in Sources */,
 				F6FC7E61AC63BFC514A95565 /* LLMService.swift in Sources */,
 				E147BFFA0DD5D5A350D5543C /* LastTestFailures.swift in Sources */,
+				8DE0F07DF928B610D5C2BCA9 /* LaunchAtLogin.swift in Sources */,
 				C01E763454F537D1C41EF042 /* LiveCanvasView.swift in Sources */,
 				98F33D358848A0CFD02EA1CC /* LocalMLXEngine.swift in Sources */,
 				5BA745CDDBE7DDEC2C75A8DB /* LocalMLXModel.swift in Sources */,
@@ -988,6 +995,7 @@
 				EB9DF012AF9DC03EEC920E61 /* CheckpointAndGitTests.swift in Sources */,
 				8FCE0ED9B84DFB06845E934B /* CodeIndexAndCompactionTests.swift in Sources */,
 				8E50B86B7DAB7141B1003137 /* CodeSearchTests.swift in Sources */,
+				5DFBF4A7EF40C3C879C3C7F3 /* DeadSettingsTests.swift in Sources */,
 				E95050F4A9B6B09EE04B53A9 /* FileReadPaginationTests.swift in Sources */,
 				8C4670ECBEFE2DAD5CAB8B23 /* LocalModelResolutionTests.swift in Sources */,
 				649BB9D576049FA14BD3759D /* MCPCatalogPromoteTests.swift in Sources */,

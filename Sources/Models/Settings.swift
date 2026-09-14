@@ -159,7 +159,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var defaultAgentId: String
     public var defaultProviderId: String
     public var defaultModelId: String
-    public var autoSaveIntervalSeconds: Int
     public var startOnLogin: Bool
 
     // Preferences
@@ -172,7 +171,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var autoAdjustPenaltiesForLocalModels: Bool
     public var autoLoopBreakerEnabled: Bool
     public var defaultReasoningEffort: ReasoningEffort
-    public var streamResponses: Bool
     public var autoCompactContext: Bool
     public var contextCompactionThresholdTokens: Int
     public var planModeEnabled: Bool
@@ -189,7 +187,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
     // Appearance
     public var theme: AppTheme
     public var accentColor: AccentColorChoice
-    public var uiScalePercent: Int // 100%, 110%, etc.
     public var editorFontSize: Int
     public var useTranslucentBackground: Bool
     public var compactSidebar: Bool
@@ -220,7 +217,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var customHFCachePath: String
     public var autoLoadTopMLXModelOnLaunch: Bool
     public var mlxGpuMemoryBudgetRatio: Double
-    public var mlxContextLength: Int
 
     // Environment
     public var customEnvironmentVariables: [String: String]
@@ -291,7 +287,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         defaultAgentId: String = "lead-assistant",
         defaultProviderId: String = "ollama-local",
         defaultModelId: String = "llama3:latest",
-        autoSaveIntervalSeconds: Int = 30,
         startOnLogin: Bool = false,
         defaultTemperature: Double = 0.7,
         defaultMaxTokens: Int = 4096,
@@ -302,7 +297,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         autoAdjustPenaltiesForLocalModels: Bool = true,
         autoLoopBreakerEnabled: Bool = true,
         defaultReasoningEffort: ReasoningEffort = .medium,
-        streamResponses: Bool = true,
         autoCompactContext: Bool = true,
         contextCompactionThresholdTokens: Int = 32000,
         planModeEnabled: Bool = false,
@@ -317,7 +311,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         sandboxAgentFileSystem: Bool = true,
         theme: AppTheme = .dark,
         accentColor: AccentColorChoice = .purple,
-        uiScalePercent: Int = 100,
         editorFontSize: Int = 14,
         useTranslucentBackground: Bool = true,
         compactSidebar: Bool = false,
@@ -342,7 +335,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         customHFCachePath: String = "",
         autoLoadTopMLXModelOnLaunch: Bool = false,
         mlxGpuMemoryBudgetRatio: Double = 0.75,
-        mlxContextLength: Int = 131072,
         customEnvironmentVariables: [String: String] = ["OPENWORK_ENV": "development"],
         cloudSyncEnabled: Bool = false,
         cloudControlPlaneUrl: String = "https://cloud.openwork.ai/api",
@@ -356,7 +348,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.defaultAgentId = defaultAgentId
         self.defaultProviderId = defaultProviderId
         self.defaultModelId = defaultModelId
-        self.autoSaveIntervalSeconds = autoSaveIntervalSeconds
         self.startOnLogin = startOnLogin
         self.defaultTemperature = defaultTemperature
         self.defaultMaxTokens = defaultMaxTokens
@@ -367,7 +358,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.autoAdjustPenaltiesForLocalModels = autoAdjustPenaltiesForLocalModels
         self.autoLoopBreakerEnabled = autoLoopBreakerEnabled
         self.defaultReasoningEffort = defaultReasoningEffort
-        self.streamResponses = streamResponses
         self.autoCompactContext = autoCompactContext
         self.contextCompactionThresholdTokens = contextCompactionThresholdTokens
         self.planModeEnabled = planModeEnabled
@@ -380,7 +370,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.sandboxAgentFileSystem = sandboxAgentFileSystem
         self.theme = theme
         self.accentColor = accentColor
-        self.uiScalePercent = uiScalePercent
         self.editorFontSize = editorFontSize
         self.useTranslucentBackground = useTranslucentBackground
         self.compactSidebar = compactSidebar
@@ -403,7 +392,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.customHFCachePath = customHFCachePath
         self.autoLoadTopMLXModelOnLaunch = autoLoadTopMLXModelOnLaunch
         self.mlxGpuMemoryBudgetRatio = mlxGpuMemoryBudgetRatio
-        self.mlxContextLength = mlxContextLength
         self.customEnvironmentVariables = customEnvironmentVariables
         self.cloudSyncEnabled = cloudSyncEnabled
         self.cloudControlPlaneUrl = cloudControlPlaneUrl
@@ -422,7 +410,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.defaultAgentId = try container.decodeIfPresent(String.self, forKey: .defaultAgentId) ?? def.defaultAgentId
         self.defaultProviderId = try container.decodeIfPresent(String.self, forKey: .defaultProviderId) ?? def.defaultProviderId
         self.defaultModelId = try container.decodeIfPresent(String.self, forKey: .defaultModelId) ?? def.defaultModelId
-        self.autoSaveIntervalSeconds = try container.decodeIfPresent(Int.self, forKey: .autoSaveIntervalSeconds) ?? def.autoSaveIntervalSeconds
         self.startOnLogin = try container.decodeIfPresent(Bool.self, forKey: .startOnLogin) ?? def.startOnLogin
 
         self.defaultTemperature = try container.decodeIfPresent(Double.self, forKey: .defaultTemperature) ?? def.defaultTemperature
@@ -434,7 +421,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.autoAdjustPenaltiesForLocalModels = try container.decodeIfPresent(Bool.self, forKey: .autoAdjustPenaltiesForLocalModels) ?? def.autoAdjustPenaltiesForLocalModels
         self.autoLoopBreakerEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoLoopBreakerEnabled) ?? def.autoLoopBreakerEnabled
         self.defaultReasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .defaultReasoningEffort) ?? def.defaultReasoningEffort
-        self.streamResponses = try container.decodeIfPresent(Bool.self, forKey: .streamResponses) ?? def.streamResponses
         self.autoCompactContext = try container.decodeIfPresent(Bool.self, forKey: .autoCompactContext) ?? def.autoCompactContext
         self.contextCompactionThresholdTokens = try container.decodeIfPresent(Int.self, forKey: .contextCompactionThresholdTokens) ?? def.contextCompactionThresholdTokens
         self.planModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .planModeEnabled) ?? false
@@ -449,7 +435,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
 
         self.theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? def.theme
         self.accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? def.accentColor
-        self.uiScalePercent = try container.decodeIfPresent(Int.self, forKey: .uiScalePercent) ?? def.uiScalePercent
         self.editorFontSize = try container.decodeIfPresent(Int.self, forKey: .editorFontSize) ?? def.editorFontSize
         self.useTranslucentBackground = try container.decodeIfPresent(Bool.self, forKey: .useTranslucentBackground) ?? def.useTranslucentBackground
         self.compactSidebar = try container.decodeIfPresent(Bool.self, forKey: .compactSidebar) ?? def.compactSidebar
@@ -478,7 +463,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.customHFCachePath = try container.decodeIfPresent(String.self, forKey: .customHFCachePath) ?? def.customHFCachePath
         self.autoLoadTopMLXModelOnLaunch = try container.decodeIfPresent(Bool.self, forKey: .autoLoadTopMLXModelOnLaunch) ?? def.autoLoadTopMLXModelOnLaunch
         self.mlxGpuMemoryBudgetRatio = try container.decodeIfPresent(Double.self, forKey: .mlxGpuMemoryBudgetRatio) ?? def.mlxGpuMemoryBudgetRatio
-        self.mlxContextLength = try container.decodeIfPresent(Int.self, forKey: .mlxContextLength) ?? def.mlxContextLength
 
         self.customEnvironmentVariables = try container.decodeIfPresent([String: String].self, forKey: .customEnvironmentVariables) ?? def.customEnvironmentVariables
 

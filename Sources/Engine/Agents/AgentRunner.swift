@@ -513,7 +513,14 @@ public final class AgentRunner {
         onMessageUpdated(assistantMsg)
 
         let lastPrompt = session.messages.last(where: { $0.role == .user })?.content ?? ""
-        let isComplexGoal = agent.canSpawnSubAgents && (
+        // Two settings that existed but were never read. `allowSubAgentCreation` is the global
+        // off switch — an agent configured to spawn must still be refused when the user has turned
+        // spawning off — and `maxGlobalSubAgentDepth` caps how deep it can go. A switch that does
+        // nothing is worse than no switch, and these two are the ones that gate autonomy.
+        let subAgentSettings = PersistenceManager.shared.loadSettings()
+        let subAgentDepthBudget = max(0, subAgentSettings.maxGlobalSubAgentDepth)
+        let isComplexGoal = AgentRunner.subAgentSpawningAllowed(agent: agent, settings: subAgentSettings)
+            && (
             lastPrompt.lowercased().contains("build") ||
             lastPrompt.lowercased().contains("create") ||
             lastPrompt.lowercased().contains("project") ||
@@ -551,7 +558,8 @@ public final class AgentRunner {
                     taskDescription: "Executing autonomous evaluation scoped to \(subAgent.role)",
                     status: .planning,
                     progress: 0.1,
-                    depth: 1
+                    // Depth 1 is this level; the budget is what stops it recursing further.
+                    depth: min(1, subAgentDepthBudget)
                 )
                 
                 assistantMsg.subAgentTasks.append(subTask)
@@ -1367,6 +1375,17 @@ public final class AgentRunner {
             return candidate
         }
         return fallbackLeaf
+    }
+
+    /// Whether this agent may decompose the task across sub-agents.
+    ///
+    /// Both settings gate it and both were previously unread: the global switch must beat a
+    /// per-agent "yes" (that is what a global off switch is for), and a zero or negative depth
+    /// budget must not read as unlimited.
+    static func subAgentSpawningAllowed(agent: Agent, settings: AppSettings) -> Bool {
+        agent.canSpawnSubAgents
+            && settings.allowSubAgentCreation
+            && max(0, settings.maxGlobalSubAgentDepth) > 0
     }
 
     /// Internal rather than private so tests can prove a newly added writing tool is blocked here.

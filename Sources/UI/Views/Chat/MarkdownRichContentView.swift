@@ -132,7 +132,8 @@ public struct FormattedCodeBlockView: View {
             // Code Content
             ScrollView(.horizontal, showsIndicators: true) {
                 Text(code)
-                    .font(.system(size: 11.5, design: .monospaced))
+                    // Settings' editor font size, which previously nothing read.
+                    .font(.system(size: CGFloat(max(9, appState.settings.editorFontSize)) - 2.5, design: .monospaced))
                     .foregroundColor(Color(hex: "#CDD6F4"))
                     .padding(10)
                     .textSelection(.enabled)

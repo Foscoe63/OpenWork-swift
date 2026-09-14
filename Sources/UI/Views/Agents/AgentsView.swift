@@ -40,7 +40,15 @@ public struct AgentsView: View {
         }
         .background(ThemeColors.bg(for: appState.settings.theme))
         .sheet(isPresented: $showingAddAgent) {
-            agentEditModal(agent: Agent(name: "New Agent", role: "Specialist"))
+            // Seeded from Settings' defaults. They existed but nothing read them, so a user who
+            // set a default temperature got 0.7 anyway and had no way to tell.
+            agentEditModal(agent: Agent(
+                name: "New Agent",
+                role: "Specialist",
+                temperature: appState.settings.defaultTemperature,
+                maxTokens: appState.settings.defaultMaxTokens,
+                reasoningEffort: appState.settings.defaultReasoningEffort
+            ))
         }
         .sheet(item: $editingAgent) { agent in
             agentEditModal(agent: agent)

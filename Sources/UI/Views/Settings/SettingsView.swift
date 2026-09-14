@@ -747,13 +747,29 @@ public struct SettingsView: View {
             }
 
             SettingsCard(title: "Startup & Persistence", description: "Storage cadence and launch behavior", icon: "clock.fill") {
-                SettingsRow(title: "Auto-Save Cadence", subtitle: "Interval between background data flushes (\(appState.settings.autoSaveIntervalSeconds)s)", icon: "externaldrive.fill") {
-                    Stepper("", value: $appState.settings.autoSaveIntervalSeconds, in: 5...120, step: 5)
-                }
-
-                SettingsRow(title: "Launch at Login", subtitle: "Automatically open OpenWork when macOS boots", icon: "power") {
-                    Toggle("", isOn: $appState.settings.startOnLogin)
-                        .toggleStyle(.switch)
+                SettingsRow(
+                    title: "Launch at Login",
+                    subtitle: LaunchAtLogin.statusDescription(),
+                    icon: "power"
+                ) {
+                    // Bound to what macOS reports, not to the stored Bool: registration can be
+                    // refused or left pending approval, and the switch must show what is true.
+                    Toggle("", isOn: Binding(
+                        get: { LaunchAtLogin.isEnabled },
+                        set: { wanted in
+                            switch LaunchAtLogin.set(wanted) {
+                            case .success(let actual):
+                                appState.settings.startOnLogin = actual
+                                appState.updateSettings(appState.settings)
+                                if actual != wanted {
+                                    appState.showToast(LaunchAtLogin.statusDescription())
+                                }
+                            case .failure(let error):
+                                appState.showToast("Could not change login item: \(error.localizedDescription)")
+                            }
+                        }
+                    ))
+                    .toggleStyle(.switch)
                 }
             }
         }
@@ -807,15 +823,6 @@ public struct SettingsView: View {
                     }
                 }
 
-                SettingsRow(title: "Default Context Length", subtitle: "Maximum token sequence context for MLX generation", icon: "ruler") {
-                    Picker("", selection: $appState.settings.mlxContextLength) {
-                        Text("32K (32,768)").tag(32768)
-                        Text("64K (65,536)").tag(65536)
-                        Text("128K (131,072)").tag(131072)
-                        Text("256K (262,144)").tag(262144)
-                    }
-                    .frame(width: 160)
-                }
             }
 
             // External Model Discovery Locations (Osaurus Parity)
@@ -1114,11 +1121,6 @@ public struct SettingsView: View {
             }
 
             SettingsCard(title: "Chat Experience", description: "Streaming and context management", icon: "bubble.left.and.bubble.right") {
-                SettingsRow(title: "Stream Responses", subtitle: "Display LLM output progressively as generated", icon: "waveform") {
-                    Toggle("", isOn: $appState.settings.streamResponses)
-                        .toggleStyle(.switch)
-                }
-
                 SettingsRow(title: "Auto-Compact Context", subtitle: "Summarize old messages when nearing context limit", icon: "arrow.triangle.merge") {
                     Toggle("", isOn: $appState.settings.autoCompactContext)
                         .toggleStyle(.switch)
@@ -2133,8 +2135,11 @@ public struct SettingsView: View {
                     Spacer()
 
                     Button("Check for Updates") {
-                        appState.showToast("You are on the latest version.")
+                        // There is no update feed to check. Claiming "you are on the latest
+                        // version" was a fabricated success — it asserted a fact nothing verified.
+                        appState.showToast("Update checking is not implemented in this build.")
                     }
+                    .disabled(true)
                 }
                 .padding(.vertical, 4)
 
