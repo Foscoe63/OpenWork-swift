@@ -153,6 +153,7 @@
 		F89DC70DD981FC2939F651E0 /* SubAgentTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60EFB80D3905FD2983250FD9 /* SubAgentTask.swift */; };
 		F9003343129CB9A6613784C5 /* MLXSessionReuseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D28CAED402CDC58FE07CE46 /* MLXSessionReuseTests.swift */; };
 		F96E4E166877053ED03969A2 /* NativeMLXServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FEA443E3182FF8D1FA28F22 /* NativeMLXServiceTests.swift */; };
+		F9E0FA6E6DFD7454BA9935DD /* BuiltInProviderDefaultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 173FE0E2369EBD37C25C9169 /* BuiltInProviderDefaultTests.swift */; };
 		FA5F9C11793DE4A79AA4BD40 /* MockLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEC0E4C5061C6751F97E4424 /* MockLLMService.swift */; };
 		FB3B3BBA82CB9CDAD7299A3E /* SubAgentExecutionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B032D381AB42D673BDF466ED /* SubAgentExecutionCardView.swift */; };
 		FEB55DBB1AC49C9E8D1E5691 /* HeadlessAgentTurn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D4786E2D89CE7773DBC11A5 /* HeadlessAgentTurn.swift */; };
@@ -184,6 +185,7 @@
 		14CC02C864C94E2DDFAAFB6F /* DeadSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeadSettingsTests.swift; sourceTree = "<group>"; };
 		15661ED260AC4F0891B83D4F /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
 		15B631E70DD7A685312F512E /* MCPProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPProtocol.swift; sourceTree = "<group>"; };
+		173FE0E2369EBD37C25C9169 /* BuiltInProviderDefaultTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInProviderDefaultTests.swift; sourceTree = "<group>"; };
 		19B16487FA42DE1F3D6182EF /* AnthropicService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnthropicService.swift; sourceTree = "<group>"; };
 		1EB71C28EBF56CDA27D46BD0 /* MultiEditAndRerunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiEditAndRerunTests.swift; sourceTree = "<group>"; };
 		1ECA7CF419254C40EF452B6E /* MarkdownRichContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRichContentView.swift; sourceTree = "<group>"; };
@@ -345,6 +347,7 @@
 			isa = PBXGroup;
 			children = (
 				538B87BD10131E2371B69381 /* BuildDiagnosticsTests.swift */,
+				173FE0E2369EBD37C25C9169 /* BuiltInProviderDefaultTests.swift */,
 				B69C267E54AB247F8545E8E7 /* CheckpointAndGitTests.swift */,
 				CEEC8F8318BAD62B0D7A3010 /* CodeIndexAndCompactionTests.swift */,
 				25FB4259DFBB051D4299EAFA /* CodeSearchTests.swift */,
@@ -1011,6 +1014,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0133C718DCA4F28825277B45 /* BuildDiagnosticsTests.swift in Sources */,
+				F9E0FA6E6DFD7454BA9935DD /* BuiltInProviderDefaultTests.swift in Sources */,
 				EB9DF012AF9DC03EEC920E61 /* CheckpointAndGitTests.swift in Sources */,
 				8FCE0ED9B84DFB06845E934B /* CodeIndexAndCompactionTests.swift in Sources */,
 				8E50B86B7DAB7141B1003137 /* CodeSearchTests.swift in Sources */,

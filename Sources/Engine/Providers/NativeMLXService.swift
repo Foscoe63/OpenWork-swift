@@ -116,6 +116,16 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         return provider.models
     }
 
+    /// Run `model` on this Mac's GPU, in this process. Nothing else.
+    ///
+    /// This used to fall through to probing ports 1337, 8000, 8080, 11434, 1234 and 5243 for any
+    /// HTTP server willing to answer, which meant a turn the user sent to the built-in engine
+    /// could be served by Ollama, LM Studio, or whatever else happened to be listening — reported
+    /// as if the built-in engine had produced it. A provider named "Apple Silicon (Built-in)"
+    /// has to mean exactly one thing, so a failure here is now a failure, with the reason.
+    ///
+    /// Those backends are still fully available; they are separate providers in the picker,
+    /// selected deliberately, reached through their own clients.
     public func streamChat(
         provider: ModelProvider,
         model: ModelInfo,
@@ -127,68 +137,14 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         tools: [Tool],
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws {
-        // Built-in path: run MLX in-process first (same as Osaurus / GrizzyClaw).
-        // External HTTP servers are only a secondary option — never required.
-        var inProcessError: Error?
-        do {
-            try await streamInProcess(
-                model: model,
-                systemPrompt: systemPrompt,
-                messages: messages,
-                temperature: temperature,
-                maxTokens: maxTokens,
-                tools: tools,
-                onChunk: onChunk
-            )
-            return
-        } catch {
-            inProcessError = error
-            // Fall through to optional local servers.
-        }
-
-        var lastServerError: Error?
-        for port in [1337, 8000, 8080, 11434, 1234, 5243] {
-            if await LocalMLXEngine.shared.isServerRunning(port: port) {
-                var fb = provider
-                fb.baseUrl = port == 11434
-                    ? "http://127.0.0.1:11434"
-                    : "http://127.0.0.1:\(port)/v1"
-                let client: LLMProviderClient = port == 11434
-                    ? OllamaService.shared
-                    : OpenAIService.shared
-                do {
-                    try await client.streamChat(
-                        provider: fb,
-                        model: model,
-                        systemPrompt: systemPrompt,
-                        messages: messages,
-                        temperature: temperature,
-                        maxTokens: maxTokens,
-                        reasoningEffort: reasoningEffort,
-                        tools: tools,
-                        onChunk: onChunk
-                    )
-                    return
-                } catch {
-                    lastServerError = error
-                    continue
-                }
-            }
-        }
-
-        let inProcessDetail = inProcessError?.localizedDescription ?? "in-process load did not run"
-        let serverDetail = lastServerError?.localizedDescription ?? "no local OpenAI-compatible / Ollama server responded on common ports"
-        throw NSError(
-            domain: "NativeMLXService",
-            code: 10,
-            userInfo: [NSLocalizedDescriptionKey: """
-            Could not run model `\(model.id)`.
-
-            In-process MLX: \(inProcessDetail)
-            Local server fallback: \(serverDetail)
-
-            Download a complete model in Local Models (all weight shards present), or pick Ollama / a cloud provider in the model switcher.
-            """]
+        try await streamInProcess(
+            model: model,
+            systemPrompt: systemPrompt,
+            messages: messages,
+            temperature: temperature,
+            maxTokens: maxTokens,
+            tools: tools,
+            onChunk: onChunk
         )
     }
 
@@ -878,6 +834,14 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
 
     public func testConnection(provider: ModelProvider) async throws -> Bool { return true }
     public func listModels(provider: ModelProvider) async throws -> [ModelInfo] { return provider.models }
+
+    /// Without the MLX packages there is no in-process engine, and the built-in provider means
+    /// nothing else.
+    ///
+    /// This used to probe six ports and hand the turn to whatever answered. That made a build
+    /// with MLX missing look like it was working — the built-in provider quietly served by
+    /// Ollama or LM Studio — so the actual misconfiguration went unnoticed. Say what is wrong
+    /// instead; the other backends are their own providers in the picker.
     public func streamChat(
         provider: ModelProvider,
         model: ModelInfo,
@@ -889,41 +853,15 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         tools: [Tool],
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws {
-        // 1) Prefer an already-running local server (Osaurus / oMLX / Ollama / LM Studio / vMLX)
-        let probePorts = [1337, 8000, 11434, 1234, 8080, 5243]
-        for port in probePorts {
-            if await LocalMLXEngine.shared.isServerRunning(port: port) {
-                var fb = provider
-                fb.baseUrl = port == 11434
-                    ? "http://127.0.0.1:11434"
-                    : "http://127.0.0.1:\(port)/v1"
-                let client: LLMProviderClient = port == 11434
-                    ? OllamaService.shared
-                    : OpenAIService.shared
-                try await client.streamChat(
-                    provider: fb,
-                    model: model,
-                    systemPrompt: systemPrompt,
-                    messages: messages,
-                    temperature: temperature,
-                    maxTokens: maxTokens,
-                    reasoningEffort: reasoningEffort,
-                    tools: tools,
-                    onChunk: onChunk
-                )
-                return
-            }
-        }
-
-        // 2) No reachable local server and no in-process MLX (packages not linked in this build).
         throw NSError(
             domain: "NativeMLXService",
             code: 11,
             userInfo: [NSLocalizedDescriptionKey: """
-            Built-in MLX packages are not linked in this build, and no local inference server was reachable \
-            (checked ports 1337, 8000, 11434, 1234, 8080, 5243).
+            The built-in Apple Silicon engine cannot run `\(model.id)`: the MLX packages are not \
+            linked into this build, so there is no in-process engine.
 
-            Rebuild with MLX SPM packages linked, start Ollama/LM Studio/Osaurus, or select a cloud provider.
+            Rebuild with the MLX SPM packages linked, or select Ollama, LM Studio or a cloud \
+            provider in the model picker — they run through their own providers, not this one.
             """]
         )
     }

@@ -109,14 +109,19 @@ final class SandboxContainmentTests: XCTestCase {
     }
 
     func testFileToolStillBlocksAnEscape() async {
-        var s = AppSettings.default
+        // `PersistenceManager.shared` is the *real* store — this writes
+        // ~/Library/Application Support/OpenWorkSwift/settings.json, the running app's own
+        // configuration. Restore exactly what was there, field for field.
+        //
+        // This used to flip the one field it needed on a fresh `AppSettings.default` and save
+        // that, then "restore" another fresh default. Every full test run therefore reset the
+        // developer's real settings to stock — which is why `defaultProviderId` kept reverting to
+        // Ollama and was repeatedly set back by hand without the cause ever being found.
+        let original = PersistenceManager.shared.loadSettings()
+        var s = original
         s.sandboxAgentFileSystem = true
         PersistenceManager.shared.saveSettings(s)
-        defer {
-            var off = AppSettings.default
-            off.sandboxAgentFileSystem = false
-            PersistenceManager.shared.saveSettings(off)
-        }
+        defer { PersistenceManager.shared.saveSettings(original) }
         let result = await ToolExecutionEngine.shared.execute(
             toolName: "file_write",
             argumentsJson: #"{"path":"/etc/should-never-write","content":"x"}"#,

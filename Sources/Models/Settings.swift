@@ -285,8 +285,16 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public init(
         defaultWorkspaceId: String = "default-workspace",
         defaultAgentId: String = "lead-assistant",
-        defaultProviderId: String = "ollama-local",
-        defaultModelId: String = "llama3:latest",
+        // The built-in Apple Silicon MLX engine, which is what `defaultProviders` marks
+        // `isDefault: true`. These two used to disagree: the provider list said the built-in
+        // engine was the default while this said Ollama, so a fresh install pointed at a separate
+        // app that may not be installed rather than the engine that ships in the binary and needs
+        // nothing. Worse, when that Ollama provider was disabled the selection fell through to
+        // whatever happened to be enabled first — a cloud provider, on the machine where this was
+        // found, answering turns the user believed were local.
+        defaultProviderId: String = "builtin-mlx-local",
+        // The smallest curated model, matching the `isDefault` model in `defaultProviders`.
+        defaultModelId: String = "mlx-community/DeepSeek-R1-Distill-Qwen-14B-4bit",
         startOnLogin: Bool = false,
         defaultTemperature: Double = 0.7,
         defaultMaxTokens: Int = 4096,

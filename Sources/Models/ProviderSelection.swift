@@ -46,7 +46,7 @@ public enum ProviderSelection {
     public static func correctedSelectionId(
         providers: [ModelProvider],
         selectedId: String,
-        fallback: String = "ollama-local"
+        fallback: String = "builtin-mlx-local"
     ) -> String {
         if providers.contains(where: { $0.id == selectedId && $0.isEnabled }) {
             return selectedId

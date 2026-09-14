@@ -136,7 +136,7 @@ public final class AppState: ObservableObject {
     @Published public var isGenerating: Bool = false
     @Published public var composerText: String = ""
     @Published public var selectedAgentId: String = "lead-assistant"
-    @Published public var selectedProviderId: String = "ollama-local"
+    @Published public var selectedProviderId: String = "builtin-mlx-local"
     @Published public var selectedModelId: String = "llama3:latest"
     @Published public var isReasoningEnabled: Bool = true
     @Published public var pullModelProgress: Double = 0.0
