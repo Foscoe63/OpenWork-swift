@@ -6,10 +6,10 @@ Written 2026-09-14. Everything below is verified against the code, not remembere
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` | 307 |
+| OpenWork-Swift | yes, `main` | 319 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
-OpenWork went from 13 tests to 307 over this work.
+OpenWork went from 13 tests to 319 over this work.
 
 ---
 
@@ -53,6 +53,13 @@ built from the transcript, with git supplying the diff.
 launch-at-login (real `SMAppService`) and the turn-finished sound are now wired; `streamResponses`,
 `autoSaveIntervalSeconds`, `uiScalePercent` and `mlxContextLength` were removed. "Check for
 Updates" no longer claims you are on the latest version without checking.
+
+**Loop breaking.** `autoLoopBreakerEnabled` detected repetition and then waited for the stream to
+finish — so a real 35B run spiralled for 219 seconds and its whole token budget with the setting
+on. The stream is now cancellable from the streaming callback, the check watches reasoning as well
+as visible text (reasoning models spiral where the visible text never grows), it is sampled every
+24 tokens against the tail rather than re-split per token, and it tells the user it cut the answer
+off. A turn that produced only reasoning also no longer renders as an empty bubble.
 
 ---
 
@@ -169,7 +176,7 @@ again. `omlx-local` is enabled, which is the one that matters for in-process MLX
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 307 tests
+$SWIFT test                    # 319 tests
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build   # App Intents metadata
 ```
@@ -182,3 +189,13 @@ was expected, and a model id that matched no folder.
 
 Write its output to a file — `print` to a pipe is lost when MLX segfaults at exit. Delete the temp
 test afterwards.
+
+Two things that only a real run shows, both now fixed but worth knowing the shape of:
+
+- **Wrap the run in `ToolApprovalManager.shared.withUnattendedApprovals`.** Without it the turn
+  blocks forever the first time the model calls a writing tool, because nothing is on screen to
+  approve it. A refused call still records the arguments the model produced, which is usually what
+  you wanted to see anyway.
+- **Local models send structured arguments in whatever shape they like.** The 35B model sent
+  `multi_edit`'s `edits` as a JSON *string* rather than an array. Parsers for new tools should
+  accept the obvious variants and reject the rest, rather than guessing.
