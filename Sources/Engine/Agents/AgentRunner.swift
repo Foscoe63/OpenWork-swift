@@ -1062,22 +1062,30 @@ public final class AgentRunner {
                     callInfo.approvalReason = reason
                     accumulator.addToolCall(callInfo)
 
-                    let approved = await ToolApprovalManager.shared.requestApproval(
+                    let outcome = await ToolApprovalManager.shared.requestApproval(
                         callId: callId,
                         toolName: toolName,
                         argumentsJson: argsJson,
                         reason: reason
                     )
 
-                    if !approved {
+                    if outcome != .approved {
+                        // A person saying no and nobody being there to ask are different events.
+                        // Reporting the second as the first would tell the model the user made a
+                        // decision they never made.
+                        let explanation = outcome == .refusedUnattended
+                            ? "This run is unattended, so no one can approve \(reason). Do not retry it; finish what you can without this action and state plainly that it was skipped and why."
+                            : "Action rejected by the user (\(reason)). Do not retry this exact call; explain the situation or propose an alternative."
                         callInfo.status = .error
-                        callInfo.errorMessage = "Blocked: the user did not approve this action."
+                        callInfo.errorMessage = outcome == .refusedUnattended
+                            ? "Skipped: needs approval, and this run is unattended."
+                            : "Blocked: the user did not approve this action."
                         accumulator.updateToolCall(callInfo)
                         let toolMsg = ChatMessage(
                             id: callId,
                             sessionId: session.id,
                             role: .tool,
-                            content: "Action rejected by the user (\(reason)). Do not retry this exact call; explain the situation or propose an alternative."
+                            content: explanation
                         )
                         workingMessages.append(toolMsg)
                         continue

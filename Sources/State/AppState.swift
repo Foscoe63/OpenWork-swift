@@ -1505,6 +1505,7 @@ public final class AppState: ObservableObject {
 
         Task {
             let autoAccumulator = SubAgentAccumulator()
+            var failure: Error?
             do {
                 try await ProviderRouter.shared.stream(
                     provider: provider,
@@ -1523,22 +1524,29 @@ public final class AppState: ObservableObject {
                     }
                 }
             } catch {
-                autoAccumulator.append("""
-                # 📋 \(automation.name) Report
+                // The provider call failed. Filing a report that says the pipeline is "healthy"
+                // would be a fabricated success — the artifact must say what actually happened.
+                failure = error
+            }
+
+            let produced = autoAccumulator.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let succeeded = failure == nil && !produced.isEmpty
+            let synthesized: String
+            if succeeded {
+                synthesized = autoAccumulator.text
+            } else {
+                let cause = failure?.localizedDescription ?? "the model returned nothing."
+                synthesized = """
+                # ⚠️ \(automation.name) did not run
                 *Timestamp: \(Date().formatted())*
 
                 \(automation.description)
 
-                Automated pipeline execution finished with status: healthy.
-                """)
+                This automation failed: \(cause)
+
+                No report was generated. Nothing below this line was produced by the agent.
+                """
             }
-
-            let synthesized = autoAccumulator.text.isEmpty ? """
-            # 📋 \(automation.name) Report
-            *Timestamp: \(Date().formatted())*
-
-            \(automation.description)
-            """ : autoAccumulator.text
 
             let artifact = AutomationArtifact(
                 workspaceId: ws.id,
@@ -1555,17 +1563,32 @@ public final class AppState: ObservableObject {
 
             await MainActor.run {
                 self.saveArtifact(artifact)
-                if let aIdx = self.automations.firstIndex(where: { $0.id == automation.id }) {
-                    var updated = self.automations[aIdx]
-                    updated.lastRunAt = Date()
-                    updated.lastStatus = "success"
-                    updated.lastResultSummary = "Generated artifact: \(artifact.title)"
-                    self.automations[aIdx] = updated
-                    self.persistence.saveAutomations(self.automations)
-                }
-                self.showToast("🎉 Generated Artifact for '\(automation.name)'")
+                self.recordAutomationRun(
+                    id: automation.id,
+                    succeeded: succeeded,
+                    summary: succeeded
+                        ? "Generated artifact: \(artifact.title)"
+                        : "Failed: \(failure?.localizedDescription ?? "the model returned nothing.")"
+                )
+                self.showToast(succeeded
+                    ? "🎉 Generated Artifact for '\(automation.name)'"
+                    : "⚠️ '\(automation.name)' failed — see the artifact for why")
             }
         }
+    }
+
+    /// Record the outcome of an automation run.
+    ///
+    /// One place, so a run started from the UI, a schedule or a Shortcut cannot disagree about what
+    /// "success" means — and so a failure can never be filed as a success by a path that forgot.
+    public func recordAutomationRun(id: String, succeeded: Bool, summary: String) {
+        guard let idx = automations.firstIndex(where: { $0.id == id }) else { return }
+        var updated = automations[idx]
+        updated.lastRunAt = Date()
+        updated.lastStatus = succeeded ? "success" : "failed"
+        updated.lastResultSummary = summary
+        automations[idx] = updated
+        persistence.saveAutomations(automations)
     }
 
     // MARK: - Settings
