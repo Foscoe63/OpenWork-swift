@@ -1,5 +1,6 @@
 import Foundation
 #if canImport(MLXLMCommon) && canImport(MLXLLM) && canImport(MLXHuggingFace) && canImport(HuggingFace) && canImport(Tokenizers)
+import MLX
 import MLXLMCommon
 import MLXLLM
 import MLXHuggingFace
@@ -26,20 +27,47 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// Don't retry a doomed load on every subsequent message.
     private static let failureCooldown: TimeInterval = 300
 
-    /// How long a load may make *no progress at all* before this turn gives up on it.
+    /// Smallest load budget, however tiny the model.
     ///
-    /// This used to be a total budget, and that was measurably wrong in both directions. A 46GB
-    /// Llama-3.3-70B on an external volume loaded in ~220s and answered — then the next turn gave
-    /// up on the same load at 180s and reported the model unavailable, abandoning work it had
-    /// already proved it could finish. A multi-gigabyte *download* fares worse still: it cannot
-    /// possibly finish inside any fixed budget, so the turn always failed while the download was
-    /// working perfectly.
+    /// The budget is deliberately *not* a stall timer any more. Timing silence only works when the
+    /// work reports progress, and reading a bundle off disk does not: `loadContainer(from:)` takes
+    /// no progress handler, so the watchdog saw one tick at the start and then nothing for the
+    /// whole load. A 46GB Llama-3.3-70B on an external volume loads in ~220s, which a 180s silence
+    /// budget calls wedged — abandoning a load that was about to succeed.
     ///
-    /// Time the silence instead. Loading and downloading both report progress continuously, so
-    /// work that is moving is never abandoned however long it takes, and a load that is genuinely
-    /// wedged still fails the turn rather than hanging it. The load keeps running either way and
-    /// populates the cache, so the next turn is fast.
-    private static let loadStallSeconds: TimeInterval = 180
+    /// Size the budget by the bytes actually on disk instead (see `loadBudgetSeconds`). Overrunning
+    /// costs only this one turn: the load keeps running and populates the cache, so the next turn
+    /// is fast either way.
+    private static let minimumLoadSeconds: TimeInterval = 180
+
+    /// Bytes per second a load is assumed to manage, for sizing the budget.
+    ///
+    /// Pessimistic on purpose — slower than a spinning external disk. The budget is a ceiling on
+    /// how long one turn waits, not a performance claim, so erring long costs nothing and erring
+    /// short abandons work that would have finished.
+    private static let assumedLoadBytesPerSecond: Double = 25_000_000
+
+    /// How long this turn will wait for `modelId` to load, from the size of its weights.
+    static func loadBudgetSeconds(modelId: String, settings: AppSettings) -> TimeInterval {
+        guard let dir = LocalMLXEngine.shared.resolveLocalModelDirectory(modelId: modelId, settings: settings)
+        else { return minimumLoadSeconds }
+        let bytes = Double(weightBytes(in: dir))
+        return max(minimumLoadSeconds, bytes / assumedLoadBytesPerSecond)
+    }
+
+    /// Total size of the weight shards in a bundle directory.
+    static func weightBytes(in directory: URL) -> Int64 {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return 0 }
+        var total: Int64 = 0
+        for name in names where name.hasSuffix(".safetensors") {
+            let path = directory.appendingPathComponent(name).path
+            if let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? NSNumber {
+                total += size.int64Value
+            }
+        }
+        return total
+    }
 
     public init() {}
 
@@ -478,18 +506,17 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         // turn instead. The load now runs on its own task, outlives the deadline, and caches
         // itself when it finishes — so overrunning once makes the next turn fast rather than
         // starting over.
-        // Every progress report resets the watchdog, so a load that is moving is never abandoned.
         let clock = AsyncDeadline.ProgressClock()
-        let trackedProgress: @Sendable (String) -> Void = { status in
-            clock.tick()
-            onProgress(status)
-        }
+        let budget = Self.loadBudgetSeconds(
+            modelId: modelId,
+            settings: PersistenceManager.shared.loadSettings()
+        )
 
         let task: Task<ModelContainer, Error> = lock.withLock {
             if let existing = inFlightLoads[modelId] { return existing }
             let created = Task<ModelContainer, Error> {
                 let container = try await self.loadContainerFromDiskOrDownload(
-                    modelId: modelId, onProgress: trackedProgress
+                    modelId: modelId, onProgress: onProgress
                 )
                 self.lock.withLock {
                     self.loadedContainers[modelId] = container
@@ -503,10 +530,24 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             return created
         }
 
+        // Reading tens of gigabytes is silent, so say so periodically: without this the user
+        // watches an idle spinner for minutes with no way to tell loading from hanging. The
+        // heartbeat reports status only — it deliberately does not touch the clock, or the budget
+        // below could never expire.
+        let heartbeat = Task.detached(priority: .utility) {
+            let started = Date()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                if Task.isCancelled { return }
+                onProgress("Loading \(modelId) — \(Int(Date().timeIntervalSince(started)))s elapsed")
+            }
+        }
+        defer { heartbeat.cancel() }
+
         do {
             return try await AsyncDeadline.wait(
                 for: task,
-                stalledAfter: Self.loadStallSeconds,
+                stalledAfter: budget,
                 clock: clock
             )
         } catch is AsyncDeadline.TimedOut {
@@ -515,7 +556,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             throw NSError(
                 domain: "NativeMLXService",
                 code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "Loading '\(modelId)' in-process has reported no progress for \(Int(Self.loadStallSeconds))s. It is still running in the background — this turn falls back; try again once it finishes."]
+                userInfo: [NSLocalizedDescriptionKey: "Loading '\(modelId)' is taking longer than \(Int(budget))s. It is still running in the background — this turn falls back; try again once it finishes."]
             )
         } catch {
             lock.withLock {
@@ -533,49 +574,161 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         let settings = PersistenceManager.shared.loadSettings()
         let tokenizerLoader = #huggingFaceTokenizerLoader()
 
-        // Prefer an already-complete directory from the shared Storage Models library / other known roots.
-        if let localDir = LocalMLXEngine.shared.resolveLocalModelDirectory(modelId: modelId, settings: settings) {
-            onProgress("Loading local MLX weights from \(localDir.path)")
-            return try await LLMModelFactory.shared.loadContainer(
-                from: localDir,
-                using: tokenizerLoader
-            )
+        // Prefer an already-complete directory from the shared model library / other known roots.
+        guard let localDir = LocalMLXEngine.shared.resolveLocalModelDirectory(modelId: modelId, settings: settings) else {
+            // A chat turn never downloads. This used to fall through to a Hugging Face fetch, so
+            // asking a 37GB model to say hello started a 37GB download behind a status chip that
+            // said "Loading MLX weights: 20%" — indistinguishable from loading a model already on
+            // disk, with no size, no ETA, and no way to tell it apart from a hang. Worse, the
+            // weights were usually already present somewhere the root list did not look, so the
+            // download was pure waste.
+            //
+            // Downloading is now an explicit action in Local Models, where it has a real progress
+            // bar and can be cancelled. This path only reports what it could not find, and where
+            // it looked.
+            throw Self.modelNotDownloadedError(modelId: modelId, settings: settings)
         }
 
-        // Detect incomplete partial downloads under known roots (same lookup, without completeness).
-        if let incomplete = Self.findIncompleteModelDirectory(modelId: modelId, settings: settings) {
-            throw NSError(
-                domain: "NativeMLXService",
-                code: 12,
-                userInfo: [NSLocalizedDescriptionKey: """
-                Found an incomplete download for `\(modelId)` at:
-                \(incomplete.path)
+        // One model resident at a time. Loading a second multi-gigabyte checkpoint beside the
+        // first is the quickest way to exhaust unified memory on a machine that can just barely
+        // hold one — the same policy GrizzyBot's generator applies.
+        evictOtherModels(keeping: modelId)
+        Self.applyMemoryPolicy()
 
-                Weight shards are missing or empty. Open Local Models and resume/re-download until the model shows as ready, or choose a different model from /Volumes/Storage/Models.
-                """]
-            )
+        onProgress("Loading \(modelId) from \(localDir.path)")
+        return try await LLMModelFactory.shared.loadContainer(
+            from: localDir,
+            using: tokenizerLoader
+        )
+    }
+
+    /// Drop every resident container except `modelId` and release its GPU buffers.
+    private func evictOtherModels(keeping modelId: String) {
+        let evicted = lock.withLock { () -> [String] in
+            let stale = loadedContainers.keys.filter { $0 != modelId }
+            for key in stale { loadedContainers[key] = nil }
+            if !stale.isEmpty {
+                // The cached session belongs to a model that is no longer resident.
+                cachedSession = nil
+                cachedSessionKey = nil
+                cachedConsumed = []
+            }
+            return stale
         }
+        guard !evicted.isEmpty else { return }
+        MLX.Memory.clearCache()
+        NotificationCenter.default.post(name: .mlxLoadedModelsDidChange, object: nil)
+    }
 
-        onProgress("Downloading MLX weights for \(modelId)…")
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let cacheRoot = home.appendingPathComponent(".openwork/mlx_models/hub", isDirectory: true)
-        try? FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
-        let hubClient = HubClient(cache: HubCache(cacheDirectory: cacheRoot))
+    /// Cap MLX's buffer cache so a resident model does not squeeze the rest of the machine.
+    static func applyMemoryPolicy() {
+        MLX.Memory.cacheLimit = Int(
+            Double(ProcessInfo.processInfo.physicalMemory) * cacheLimitFraction
+        )
+    }
+
+    /// Fraction of physical memory MLX's buffer cache may hold.
+    static let cacheLimitFraction = 0.5
+
+    /// Where in-process downloads land. Also a `knownMLXSearchRoots` entry, so anything fetched
+    /// here resolves on the next turn without a rescan.
+    public static var downloadCacheRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".openwork/mlx_models/hub", isDirectory: true)
+    }
+
+    /// Download `modelId`'s weights from Hugging Face into the app's own hub cache.
+    ///
+    /// This replaces a shell-out to `huggingface-cli`, which is a Python tool that is simply not
+    /// installed on most Macs — so the Download button in Local Models could not succeed here at
+    /// all, and its progress bar was three hardcoded numbers (5%, 40%, 100%) rather than anything
+    /// measured. Using the same `HubClient` the loader already depends on means one mechanism, one
+    /// destination, real byte progress, and resume on a retry.
+    public func download(
+        modelId: String,
+        onProgress: @Sendable @escaping (Double, String) -> Void
+    ) async throws {
+        let root = Self.downloadCacheRoot
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let hubClient = HubClient(cache: HubCache(cacheDirectory: root))
         let downloader = #hubDownloader(hubClient)
 
+        onProgress(0, "Resolving \(modelId)…")
         do {
-            return try await LLMModelFactory.shared.loadContainer(
+            _ = try await LLMModelFactory.shared.loadContainer(
                 from: downloader,
-                using: tokenizerLoader,
+                using: #huggingFaceTokenizerLoader(),
                 configuration: ModelConfiguration(id: modelId, revision: "main"),
                 progressHandler: { progress in
-                    let pct = Int((progress.fractionCompleted * 100).rounded())
-                    onProgress("Loading MLX weights: \(pct)%")
+                    let fraction = min(1, max(0, progress.fractionCompleted))
+                    onProgress(fraction, "Downloading \(modelId) — \(Int((fraction * 100).rounded()))%")
                 }
             )
         } catch {
             throw Self.describeDownloadFailure(error, modelId: modelId)
         }
+        onProgress(1, "Downloaded \(modelId)")
+
+        // The factory loaded the model to prove the download is usable; do not keep 37GB resident
+        // just because the user pressed Download.
+        MLX.Memory.clearCache()
+    }
+
+    /// Explain that the weights are not on this Mac, and name every place that was searched.
+    ///
+    /// Naming the roots is the point: the failure that produced this message was a model sitting
+    /// complete on an attached volume that the root list did not include, and nothing on screen
+    /// could have told the user that.
+    static func modelNotDownloadedError(modelId: String, settings: AppSettings) -> Error {
+        let roots = LocalMLXEngine.knownMLXSearchRoots(settings: settings)
+        let searched = roots.isEmpty
+            ? "  (no model folders exist on this Mac yet)"
+            : roots.map { "  • \($0.path)" }.joined(separator: "\n")
+
+        var message = """
+        `\(modelId)` is not downloaded on this Mac.
+
+        Searched:
+        \(searched)
+        """
+
+        if let incomplete = findIncompleteModelDirectory(modelId: modelId, settings: settings) {
+            message += """
+
+
+            A partial download is present at \(incomplete.path) — weight shards are missing or \
+            empty. Resume it from Local Models.
+            """
+        }
+
+        let installed = LocalMLXEngine.shared
+            .scanInstalledModels(settings: settings)
+            .filter(\.isDownloaded)
+            .map(\.id)
+            .sorted()
+        if !installed.isEmpty {
+            let listed = installed.prefix(8).map { "  • \($0)" }.joined(separator: "\n")
+            let more = installed.count > 8 ? "\n  … and \(installed.count - 8) more" : ""
+            message += """
+
+
+            Ready to run right now:
+            \(listed)\(more)
+            """
+        }
+
+        message += """
+
+
+        Open Local Models to download `\(modelId)`, add the folder that holds it, or pick one of \
+        the models above.
+        """
+
+        return NSError(
+            domain: "NativeMLXService",
+            code: 12,
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
     }
 
     /// Turn a Hugging Face download failure into something the user can act on.
@@ -706,6 +859,22 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     @discardableResult public func unload(modelId: String) -> Bool { false }
     @discardableResult public func unloadAll() -> Int { 0 }
     public func preload(modelId: String) {}
+
+    public static var downloadCacheRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".openwork/mlx_models/hub", isDirectory: true)
+    }
+
+    public func download(
+        modelId: String,
+        onProgress: @Sendable @escaping (Double, String) -> Void
+    ) async throws {
+        throw NSError(
+            domain: "NativeMLXService",
+            code: 14,
+            userInfo: [NSLocalizedDescriptionKey: "Built-in MLX packages are not linked in this build, so `\(modelId)` cannot be downloaded here. Rebuild with the MLX SPM packages linked, or fetch the weights with another tool and add the folder in Local Models."]
+        )
+    }
 
     public func testConnection(provider: ModelProvider) async throws -> Bool { return true }
     public func listModels(provider: ModelProvider) async throws -> [ModelInfo] { return provider.models }

@@ -281,6 +281,31 @@ public final class LocalMLXEngine: @unchecked Sendable {
 
     private init() {}
 
+    /// Mounted volumes, plus `/Volumes` itself for the common case where nothing is mounted.
+    ///
+    /// `mountedVolumeURLs` skips volumes the user has hidden from the browser, so `/Volumes` is
+    /// also listed directly and walked one level down.
+    static func mountedVolumes() -> [URL] {
+        let fm = FileManager.default
+        var result: [URL] = []
+        func add(_ url: URL) {
+            let standardized = url.standardizedFileURL
+            guard !result.contains(where: { $0.standardizedFileURL == standardized }) else { return }
+            result.append(standardized)
+        }
+        for volume in fm.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [.skipHiddenVolumes]) ?? [] {
+            add(volume)
+        }
+        let volumesRoot = URL(fileURLWithPath: "/Volumes", isDirectory: true)
+        for entry in (try? fm.contentsOfDirectory(at: volumesRoot, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? [] {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: entry.path, isDirectory: &isDir), isDir.boolValue {
+                add(entry)
+            }
+        }
+        return result
+    }
+
     /// Shared roots where OpenWork looks for installed MLX weights.
     public static func knownMLXSearchRoots(settings: AppSettings? = nil) -> [URL] {
         var roots: [URL] = []
@@ -305,9 +330,22 @@ public final class LocalMLXEngine: @unchecked Sendable {
             appendIfExists(URL(fileURLWithPath: expanded, isDirectory: true))
         }
 
-        // Primary shared library on this machine
-        appendIfExists(URL(fileURLWithPath: "/Volumes/Storage/Models", isDirectory: true))
-        appendIfExists(URL(fileURLWithPath: "/Volumes/Storage/models", isDirectory: true))
+        // Model libraries on attached volumes.
+        //
+        // This used to name `/Volumes/Storage/Models` literally, which is not where this — or any
+        // other — machine keeps its weights. The real library here is `/Volumes/Models/Models`, so
+        // every lookup missed a complete 35GB checkpoint sitting on disk and the chat turn fell
+        // through to re-downloading it from Hugging Face. Sweep the mounted volumes for the usual
+        // library folder names instead of asserting one path.
+        for volume in mountedVolumes() {
+            for name in ["Models", "models"] {
+                let library = volume.appendingPathComponent(name, isDirectory: true)
+                appendIfExists(library)
+                // `/Volumes/Models/Models`: a volume named for its contents holds the library one
+                // level down, so the useful root is the child, not the mount point.
+                appendIfExists(library.appendingPathComponent(name, isDirectory: true))
+            }
+        }
 
         appendIfExists(home.appendingPathComponent(".grizzyclaw/mlx_models", isDirectory: true))
         appendIfExists(home.appendingPathComponent("Library/Application Support/GrizzyClaw/mlx_models", isDirectory: true))
@@ -332,8 +370,18 @@ public final class LocalMLXEngine: @unchecked Sendable {
     }
 
     /// Resolve an on-disk directory for a model id (`org/name`) under known MLX roots.
-    public func resolveLocalModelDirectory(modelId: String, settings: AppSettings? = nil) -> URL? {
-        let roots = Self.knownMLXSearchRoots(settings: settings)
+    ///
+    /// `roots` exists so a caller can state exactly where to look. Production passes nil and gets
+    /// `knownMLXSearchRoots`; a test passes its own directory and is then unaffected by whatever
+    /// model library happens to be attached to the machine running it — which is not a
+    /// hypothetical, since the name matching below deliberately returns nil when two roots offer
+    /// the same model, and a real library made that the outcome for a fixture that should match.
+    public func resolveLocalModelDirectory(
+        modelId: String,
+        settings: AppSettings? = nil,
+        roots explicitRoots: [URL]? = nil
+    ) -> URL? {
+        let roots = explicitRoots ?? Self.knownMLXSearchRoots(settings: settings)
         let sanitizedId = modelId.replacingOccurrences(of: "/", with: "--")
         let hubFolder = "models--" + sanitizedId
 
@@ -451,9 +499,10 @@ public final class LocalMLXEngine: @unchecked Sendable {
         return .ok(modelType: modelType)
     }
 
-    /// Scans all configured locations (custom paths, Storage Models volume, Hugging Face cache, LM Studio, GrizzyClaw).
-    public func scanInstalledModels(settings: AppSettings) -> [LocalMLXModel] {
-        let directoriesToScan = Self.knownMLXSearchRoots(settings: settings)
+    /// Scans all configured locations (custom paths, attached model volumes, Hugging Face cache,
+    /// LM Studio, GrizzyClaw). `roots` overrides that list; see `resolveLocalModelDirectory`.
+    public func scanInstalledModels(settings: AppSettings, roots: [URL]? = nil) -> [LocalMLXModel] {
+        let directoriesToScan = roots ?? Self.knownMLXSearchRoots(settings: settings)
 
         var foundInstalled: [String: LocalMLXModel] = [:]
 
@@ -631,54 +680,16 @@ public final class LocalMLXEngine: @unchecked Sendable {
         return nil
     }
 
-    /// Pulls an MLX model via python / huggingface-cli or download directory.
+    /// Download a model's weights so a chat turn can load them.
+    ///
+    /// Previously this shelled out to `huggingface-cli` — a Python tool that is not installed on a
+    /// stock Mac, so the Download button failed outright here — and wrote to
+    /// `~/.openwork/mlx_models/<org>--<repo>/`, a *different* directory from the one the chat
+    /// loader's own download used. Two mechanisms, two destinations, one of them non-functional.
+    /// There is now one: the in-process Hugging Face client, writing to the hub cache that
+    /// `resolveLocalModelDirectory` already searches.
     public func pullModel(repoId: String, onProgress: @Sendable @escaping (Double, String) -> Void) async throws {
-        onProgress(0.05, "Starting download for \(repoId)...")
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let targetDir = home.appendingPathComponent(".openwork/mlx_models", isDirectory: true)
-        try? FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
-
-        let sanitizedFolder = repoId.replacingOccurrences(of: "/", with: "--")
-        let destinationDir = "\(targetDir.path)/\(sanitizedFolder)"
-        let script = "huggingface-cli download \"\(repoId)\" --local-dir \"\(destinationDir)\" --local-dir-use-symlinks False"
-        
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", script]
-        process.environment = ToolExecutionEngine.defaultEnvironment()
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        // huggingface-cli prints a live tqdm progress bar for the whole download, which easily
-        // exceeds the pipe's kernel buffer on a multi-gigabyte model. Nothing was draining that
-        // pipe here, so waitUntilExit() below would deadlock forever the first time that happened
-        // — the same Process/Pipe bug fixed elsewhere in this codebase, but with no timeout to
-        // even bound the damage since a real download can legitimately run a long time.
-        let state = ShellOutputState(maxBytes: 20_000)
-        pipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if !chunk.isEmpty { state.append(chunk) }
-        }
-
-        try process.run()
-
-        onProgress(0.4, "Downloading model weights & tokenizer...")
-        process.waitUntilExit()
-        pipe.fileHandleForReading.readabilityHandler = nil
-
-        if process.terminationStatus == 0 {
-            onProgress(1.0, "Completed!")
-        } else {
-            let (output, _) = state.finalize()
-            let detail = output.isEmpty ? "" : " (\(output.suffix(300)))"
-            throw NSError(
-                domain: "LocalMLXEngine",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Download failed. Please ensure 'huggingface-cli' is installed or clone to ~/.cache/huggingface.\(detail)"]
-            )
-        }
+        try await NativeMLXService.shared.download(modelId: repoId, onProgress: onProgress)
     }
 
     /// Removes a downloaded model from disk.

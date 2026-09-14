@@ -40,6 +40,14 @@ final class LocalModelResolutionTests: XCTestCase {
         return s
     }
 
+    /// Look only at this test's fixture directory.
+    ///
+    /// Without this the engine also searches every real model library on the machine running the
+    /// test — the Hugging Face cache, LM Studio, attached volumes. Name matching returns nil when
+    /// two roots offer the same model, so a machine that actually has `Qwen3-Coder-Next-REAP-48B`
+    /// on disk made these tests fail on a correct implementation.
+    private func roots() -> [URL] { [URL(fileURLWithPath: root, isDirectory: true)] }
+
     // MARK: - Name normalisation
 
     func testNormalisationIgnoresOrgCaseAndSeparators() {
@@ -60,7 +68,7 @@ final class LocalModelResolutionTests: XCTestCase {
     func testResolvesExactPath() throws {
         let dir = try makeModel(org: "mlx-community", name: "Ornith-1.5-35B-A3B-8bit")
         let found = LocalMLXEngine.shared.resolveLocalModelDirectory(
-            modelId: "mlx-community/Ornith-1.5-35B-A3B-8bit", settings: settings()
+            modelId: "mlx-community/Ornith-1.5-35B-A3B-8bit", settings: settings(), roots: roots()
         )
         assertSamePath(found, dir)
     }
@@ -69,7 +77,7 @@ final class LocalModelResolutionTests: XCTestCase {
     func testResolvesAcrossADifferentOrg() throws {
         let dir = try makeModel(org: "andosen", name: "Qwen3-Coder-Next-REAP-48B-A3B-mlx-8Bit")
         let found = LocalMLXEngine.shared.resolveLocalModelDirectory(
-            modelId: "mlx-community/Qwen3-Coder-Next-REAP-48B-A3B-mlx-8Bit", settings: settings()
+            modelId: "mlx-community/Qwen3-Coder-Next-REAP-48B-A3B-mlx-8Bit", settings: settings(), roots: roots()
         )
         assertSamePath(found, dir)
     }
@@ -77,7 +85,7 @@ final class LocalModelResolutionTests: XCTestCase {
     func testResolvesABareSlugWithNoOrg() throws {
         let dir = try makeModel(org: "andosen", name: "Qwen3-Coder-Next-REAP-48B-A3B-mlx-8Bit")
         let found = LocalMLXEngine.shared.resolveLocalModelDirectory(
-            modelId: "qwen3-coder-next-reap-48b-a3b-mlx", settings: settings()
+            modelId: "qwen3-coder-next-reap-48b-a3b-mlx", settings: settings(), roots: roots()
         )
         assertSamePath(found, dir, "a settings slug without the -8Bit suffix should still match")
     }
@@ -88,7 +96,7 @@ final class LocalModelResolutionTests: XCTestCase {
         _ = try makeModel(org: "orgA", name: "Shared-Model-Name")
         _ = try makeModel(org: "orgB", name: "Shared-Model-Name")
         let found = LocalMLXEngine.shared.resolveLocalModelDirectory(
-            modelId: "somewhere-else/Shared-Model-Name", settings: settings()
+            modelId: "somewhere-else/Shared-Model-Name", settings: settings(), roots: roots()
         )
         XCTAssertNil(found)
     }
@@ -96,13 +104,13 @@ final class LocalModelResolutionTests: XCTestCase {
     func testUnknownModelResolvesToNil() throws {
         _ = try makeModel(org: "mlx-community", name: "Real-Model")
         XCTAssertNil(LocalMLXEngine.shared.resolveLocalModelDirectory(
-            modelId: "nobody/Not-Present-At-All", settings: settings()
+            modelId: "nobody/Not-Present-At-All", settings: settings(), roots: roots()
         ))
     }
 
     func testVeryShortIdIsNotFuzzyMatched() throws {
         _ = try makeModel(org: "mlx-community", name: "Real-Model")
-        XCTAssertNil(LocalMLXEngine.shared.resolveLocalModelDirectory(modelId: "ab", settings: settings()))
+        XCTAssertNil(LocalMLXEngine.shared.resolveLocalModelDirectory(modelId: "ab", settings: settings(), roots: roots()))
     }
 
     // MARK: - Catalog merge
@@ -116,7 +124,7 @@ final class LocalModelResolutionTests: XCTestCase {
         let name = curated.id.split(separator: "/").last.map(String.init) ?? curated.id
         _ = try makeModel(org: "someone-else", name: name)
 
-        let catalog = LocalMLXEngine.shared.scanInstalledModels(settings: settings())
+        let catalog = LocalMLXEngine.shared.scanInstalledModels(settings: settings(), roots: roots())
         let matches = catalog.filter {
             LocalMLXEngine.normalizedModelName($0.id) == LocalMLXEngine.normalizedModelName(curated.id)
         }
