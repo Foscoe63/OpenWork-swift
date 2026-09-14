@@ -61,7 +61,7 @@ public enum ContextCompactor {
 
     /// Tool names whose argument carries a path worth remembering.
     private static let writeTools: Set<String> = ["file_write", "write_file", "create_file", "save_file"]
-    private static let editTools: Set<String> = ["edit_file", "file_edit"]
+    private static let editTools: Set<String> = ["edit_file", "file_edit", "multi_edit", "edit_file_multi"]
     private static let deleteTools: Set<String> = ["file_delete", "delete_file", "rm"]
     private static let commandTools: Set<String> = [
         "terminal_command", "run_command", "build_project", "run_tests",

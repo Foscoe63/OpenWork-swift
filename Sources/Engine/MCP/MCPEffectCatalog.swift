@@ -104,7 +104,7 @@ public enum MCPEffectCatalog: Sendable {
         Entry(
             key: "filesystem",
             writeTools: [
-                "write_file", "edit_file", "create_directory", "move_file", "delete_file",
+                "write_file", "edit_file", "multi_edit", "create_directory", "move_file", "delete_file",
                 "fast_write_file", "fast_large_write_file", "fast_edit_block", "fast_edit_blocks",
                 "fast_edit_multiple_blocks", "fast_safe_edit", "fast_create_directory",
                 "fast_delete_file", "fast_move_file", "fast_copy_file", "fast_sync_directories",

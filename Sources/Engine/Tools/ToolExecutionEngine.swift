@@ -167,13 +167,45 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
             }
-            let run = runProcess(command: command, cwd: root, timeoutSeconds: 600)
-            let summary = BuildDiagnostics.summarize(
-                command: command,
+            // Narrowing to last run's failures is the tight loop when fixing a test. It has to
+            // announce when it could not narrow: a run that quietly widened back to the whole
+            // suite, or quietly matched nothing, both read as the requested run having happened.
+            var effectiveCommand = command
+            var narrowingNote: String?
+            let wantsOnlyFailing = (dict["only_failing"] as? Bool)
+                ?? (dict["onlyFailing"] as? Bool)
+                ?? (dict["failed_only"] as? Bool)
+                ?? false
+            if action == .test && wantsOnlyFailing {
+                let remembered = await LastTestFailures.shared.failures(for: root)
+                if remembered.isEmpty {
+                    narrowingNote = "No failures were recorded from a previous run, so the whole suite ran."
+                } else if let narrowed = BuildDiagnostics.rerunCommand(baseCommand: command, failures: remembered) {
+                    effectiveCommand = narrowed
+                    narrowingNote = "Ran only the \(remembered.count) test(s) that failed last time."
+                } else {
+                    narrowingNote = "This runner cannot be narrowed safely, so the whole suite ran."
+                }
+            }
+
+            let run = runProcess(command: effectiveCommand, cwd: root, timeoutSeconds: 600)
+            var summary = BuildDiagnostics.summarize(
+                command: effectiveCommand,
                 exitCode: run.exitCode,
                 output: run.output,
                 root: root
             )
+            if let narrowingNote {
+                summary = "\(narrowingNote)\n\(summary)"
+            }
+            if action == .test {
+                let failures = BuildDiagnostics.failedTests(in: run.output)
+                // Only a full run can clear the list; a narrowed green run says nothing about the
+                // tests it did not execute.
+                if !failures.isEmpty || effectiveCommand == command {
+                    await LastTestFailures.shared.record(failures, for: root)
+                }
+            }
             return ToolExecutionResult(
                 success: run.exitCode == 0,
                 output: summary,
@@ -507,6 +539,50 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     success: false,
                     output: "",
                     error: "edit_file failed: \(error.localizedDescription)",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+
+        case "multi_edit", "edit_file_multi":
+            let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? (dict["file"] as? String) ?? ""
+            let fullPath = path.hasPrefix("/") ? path : (workspace.folderPath as NSString).appendingPathComponent(path)
+            if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
+            guard let edits = MultiEdit.parseEdits(from: dict) else {
+                return ToolExecutionResult(
+                    success: false,
+                    output: "",
+                    error: "multi_edit requires `edits`: a list of {old_string, new_string, replace_all?} objects.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            do {
+                let existing = try String(contentsOfFile: fullPath, encoding: .utf8)
+                switch MultiEdit.apply(edits, to: existing) {
+                case .failure(let failure):
+                    // Nothing has been written at this point, and the message says so — a model
+                    // told only "edit 3 failed" would have to guess whether 1 and 2 landed.
+                    return ToolExecutionResult(
+                        success: false,
+                        output: "",
+                        error: failure.message,
+                        durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                    )
+                case .success(let applied):
+                    await FileCheckpointStore.shared.record(path: fullPath)
+                    try applied.contents.write(toFile: fullPath, atomically: true, encoding: .utf8)
+                    return ToolExecutionResult(
+                        success: true,
+                        output: "Updated \(path): \(edits.count) edit(s), \(applied.total) replacement(s).",
+                        durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                    )
+                }
+            } catch {
+                return ToolExecutionResult(
+                    success: false,
+                    output: "",
+                    error: "multi_edit failed: \(error.localizedDescription)",
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
             }

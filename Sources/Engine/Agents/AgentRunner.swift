@@ -1369,13 +1369,14 @@ public final class AgentRunner {
         return fallbackLeaf
     }
 
-    private static func filterToolsForPlanMode(_ tools: [Tool]) -> [Tool] {
+    /// Internal rather than private so tests can prove a newly added writing tool is blocked here.
+    static func filterToolsForPlanMode(_ tools: [Tool]) -> [Tool] {
         let blocked: Set<String> = [
             "file_write", "write_file", "create_file", "save_file",
             "file_delete", "delete_file", "rm",
             "file_move", "move_file", "mv",
             "file_copy", "copy_file", "cp",
-            "edit_file", "file_edit",
+            "edit_file", "file_edit", "multi_edit", "edit_file_multi",
             "terminal_command", "run_command"
         ]
         var filtered = tools.filter { tool in
@@ -1420,7 +1421,8 @@ public final class AgentRunner {
     /// Returns a human-readable reason the call must be interactively approved before it runs,
     /// or nil if it can proceed immediately. Deleting a file is always irreversible enough to ask;
     /// shell commands are gated by the user's configured Terminal Safety Level.
-    private static func approvalReason(
+    /// Internal rather than private so tests can prove a newly added writing tool is gated here.
+    static func approvalReason(
         toolName: String,
         argumentsJson: String = "{}",
         settings: AppSettings
@@ -1429,7 +1431,7 @@ public final class AgentRunner {
         case "ask_user":
             return nil
         case "file_write", "write_file", "create_file", "save_file",
-             "edit_file", "file_edit",
+             "edit_file", "file_edit", "multi_edit", "edit_file_multi",
              "file_move", "move_file", "mv",
              "file_copy", "copy_file", "cp":
             return "This modifies files on disk."

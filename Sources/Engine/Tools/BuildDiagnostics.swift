@@ -172,6 +172,15 @@ public enum BuildDiagnostics {
 
         // Some failures produce no parseable diagnostic at all — a linker error, a crashed
         // process, a missing tool. The tail is the only thing that explains those.
+        // Naming the failing tests is what makes a narrowed re-run possible; without it the model
+        // has to reconstruct identities out of diagnostic text.
+        let failures = failedTests(in: output)
+        if exitCode != 0 && !failures.isEmpty {
+            lines.append("")
+            lines.append("Failing tests: " + failures.prefix(maxDiagnostics).map(\.display).joined(separator: ", "))
+            lines.append("Re-run just these with run_tests(only_failing: true).")
+        }
+
         if errors.isEmpty && exitCode != 0 {
             let tail = output.split(separator: "\n").suffix(tailLines).joined(separator: "\n")
             lines.append("")
@@ -180,6 +189,108 @@ public enum BuildDiagnostics {
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Failing tests
+
+    /// A test that failed, named precisely enough to run again on its own.
+    public struct FailedTest: Sendable, Equatable, Hashable {
+        public var suite: String?
+        public var name: String
+
+        public init(suite: String? = nil, name: String) {
+            self.suite = suite
+            self.name = name
+        }
+
+        public var display: String {
+            guard let suite else { return name }
+            return "\(suite)/\(name)"
+        }
+    }
+
+    private static let xctestIdentityPattern = try? NSRegularExpression(
+        pattern: #"-\[([A-Za-z_][A-Za-z_0-9.]*) ([A-Za-z_][A-Za-z_0-9]*)\]"#
+    )
+    private static let goFailPattern = try? NSRegularExpression(
+        pattern: #"^\s*--- FAIL: ([A-Za-z_][A-Za-z_0-9/]*)"#
+    )
+    private static let pytestFailPattern = try? NSRegularExpression(
+        pattern: #"^FAILED ([^\s:]+::[^\s]+)"#
+    )
+
+    /// The tests that failed, in first-seen order.
+    ///
+    /// Only runners whose failure lines name the test unambiguously are parsed. A guessed identity
+    /// is worse than none: it would re-run the wrong test and report a pass.
+    public static func failedTests(in output: String) -> [FailedTest] {
+        var found: [FailedTest] = []
+        var seen = Set<FailedTest>()
+
+        func add(_ test: FailedTest) {
+            if seen.insert(test).inserted { found.append(test) }
+        }
+
+        for line in output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            let range = NSRange(line.startIndex..., in: line)
+
+            // XCTest names the test in both the failure diagnostic and the "failed" summary line;
+            // the identity is the same either way, so match on the identity, not the line shape.
+            if line.contains("error:") || line.contains("failed"),
+               let regex = xctestIdentityPattern,
+               let m = regex.firstMatch(in: line, range: range),
+               let suite = group(m, 1, in: line), let name = group(m, 2, in: line) {
+                add(FailedTest(suite: suite, name: name))
+                continue
+            }
+            if let regex = goFailPattern, let m = regex.firstMatch(in: line, range: range),
+               let name = group(m, 1, in: line) {
+                add(FailedTest(name: name))
+                continue
+            }
+            if let regex = pytestFailPattern, let m = regex.firstMatch(in: line, range: range),
+               let name = group(m, 1, in: line) {
+                add(FailedTest(name: name))
+            }
+        }
+        return found
+    }
+
+    /// A command that runs only `failures`, or nil when this runner cannot be narrowed safely.
+    ///
+    /// Returning nil is the point: a filter flag that the runner silently ignores would run the
+    /// whole suite while the output claimed it ran three tests, and a filter that matches nothing
+    /// exits zero — a green result for tests that never ran.
+    public static func rerunCommand(baseCommand: String, failures: [FailedTest]) -> String? {
+        guard !failures.isEmpty else { return nil }
+        let base = baseCommand.trimmingCharacters(in: .whitespaces)
+        // Already narrowed by the caller; stacking filters changes the meaning unpredictably.
+        guard !base.contains("--filter"), !base.contains("-run "), !base.contains("::") else { return nil }
+
+        if base.hasPrefix("swift test") {
+            // SwiftPM takes --filter repeatedly and unions the matches. The identity is a regex, so
+            // the dot in a namespaced suite name must not act as a wildcard.
+            let filters = failures.map { "--filter '\(escapeForRegex($0.display))'" }
+            return ([base] + filters).joined(separator: " ")
+        }
+        if base.hasPrefix("go test") {
+            let names = failures.map { escapeForRegex($0.name) }.joined(separator: "|")
+            return "\(base) -run '^(\(names))$'"
+        }
+        if base.contains("pytest") {
+            // pytest identities are file::test paths, already exact.
+            return ([base] + failures.map { "'\($0.name)'" }).joined(separator: " ")
+        }
+        return nil
+    }
+
+    private static func escapeForRegex(_ value: String) -> String {
+        var escaped = ""
+        for character in value {
+            if "\\^$.|?*+()[]{}".contains(character) { escaped.append("\\") }
+            escaped.append(character)
+        }
+        return escaped
     }
 
     // MARK: - Command selection

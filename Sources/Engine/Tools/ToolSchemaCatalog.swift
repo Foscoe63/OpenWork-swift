@@ -19,7 +19,7 @@ public enum ToolSchemaCatalog {
                 }
             }
             // Ensure Radiant-parity requiresApproval defaults for mutating tools
-            if ["file_write", "file_delete", "file_move", "file_copy", "edit_file", "file_edit"].contains(name),
+            if ["file_write", "file_delete", "file_move", "file_copy", "edit_file", "file_edit", "multi_edit", "edit_file_multi"].contains(name),
                !tools[i].requiresApproval {
                 tools[i].requiresApproval = true
                 changed = true
@@ -53,6 +53,15 @@ public enum ToolSchemaCatalog {
                 requiresApproval: true
             ),
             Tool(
+                id: "multi_edit",
+                name: "multi_edit",
+                displayName: "Edit File (Multiple)",
+                description: "Apply several exact-string edits to one file in a single call, all or nothing. Prefer this over repeated edit_file when changing one file in more than one place: if any edit does not match, nothing is written and the file is left untouched. Edits apply in order, so a later edit sees the result of earlier ones.",
+                category: .files,
+                parametersJsonSchema: schemas["multi_edit"]!,
+                requiresApproval: true
+            ),
+            Tool(
                 id: "grep",
                 name: "grep",
                 displayName: "Search Code",
@@ -80,7 +89,7 @@ public enum ToolSchemaCatalog {
                 id: "run_tests",
                 name: "run_tests",
                 displayName: "Run Tests",
-                description: "Run this project's tests and report failures as file:line: message.",
+                description: "Run this project's tests and report failures as file:line: message, and name the failing tests. Pass only_failing=true to re-run just those, which is the fast loop while fixing one.",
                 category: .terminal,
                 parametersJsonSchema: schemas["run_tests"]!
             ),
@@ -166,11 +175,12 @@ public enum ToolSchemaCatalog {
         "file_write": #"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string","description":"Full file content"}},"required":["path","content"]}"#,
         "write_file": #"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}"#,
         "edit_file": #"{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}"#,
+        "multi_edit": #"{"type":"object","properties":{"path":{"type":"string","description":"File to edit."},"edits":{"type":"array","description":"Edits applied in order. All must match or none are written.","items":{"type":"object","properties":{"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["old_string","new_string"]}}},"required":["path","edits"]}"#,
         "file_edit": #"{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_string","new_string"]}"#,
         "grep": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Regular expression to search for"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"include":{"type":"string","description":"Glob limiting which files are searched, e.g. **/*.swift"},"case_insensitive":{"type":"boolean"},"limit":{"type":"integer","description":"Max matching lines (default 100)"}},"required":["pattern"]}"#,
         "glob": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Path glob, e.g. **/*.swift or Sources/**/Tool*.swift"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"limit":{"type":"integer","description":"Max paths (default 200)"}},"required":["pattern"]}"#,
         "build_project": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred build command"}},"required":[]}"#,
-        "run_tests": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred test command"}},"required":[]}"#,
+        "run_tests": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred test command"},"only_failing":{"type":"boolean","description":"Re-run only the tests that failed in the previous run. Falls back to the whole suite, and says so, when there is nothing recorded or the runner cannot be narrowed."}},"required":[]}"#,
         "git_status": #"{"type":"object","properties":{}}"#,
         "git_diff": #"{"type":"object","properties":{"path":{"type":"string","description":"Limit the diff to this path"},"staged":{"type":"boolean","description":"Show staged changes instead of the working tree"}},"required":[]}"#,
         "git_log": #"{"type":"object","properties":{"count":{"type":"integer","description":"How many commits (default 10)"}},"required":[]}"#,
