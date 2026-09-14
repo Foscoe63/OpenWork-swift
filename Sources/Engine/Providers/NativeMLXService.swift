@@ -563,14 +563,61 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         let hubClient = HubClient(cache: HubCache(cacheDirectory: cacheRoot))
         let downloader = #hubDownloader(hubClient)
 
-        return try await LLMModelFactory.shared.loadContainer(
-            from: downloader,
-            using: tokenizerLoader,
-            configuration: ModelConfiguration(id: modelId, revision: "main"),
-            progressHandler: { progress in
-                let pct = Int((progress.fractionCompleted * 100).rounded())
-                onProgress("Loading MLX weights: \(pct)%")
-            }
+        do {
+            return try await LLMModelFactory.shared.loadContainer(
+                from: downloader,
+                using: tokenizerLoader,
+                configuration: ModelConfiguration(id: modelId, revision: "main"),
+                progressHandler: { progress in
+                    let pct = Int((progress.fractionCompleted * 100).rounded())
+                    onProgress("Loading MLX weights: \(pct)%")
+                }
+            )
+        } catch {
+            throw Self.describeDownloadFailure(error, modelId: modelId)
+        }
+    }
+
+    /// Turn a Hugging Face download failure into something the user can act on.
+    ///
+    /// The raw error is `The operation couldn't be completed. (HuggingFace.HTTPClientError error
+    /// 1.)`, which names neither the repo nor the reason. In the case that produced it, the repo
+    /// simply did not exist — the app's own curated catalog held an id that 401s — and the user had
+    /// no way to tell that from a network problem or a half-finished download.
+    static func describeDownloadFailure(_ error: Error, modelId: String) -> Error {
+        let raw = error.localizedDescription
+        let nsError = error as NSError
+
+        // Hugging Face answers 401 for a repo that does not exist as well as one that is private,
+        // so both possibilities have to be offered rather than asserting the wrong one.
+        let looksLikeMissingRepo = raw.contains("HTTPClientError")
+            || nsError.code == 401 || nsError.code == 403 || nsError.code == 404
+
+        let offline = (error as? URLError)?.code == .notConnectedToInternet
+            || (error as? URLError)?.code == .cannotFindHost
+
+        let explanation: String
+        if offline {
+            explanation = "This Mac appears to be offline, so the weights could not be fetched."
+        } else if looksLikeMissingRepo {
+            explanation = """
+            Hugging Face would not serve `\(modelId)`. That repo is either missing, renamed, or \
+            private — Hugging Face answers the same way for all three.
+
+            Check the id at https://huggingface.co/\(modelId), or pick a model that is already \
+            downloaded in Local Models.
+            """
+        } else {
+            explanation = "The download failed: \(raw)"
+        }
+
+        return NSError(
+            domain: "NativeMLXService",
+            code: 13,
+            userInfo: [
+                NSLocalizedDescriptionKey: explanation,
+                NSUnderlyingErrorKey: error
+            ]
         )
     }
 

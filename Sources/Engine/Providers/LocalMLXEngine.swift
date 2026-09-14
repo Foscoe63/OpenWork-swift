@@ -59,6 +59,10 @@ public final class LocalMLXEngine: @unchecked Sendable {
     }
 
     /// Curated presets of recommended MLX models matching Osaurus and GrizzyClaw.
+    ///
+    /// Every id here is a real Hugging Face repo, checked with `Scripts/check-curated-models.sh`.
+    /// Five of these used to 401 — the app offered downloads that could not succeed and reported
+    /// an opaque `HTTPClientError` when they failed. Run that script after editing this list.
     public static let curatedModels: [LocalMLXModel] = [
         LocalMLXModel(
             id: "mlx-community/Ornith-1.5-35B-A3B-8bit",
@@ -76,7 +80,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
             isTopPick: true
         ),
         LocalMLXModel(
-            id: "mlx-community/Qwen3-Coder-Next-MLX-5bit",
+            id: "mlx-community/Qwen3-Coder-Next-5bit",
             name: "Qwen3 Coder Next MLX 5bit",
             description: "Advanced coding next-gen model with multi-agent orchestration and fill-in-the-middle support.",
             sizeBytes: 58_800_000_000,
@@ -91,7 +95,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
             isTopPick: true
         ),
         LocalMLXModel(
-            id: "mlx-community/Qwen3-Coder-Next-REAP-48B-A3B-mlx-8Bit",
+            id: "andosen/Qwen3-Coder-Next-REAP-48B-A3B-mlx-8Bit",
             name: "Qwen3 Coder Next REAP 48B A3B mlx 8Bit",
             description: "Frontier coding model with MoE sparse execution and deep tool invocation proficiency.",
             sizeBytes: 55_730_000_000,
@@ -136,23 +140,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
             isTopPick: false
         ),
         LocalMLXModel(
-            id: "mlx-community/Qwen3.8-27B-MLX-8bit",
-            name: "Qwen3.8 27B MLX 8bit",
-            description: "Multimodal visual reasoning model for screenshot reading, chart diagnostics, and code generation.",
-            sizeBytes: 31_670_000_000,
-            parameterCount: "27B",
-            quantization: "8-bit",
-            modelType: "qwen3_vl",
-            contextWindow: 131_072,
-            isVLM: true,
-            useCase: .vision,
-            compatibility: assessCompatibility(requiredRAMGB: 34.3),
-            estimatedRAMGB: 34.3,
-            tags: ["Vision", "Multimodal", "8-bit"],
-            isTopPick: false
-        ),
-        LocalMLXModel(
-            id: "mlx-community/Ornith-1.5-35B-A3B-4bit",
+            id: "ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit",
             name: "Ornith 1.5 35B A3B 4bit",
             description: "Fast 35B MoE (~3B active) reasoning model. Low memory footprint with strong instruction following and tool use.",
             sizeBytes: 19_800_000_000,
@@ -197,7 +185,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
             isTopPick: true
         ),
         LocalMLXModel(
-            id: "mlx-community/gemma-4-E4B-it-4bit",
+            id: "mlx-community/gemma-4-e4b-it-4bit",
             name: "Gemma 4 E4B (4-bit)",
             description: "Google's lightweight multimodal edge model with native vision and speech capabilities.",
             sizeBytes: 3_200_000_000,
@@ -273,17 +261,19 @@ public final class LocalMLXEngine: @unchecked Sendable {
             isTopPick: false
         ),
         LocalMLXModel(
-            id: "mlx-community/SmolLM2-1.7B-Instruct-4bit",
-            name: "SmolLM2 1.7B (4-bit)",
+            id: "mlx-community/SmolLM2-1.7B-Instruct",
+            name: "SmolLM2 1.7B",
             description: "Ultra-compact Hugging Face sub-2B model. Blazing fast inference with near-zero memory footprint.",
-            sizeBytes: 1_100_000_000,
+            // mlx-community publishes this unquantised; there is no 4-bit build under that org,
+            // and the entry used to claim one at 1.1GB.
+            sizeBytes: 3_430_000_000,
             parameterCount: "1.7B",
-            quantization: "4-bit",
+            quantization: "fp16",
             modelType: "llama",
             contextWindow: 8_192,
             useCase: .fast,
-            compatibility: assessCompatibility(requiredRAMGB: 2.0),
-            estimatedRAMGB: 2.0,
+            compatibility: assessCompatibility(requiredRAMGB: 4.5),
+            estimatedRAMGB: 4.5,
             tags: ["Ultra Fast", "Sub-2B", "Low RAM"],
             isTopPick: false
         )
