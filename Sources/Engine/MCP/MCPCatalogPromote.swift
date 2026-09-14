@@ -125,28 +125,53 @@ public enum MCPCatalogPromote: Sendable {
         return out
     }
 
-    /// Every array of `{name: …}` objects reachable in the payload, at any nesting depth.
+    /// The catalog array in a meta-tool payload.
+    ///
+    /// Servers nest it differently — bare at the top level, under `tools`, or under something
+    /// like `data.tools` — and a payload often contains *several* arrays of name-bearing objects
+    /// (MacUse ships an `actions` array of example calls alongside the real catalog). Picking the
+    /// first one found made the result depend on dictionary ordering, which is not stable: the
+    /// same payload could promote the catalog on one run and four examples on the next.
+    ///
+    /// So collect every candidate and keep the richest — the catalog is the array with the most
+    /// distinct tool names, and ties break toward the one carrying schemas.
     private static func toolArrays(in value: Any, depth: Int = 0) -> [[String: Any]] {
-        guard depth < 6 else { return [] }
+        let candidates = collectCandidates(in: value, depth: depth)
+        guard !candidates.isEmpty else { return [] }
+        return candidates.max { a, b in
+            let aNames = Set(a.compactMap { $0["name"] as? String }).count
+            let bNames = Set(b.compactMap { $0["name"] as? String }).count
+            if aNames != bNames { return aNames < bNames }
+            return schemaCount(a) < schemaCount(b)
+        } ?? []
+    }
+
+    private static func schemaCount(_ objects: [[String: Any]]) -> Int {
+        objects.filter {
+            $0["inputSchema"] != nil || $0["input_schema"] != nil || $0["parameters"] != nil
+        }.count
+    }
+
+    private static func collectCandidates(in value: Any, depth: Int) -> [[[String: Any]]] {
+        guard depth < 8 else { return [] }
         if let array = value as? [Any] {
+            var out: [[[String: Any]]] = []
             let objects = array.compactMap { $0 as? [String: Any] }
             if !objects.isEmpty, objects.contains(where: { $0["name"] is String }) {
-                return objects
+                out.append(objects)
             }
-            return array.flatMap { toolArrays(in: $0, depth: depth + 1) }
+            // Keep descending: a wrapper array can still contain the real catalog.
+            for element in array {
+                out.append(contentsOf: collectCandidates(in: element, depth: depth + 1))
+            }
+            return out
         }
         if let dict = value as? [String: Any] {
-            // Prefer the conventional keys before sweeping everything.
-            for key in ["tools", "definitions", "tool_definitions", "results", "items"] {
-                if let nested = dict[key] {
-                    let hit = toolArrays(in: nested, depth: depth + 1)
-                    if !hit.isEmpty { return hit }
-                }
-            }
+            var out: [[[String: Any]]] = []
             for (_, nested) in dict {
-                let hit = toolArrays(in: nested, depth: depth + 1)
-                if !hit.isEmpty { return hit }
+                out.append(contentsOf: collectCandidates(in: nested, depth: depth + 1))
             }
+            return out
         }
         return []
     }

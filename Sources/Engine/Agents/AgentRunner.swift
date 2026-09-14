@@ -1212,7 +1212,8 @@ public final class AgentRunner {
                     let harvested = MCPCatalogPromote.harvest(
                         server: server,
                         executeTool: dispatcher,
-                        resultText: bounded.text
+                        // Raw, not bounded: the bounded copy is head+tail and no longer parses.
+                        resultText: resultOutput
                     ).filter { MCPToolGate.isToolEnabled(server: server, toolName: $0.injectName) }
 
                     let newcomers = await MCPPromotedToolRegistry.shared.register(harvested)

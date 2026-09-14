@@ -1225,8 +1225,11 @@ public actor MCPClientManager {
                 if let session = sdkSessions[server.id] {
                     let resolved = Self.resolveMCPCall(toolName: toolName, arguments: normArgs)
                     do {
-                        let raw = try await session.callTool(name: resolved.name, arguments: resolved.arguments)
-                        return ToolBounds.boundResult(raw).text
+                        // Deliberately unbounded: the agent loop bounds what reaches the
+                        // transcript, but catalog payloads are parsed structurally first. Cutting
+                        // a 40KB tools/list to head+tail yields invalid JSON, which silently
+                        // downgrades promotion to scraping names out of prose.
+                        return try await session.callTool(name: resolved.name, arguments: resolved.arguments)
                     } catch {
                         return "Error: MCP SDK call to '\(server.name)'/\(resolved.name) failed: \(error.localizedDescription)"
                     }

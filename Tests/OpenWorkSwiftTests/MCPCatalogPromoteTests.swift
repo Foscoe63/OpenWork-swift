@@ -139,4 +139,46 @@ final class MCPCatalogPromoteTests: XCTestCase {
         let afterReset = await registry.lookup("mcp__srv__a_tool")
         XCTAssertNil(afterReset)
     }
+
+    // MARK: - Regressions found by probing the real MacUse server
+
+    /// MacUse wraps its catalog as `{actions: [...], data: {tools: [...]}}` — an `actions` array
+    /// of example calls sits alongside the real catalog. Preferring whichever array was found
+    /// first made the outcome depend on dictionary ordering, so the same payload could promote
+    /// the catalog on one run and four examples on the next.
+    func testPicksTheRealCatalogNotTheExamples() throws {
+        let payload = """
+        {"actions":[{"instruction":"Call calendar_cancel_event","tool_call":{"tool":"call_tool_by_name","arguments":{"name":"calendar_cancel_event","arguments":{}}}}],
+         "data":{"tools":[
+           {"name":"mail_search_messages","description":"Search mail","inputSchema":{"type":"object"}},
+           {"name":"mail_list_accounts","description":"List accounts","inputSchema":{"type":"object"}},
+           {"name":"notes_create_note","description":"Create note","inputSchema":{"type":"object"}}
+         ]}}
+        """
+        let harvested = MCPCatalogPromote.harvest(
+            server: macuse, executeTool: "call_tool_by_name", resultText: payload
+        )
+        let names = Set(harvested.map(\.injectName))
+        XCTAssertTrue(names.contains("mail_search_messages"))
+        XCTAssertTrue(names.contains("mail_list_accounts"))
+        XCTAssertTrue(names.contains("notes_create_note"))
+        XCTAssertFalse(names.contains("calendar_cancel_event"), "the examples array must not win")
+    }
+
+    /// The catalog used to be truncated to 40,000 characters before it was parsed, which left
+    /// invalid JSON and silently downgraded promotion to scraping backticked names out of prose.
+    func testLargeCatalogSurvivesTheResultBound() throws {
+        let tools = (1...400).map {
+            "{\"name\":\"tool_\($0)\",\"description\":\"\(String(repeating: "x", count: 120))\",\"inputSchema\":{\"type\":\"object\"}}"
+        }.joined(separator: ",")
+        let payload = "{\"data\":{\"tools\":[\(tools)]}}"
+        XCTAssertGreaterThan(payload.count, 40_000, "fixture must exceed the old bound")
+
+        let harvested = MCPCatalogPromote.harvest(
+            server: macuse, executeTool: "call_tool_by_name", resultText: payload
+        )
+        XCTAssertEqual(harvested.count, MCPCatalogPromote.maxPromoted)
+        XCTAssertTrue(harvested.allSatisfy { $0.injectName.hasPrefix("tool_") },
+                      "names must come from JSON, not from scraped prose")
+    }
 }
