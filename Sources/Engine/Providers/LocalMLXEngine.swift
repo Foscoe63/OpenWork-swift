@@ -368,6 +368,42 @@ public final class LocalMLXEngine: @unchecked Sendable {
                 return complete
             }
         }
+
+        // Nothing at an exact path. The same weights are routinely re-published under a different
+        // org (mlx-community/X vs andosen/X), and a settings value may carry a bare slug with no
+        // org at all — both resolve to nil above even though the model is on disk. Fall back to
+        // matching the model *name*, and only when exactly one candidate matches, so a request for
+        // an 8-bit build never silently loads a 4-bit one.
+        return resolveByName(modelId: modelId, roots: roots)
+    }
+
+    /// Compare model names ignoring org, case, and separator style.
+    static func normalizedModelName(_ id: String) -> String {
+        let name = id.split(separator: "/").last.map(String.init) ?? id
+        return name.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    private func resolveByName(modelId: String, roots: [URL]) -> URL? {
+        let wanted = Self.normalizedModelName(modelId)
+        guard wanted.count >= 4 else { return nil }
+
+        var exact: [URL] = []
+        var prefixed: [URL] = []
+        for root in roots {
+            var installed: [String: LocalMLXModel] = [:]
+            scanDirectoryRecursively(root: root, current: root, depth: 0, results: &installed)
+            for (repoId, model) in installed {
+                guard let dir = model.localDirectory.map({ URL(fileURLWithPath: $0) }) else { continue }
+                let candidate = Self.normalizedModelName(repoId)
+                if candidate == wanted {
+                    exact.append(dir)
+                } else if candidate.hasPrefix(wanted) || wanted.hasPrefix(candidate) {
+                    prefixed.append(dir)
+                }
+            }
+        }
+        if exact.count == 1 { return exact[0] }
+        if exact.isEmpty, prefixed.count == 1 { return prefixed[0] }
         return nil
     }
 
@@ -433,7 +469,15 @@ public final class LocalMLXEngine: @unchecked Sendable {
         // Merge with curated catalog
         var finalCatalog: [LocalMLXModel] = []
         for curated in Self.curatedModels {
-            if let installed = foundInstalled[curated.id] {
+            // Match on id first, then on name: the same weights under a different org are the
+            // same model, and listing both — one of them claiming to need a 48GB download —
+            // is worse than useless.
+            let matchKey = foundInstalled[curated.id] != nil
+                ? curated.id
+                : foundInstalled.first {
+                    Self.normalizedModelName($0.key) == Self.normalizedModelName(curated.id)
+                }?.key
+            if let matchKey, let installed = foundInstalled[matchKey] {
                 let merged = LocalMLXModel(
                     id: curated.id,
                     name: curated.name,
@@ -455,7 +499,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
                     downloadCount: curated.downloadCount
                 )
                 finalCatalog.append(merged)
-                foundInstalled.removeValue(forKey: curated.id)
+                foundInstalled.removeValue(forKey: matchKey)
             } else {
                 finalCatalog.append(curated)
             }
