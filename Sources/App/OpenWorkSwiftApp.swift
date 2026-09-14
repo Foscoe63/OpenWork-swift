@@ -26,9 +26,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
-        // Flush any pending frame + ensure layout keys are written.
-        for window in NSApp.windows where window.frameAutosaveName == WindowLayoutStore.mainWindowAutosaveName {
-            window.saveFrame(usingName: WindowLayoutStore.mainWindowAutosaveName)
+        for window in NSApp.windows where window.styleMask.contains(.titled) && window.styleMask.contains(.resizable) {
+            WindowLayoutStore.saveWindowFrame(from: window)
         }
         UserDefaults.standard.synchronize()
     }
@@ -45,13 +44,20 @@ public struct OpenWorkSwiftApp: App {
         WindowGroup {
             MainView(appState: appState)
                 .preferredColorScheme(colorScheme(for: appState.settings.theme))
+                .background(WindowFramePersistenceInstaller())
                 .onAppear {
-                    WindowLayoutStore.configureMainWindowAutosave()
+                    WindowLayoutStore.observeMainWindowAutosave()
+                    // Delay so SwiftUI finishes applying its initial frame first, then we override.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        WindowLayoutStore.configureMainWindowAutosave()
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        WindowLayoutStore.configureMainWindowAutosave()
+                    }
                 }
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
-        .defaultSize(width: 1280, height: 800)
         .commands {
             SidebarCommands()
 

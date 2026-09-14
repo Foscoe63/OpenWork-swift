@@ -47,7 +47,7 @@ public struct AppSidebar: View {
             // Bottom Footer (Settings & Status)
             bottomFooter
         }
-        .frame(minWidth: WindowLayoutStore.minSidebarWidth, maxWidth: WindowLayoutStore.maxSidebarWidth)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ThemeColors.sidebarBg(for: appState.settings.theme))
     }
 

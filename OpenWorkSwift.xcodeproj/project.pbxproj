@@ -30,6 +30,7 @@
 		42C99B9F78E13A7D4DDB98A6 /* NIOHTTP1 in Frameworks */ = {isa = PBXBuildFile; productRef = 9EF37699B536CC4CDBA39264 /* NIOHTTP1 */; };
 		4CCE1BD168DB1CF0067B4F50 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F8B5A9D6E998522DA667D2 /* DashboardView.swift */; };
 		4FCCF18DD6B26B7FE8E6EA78 /* OllamaService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B47E457057B520841ADFE0 /* OllamaService.swift */; };
+		516EDB4BEB3202EAF37CA1B7 /* ModelPickerButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84641096DAE4F819C36BA6E5 /* ModelPickerButton.swift */; };
 		52402484859D1DE20E7AE290 /* OpenAIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010EE5521BD92F10AE2217 /* OpenAIService.swift */; };
 		58A7CAFB0DFC55C164F8AED3 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57113216F3667B633E651872 /* SettingsComponents.swift */; };
 		5BA745CDDBE7DDEC2C75A8DB /* LocalMLXModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B67ABFC0B439CECE12C6F01 /* LocalMLXModel.swift */; };
@@ -147,6 +148,7 @@
 		7A13ADAD85EED1BBBF5E7E55 /* WorkspaceTerminalSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTerminalSession.swift; sourceTree = "<group>"; };
 		7B776D13E33F6142443CF06B /* Tool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tool.swift; sourceTree = "<group>"; };
 		82AB78D3CC578FFD2E1BBAC8 /* LiveCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCanvasView.swift; sourceTree = "<group>"; };
+		84641096DAE4F819C36BA6E5 /* ModelPickerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPickerButton.swift; sourceTree = "<group>"; };
 		86806C853FD895F086D5C09E /* StorageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageService.swift; sourceTree = "<group>"; };
 		8B866A6FA66F0F691AFE3D03 /* AppExtensionPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppExtensionPlugin.swift; sourceTree = "<group>"; };
 		8F98A8BD66F37E4C8A5DABBD /* ContextCompactor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextCompactor.swift; sourceTree = "<group>"; };
@@ -567,6 +569,7 @@
 		D07B53505003C7683A96F136 /* Components */ = {
 			isa = PBXGroup;
 			children = (
+				84641096DAE4F819C36BA6E5 /* ModelPickerButton.swift */,
 				004546A8217184543CE6AA69 /* WorkspaceSwitcherMenu.swift */,
 			);
 			path = Components;
@@ -717,6 +720,7 @@
 				DCAAADB512519A4FB17A78EF /* Message.swift in Sources */,
 				046E059F414D0A376D5EAC46 /* MessageBubbleView.swift in Sources */,
 				FA5F9C11793DE4A79AA4BD40 /* MockLLMService.swift in Sources */,
+				516EDB4BEB3202EAF37CA1B7 /* ModelPickerButton.swift in Sources */,
 				865C184332349383E90C1598 /* NativeMLXService.swift in Sources */,
 				4FCCF18DD6B26B7FE8E6EA78 /* OllamaService.swift in Sources */,
 				52402484859D1DE20E7AE290 /* OpenAIService.swift in Sources */,
