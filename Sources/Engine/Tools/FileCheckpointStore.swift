@@ -97,6 +97,50 @@ public actor FileCheckpointStore {
 
     public func trackedPaths() -> [String] { entries.keys.sorted() }
 
+    /// One changed file, with both sides, so a reviewer can be shown a diff rather than a list.
+    public struct Change: Sendable, Identifiable, Equatable {
+        public enum Kind: String, Sendable { case created, modified, deleted }
+        public var id: String { path }
+        public var path: String
+        /// nil when the turn created the file.
+        public var before: String?
+        /// nil when the turn deleted the file.
+        public var after: String?
+        public var kind: Kind
+    }
+
+    /// Everything the turn changed, newest state included, ready to render.
+    public func changes(fileManager: FileManager = .default) -> [Change] {
+        var out: [Change] = []
+        for (path, entry) in entries {
+            let existsNow = fileManager.fileExists(atPath: path)
+            let now = existsNow ? try? String(contentsOfFile: path, encoding: .utf8) : nil
+            switch (entry.previousContents, existsNow) {
+            case (nil, true):
+                out.append(Change(path: path, before: nil, after: now, kind: .created))
+            case (let before?, false):
+                out.append(Change(path: path, before: before, after: nil, kind: .deleted))
+            case (let before?, true) where now != before:
+                out.append(Change(path: path, before: before, after: now, kind: .modified))
+            default:
+                continue
+            }
+        }
+        return out.sorted { $0.path < $1.path }
+    }
+
+    /// Revert a single file and stop tracking it, leaving the rest of the turn intact.
+    @discardableResult
+    public func revert(path: String, fileManager: FileManager = .default) -> Bool {
+        guard let entry = entries[path] else { return false }
+        defer { entries.removeValue(forKey: path) }
+        if let previous = entry.previousContents {
+            return (try? previous.write(toFile: path, atomically: true, encoding: .utf8)) != nil
+        }
+        guard fileManager.fileExists(atPath: path) else { return true }
+        return (try? fileManager.removeItem(atPath: path)) != nil
+    }
+
     // MARK: - Reverting
 
     /// Put every recorded file back as it was when the turn began.

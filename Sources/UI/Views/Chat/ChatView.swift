@@ -1,6 +1,8 @@
 import SwiftUI
 
 public struct ChatView: View {
+    @State private var showingChangeReview = false
+    @State private var turnChangeCount = 0
     @ObservedObject var appState: AppState
 
     public init(appState: AppState) {
@@ -38,11 +40,58 @@ public struct ChatView: View {
                 emptyStateHero
             }
 
+            // A turn that touched files gets a review affordance, so the agent's prose is not
+            // the only account of what happened on disk.
+            if turnChangeCount > 0 {
+                changeReviewBar
+            }
+
             // Composer Dock
             ComposerView(appState: appState)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ThemeColors.bg(for: appState.settings.theme))
+        .sheet(isPresented: $showingChangeReview) {
+            TurnChangeReviewView(
+                appState: appState,
+                root: appState.currentWorkspace.folderPath,
+                onRevert: { Task { await refreshTurnChangeCount() } }
+            )
+            .frame(minWidth: 780, minHeight: 520)
+        }
+        .task(id: appState.isGenerating) {
+            // Recount when a turn finishes rather than polling.
+            await refreshTurnChangeCount()
+        }
+    }
+
+    /// Footer summarising this turn's file changes, with a way into the diff review.
+    private var changeReviewBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "doc.badge.ellipsis")
+                .font(.system(size: 11))
+                .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+            Text("\(turnChangeCount) file\(turnChangeCount == 1 ? "" : "s") changed this turn")
+                .font(.system(size: 11.5))
+                .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+            Spacer()
+            Button("Review changes") { showingChangeReview = true }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(ThemeColors.sidebarBg(for: appState.settings.theme))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(ThemeColors.border(for: appState.settings.theme))
+                .frame(height: 1)
+        }
+    }
+
+    private func refreshTurnChangeCount() async {
+        let count = await FileCheckpointStore.shared.changes().count
+        await MainActor.run { turnChangeCount = count }
     }
 
     /// Changes when the latest message gains/loses a pending Approve/Reject — scroll so it stays on screen.

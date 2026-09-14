@@ -199,3 +199,98 @@ final class CheckpointAndGitTests: XCTestCase {
         XCTAssertTrue(ProjectInstructions.promptBlock(nil).isEmpty)
     }
 }
+
+/// Backing data for the turn-change review UI.
+final class TurnChangeDataTests: XCTestCase {
+
+    private var root = ""
+    private var workspace: Workspace!
+    private let agent = Agent(name: "Test")
+
+    override func setUpWithError() throws {
+        root = NSTemporaryDirectory() + "changes-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        workspace = Workspace(name: "Test", folderPath: root)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(atPath: root)
+    }
+
+    private func run(_ tool: String, _ args: [String: Any]) async -> ToolExecutionResult {
+        let json = String(data: try! JSONSerialization.data(withJSONObject: args), encoding: .utf8)!
+        return await ToolExecutionEngine.shared.execute(
+            toolName: tool, argumentsJson: json, workspace: workspace, currentAgent: agent
+        )
+    }
+
+    private func path(_ n: String) -> String { root + "/" + n }
+
+    func testChangesCarryBothSidesForADiff() async throws {
+        try "before".write(toFile: path("m.txt"), atomically: true, encoding: .utf8)
+        await FileCheckpointStore.shared.beginTurn()
+        _ = await run("file_write", ["path": "m.txt", "content": "after"])
+
+        let changes = await FileCheckpointStore.shared.changes()
+        let change = try XCTUnwrap(changes.first(where: { $0.path.hasSuffix("m.txt") }))
+        XCTAssertEqual(change.kind, .modified)
+        XCTAssertEqual(change.before, "before")
+        XCTAssertEqual(change.after, "after")
+    }
+
+    func testCreatedFileHasNoBeforeSide() async throws {
+        await FileCheckpointStore.shared.beginTurn()
+        _ = await run("file_write", ["path": "n.txt", "content": "fresh"])
+
+        let all = await FileCheckpointStore.shared.changes()
+        let change = try XCTUnwrap(all.first)
+        XCTAssertEqual(change.kind, .created)
+        XCTAssertNil(change.before)
+        XCTAssertEqual(change.after, "fresh")
+    }
+
+    func testDeletedFileHasNoAfterSide() async throws {
+        try "gone".write(toFile: path("d.txt"), atomically: true, encoding: .utf8)
+        await FileCheckpointStore.shared.beginTurn()
+        _ = await run("file_delete", ["path": "d.txt"])
+
+        let all = await FileCheckpointStore.shared.changes()
+        let change = try XCTUnwrap(all.first)
+        XCTAssertEqual(change.kind, .deleted)
+        XCTAssertEqual(change.before, "gone")
+        XCTAssertNil(change.after)
+    }
+
+    /// Reverting one file must leave the rest of the turn in place.
+    func testSingleFileRevertIsIsolated() async throws {
+        try "a0".write(toFile: path("a.txt"), atomically: true, encoding: .utf8)
+        try "b0".write(toFile: path("b.txt"), atomically: true, encoding: .utf8)
+        await FileCheckpointStore.shared.beginTurn()
+        _ = await run("file_write", ["path": "a.txt", "content": "a1"])
+        _ = await run("file_write", ["path": "b.txt", "content": "b1"])
+
+        let reverted = await FileCheckpointStore.shared.revert(path: path("a.txt"))
+        XCTAssertTrue(reverted)
+        XCTAssertEqual(try String(contentsOfFile: path("a.txt"), encoding: .utf8), "a0")
+        XCTAssertEqual(try String(contentsOfFile: path("b.txt"), encoding: .utf8), "b1")
+
+        let remaining = await FileCheckpointStore.shared.changes()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertTrue(remaining[0].path.hasSuffix("b.txt"))
+    }
+
+    func testRevertingAnUntrackedPathReportsFailure() async {
+        await FileCheckpointStore.shared.beginTurn()
+        let ok = await FileCheckpointStore.shared.revert(path: path("never-touched.txt"))
+        XCTAssertFalse(ok)
+    }
+
+    func testChangesAreSortedByPath() async throws {
+        await FileCheckpointStore.shared.beginTurn()
+        for name in ["z.txt", "a.txt", "m.txt"] {
+            _ = await run("file_write", ["path": name, "content": "x"])
+        }
+        let paths = await FileCheckpointStore.shared.changes().map(\.path)
+        XCTAssertEqual(paths, paths.sorted())
+    }
+}
