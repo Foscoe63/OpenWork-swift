@@ -23,11 +23,23 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     private var cachedConsumed: [MLXSessionReuse.Fingerprint] = []
     private let lock = NSLock()
 
-    /// A model with no local weights on disk yet requires a Hugging Face download, which can be
-    /// multiple gigabytes. Bound that attempt so a slow/offline network fails a chat turn quickly
-    /// instead of hanging it, and don't retry the same doomed download on every subsequent message.
-    private static let loadTimeoutSeconds: TimeInterval = 180
+    /// Don't retry a doomed load on every subsequent message.
     private static let failureCooldown: TimeInterval = 300
+
+    /// How long a load may make *no progress at all* before this turn gives up on it.
+    ///
+    /// This used to be a total budget, and that was measurably wrong in both directions. A 46GB
+    /// Llama-3.3-70B on an external volume loaded in ~220s and answered — then the next turn gave
+    /// up on the same load at 180s and reported the model unavailable, abandoning work it had
+    /// already proved it could finish. A multi-gigabyte *download* fares worse still: it cannot
+    /// possibly finish inside any fixed budget, so the turn always failed while the download was
+    /// working perfectly.
+    ///
+    /// Time the silence instead. Loading and downloading both report progress continuously, so
+    /// work that is moving is never abandoned however long it takes, and a load that is genuinely
+    /// wedged still fails the turn rather than hanging it. The load keeps running either way and
+    /// populates the cache, so the next turn is fast.
+    private static let loadStallSeconds: TimeInterval = 180
 
     public init() {}
 
@@ -466,11 +478,18 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         // turn instead. The load now runs on its own task, outlives the deadline, and caches
         // itself when it finishes — so overrunning once makes the next turn fast rather than
         // starting over.
+        // Every progress report resets the watchdog, so a load that is moving is never abandoned.
+        let clock = AsyncDeadline.ProgressClock()
+        let trackedProgress: @Sendable (String) -> Void = { status in
+            clock.tick()
+            onProgress(status)
+        }
+
         let task: Task<ModelContainer, Error> = lock.withLock {
             if let existing = inFlightLoads[modelId] { return existing }
             let created = Task<ModelContainer, Error> {
                 let container = try await self.loadContainerFromDiskOrDownload(
-                    modelId: modelId, onProgress: onProgress
+                    modelId: modelId, onProgress: trackedProgress
                 )
                 self.lock.withLock {
                     self.loadedContainers[modelId] = container
@@ -485,14 +504,18 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         }
 
         do {
-            return try await AsyncDeadline.wait(for: task, seconds: Self.loadTimeoutSeconds)
+            return try await AsyncDeadline.wait(
+                for: task,
+                stalledAfter: Self.loadStallSeconds,
+                clock: clock
+            )
         } catch is AsyncDeadline.TimedOut {
             // Deliberately not recorded as a failure: the load is still running and will be
             // waiting in the cache shortly.
             throw NSError(
                 domain: "NativeMLXService",
                 code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "Loading '\(modelId)' in-process is taking longer than \(Int(Self.loadTimeoutSeconds))s and is still running in the background. Falling back for this turn; try again once it finishes."]
+                userInfo: [NSLocalizedDescriptionKey: "Loading '\(modelId)' in-process has reported no progress for \(Int(Self.loadStallSeconds))s. It is still running in the background — this turn falls back; try again once it finishes."]
             )
         } catch {
             lock.withLock {

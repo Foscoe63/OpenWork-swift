@@ -164,8 +164,32 @@ public final class AgentStreamAccumulator {
         guard !notice.isEmpty else { return }
         // Avoid stacking identical status chips.
         if message.notices.last == notice { return }
+
+        // Progress updates supersede rather than accumulate. Skipping only *identical* notices
+        // does nothing for a counter: "Loading MLX weights: 21%" and "…: 22%" differ, so a 50GB
+        // load left one permanent chip per percent. A real export carried sixteen of them, and
+        // that load had only reached 36%.
+        if let last = message.notices.last, Self.progressFamily(last) != nil,
+           Self.progressFamily(last) == Self.progressFamily(notice) {
+            message.notices[message.notices.count - 1] = notice
+            onUpdate(message)
+            return
+        }
+
         message.notices.append(notice)
         onUpdate(message)
+    }
+
+    /// The stable part of a progress notice, or nil when it is not one.
+    ///
+    /// Two notices belong to the same progress run when they differ only in a trailing number, so
+    /// "Loading MLX weights: 21%" and "Loading MLX weights: 22%" collapse while "MCP ready" and
+    /// "Plan mode exited." stay as separate chips.
+    static func progressFamily(_ notice: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"[\d.]+\s*%\s*$"#) else { return nil }
+        let range = NSRange(location: 0, length: (notice as NSString).length)
+        guard regex.firstMatch(in: notice, range: range) != nil else { return nil }
+        return regex.stringByReplacingMatches(in: notice, options: [], range: range, withTemplate: "")
     }
 
     /// Recover stream text if fire-and-forget MainActor chunk tasks lagged behind the provider.

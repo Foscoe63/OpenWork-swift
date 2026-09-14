@@ -648,6 +648,20 @@ public final class PersistenceManager: @unchecked Sendable {
                     items[sIdx].messages[mIdx].agentAvatar = "person.crop.circle.badge.checkmark"
                     modified = true
                 }
+
+                // Nothing is streaming at load time, by definition. A message saved mid-stream —
+                // the app quit, or the turn was abandoned — keeps `isStreaming` true on disk and
+                // comes back as a bubble that spins forever with no generation behind it. Seen in
+                // a real exported session, where it was also empty.
+                if items[sIdx].messages[mIdx].isStreaming {
+                    items[sIdx].messages[mIdx].isStreaming = false
+                    if items[sIdx].messages[mIdx].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       items[sIdx].messages[mIdx].toolCalls.isEmpty {
+                        items[sIdx].messages[mIdx].content =
+                            "*(This turn was interrupted before the model produced anything.)*"
+                    }
+                    modified = true
+                }
             }
         }
         if modified {
