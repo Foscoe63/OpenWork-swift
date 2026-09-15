@@ -872,7 +872,6 @@
 				15E7EBA2935E217F36124DCE /* XCRemoteSwiftPackageReference "Yams" */,
 				64DD5E0CBD306A9D0AB9883D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				3FA772758CCC99DF53C8C4E5 /* XCRemoteSwiftPackageReference "swift-huggingface" */,
-				9FCDFC5723168B54EBCDCEA4 /* XCRemoteSwiftPackageReference "swift-jinja" */,
 				B5E9A125EF820C7559AEBBA9 /* XCRemoteSwiftPackageReference "swift-nio" */,
 				FC5C78A0149A4879AEFA2C44 /* XCRemoteSwiftPackageReference "swift-sdk" */,
 				56E7700A7A551736309F6B49 /* XCRemoteSwiftPackageReference "swift-transformers" */,
@@ -1360,15 +1359,6 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 3.31.4;
-			};
-		};
-		9FCDFC5723168B54EBCDCEA4 /* XCRemoteSwiftPackageReference "swift-jinja" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/huggingface/swift-jinja.git";
-			requirement = {
-				kind = versionRange;
-				maximumVersion = 2.4.0;
-				minimumVersion = 2.0.0;
 			};
 		};
 		B5E9A125EF820C7559AEBBA9 /* XCRemoteSwiftPackageReference "swift-nio" */ = {

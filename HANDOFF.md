@@ -413,6 +413,27 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 Permanent fix needs your password: `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
 
+**`swift-jinja` was declared and used by no target — and it was a version cap, not dead weight.**
+
+Both manifests declared `swift-jinja` at `2.0.0..<2.4.0` while no target depended on it, which
+is what the `dependency 'swift-jinja' is not used by any target` warning was about. Deleting it
+is not obviously free: `swift-transformers` is the real consumer and declares `from: "2.0.0"`,
+so the narrower range here was holding jinja down at **2.3.6** when 2.5.1 is published. Nothing
+recorded why — it arrived inside a 1,000-file commit called "Update project configuration".
+
+Checked before removing it, because Jinja is what `Tokenizers` uses to render **chat templates**,
+which is every local MLX turn and something no unit test touches: forced to 2.5.1, the suite
+passes and a real multi-turn MLX turn with a system prompt renders and answers correctly. So the
+cap was not guarding a known break.
+
+The declaration is gone from `Package.swift` and `project.yml`; **the resolved version is
+deliberately left at 2.3.6** in both `Package.resolved` files. Jinja still builds and links
+transitively through `Tokenizers`, so this changes nothing at runtime — bundling a dependency
+bump into a warning fix would have been a separate decision wearing a cleanup's clothes.
+**2.5.1 is verified good on this machine's model if anyone wants it**; that is a
+`swift package update swift-jinja` away, and worth re-checking against a second model's chat
+template first, since only Ornith's was exercised.
+
 **`swift test` can fail with a missing `metal` compiler after a reboot.**
 
 ```
