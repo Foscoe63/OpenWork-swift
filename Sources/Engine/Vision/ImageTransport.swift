@@ -15,6 +15,17 @@ public enum ImageTransport {
     /// grab is comfortably over the line before any of them complain usefully.
     public static let maxPixelWidth: CGFloat = 1600
 
+    /// Size on disk, or 0 if it cannot be read.
+    ///
+    /// `attributesOfItem` throws and its subscript returns `Any?`, so the obvious inline
+    /// spelling is a `try?` wrapped around an `as?` — which yields a doubly-optional that
+    /// invites exactly the redundant `?? 0 ?? 0` this replaces in two call sites.
+    public static func fileSize(atPath path: String) -> Int64 {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attributes[.size] as? Int64 else { return 0 }
+        return size
+    }
+
     public static func isImage(_ attachment: MessageAttachment) -> Bool {
         attachment.mimeType.hasPrefix("image/")
             || ["png", "jpg", "jpeg", "gif", "webp", "heic"].contains(

@@ -956,12 +956,12 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             do {
                 let dir = Self.perceptionDirectory(for: workspace)
                 let url = try await ScreenPerception.captureWindow(appQuery: appQuery, to: dir)
-                let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+                let size = ImageTransport.fileSize(atPath: url.path)
                 return ToolExecutionResult(
                     success: true,
                     output: """
                     Captured the frontmost window of '\(appQuery)'.
-                    File: \(url.path) (\((size ?? 0) / 1024) KB)
+                    File: \(url.path) (\(size / 1024) KB)
                     The image is attached to this result — look at it rather than reasoning about the path.
                     """,
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000,

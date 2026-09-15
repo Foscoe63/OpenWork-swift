@@ -1568,7 +1568,7 @@ public final class AgentRunner {
                         MessageAttachment(
                             name: (path as NSString).lastPathComponent,
                             path: path,
-                            sizeBytes: Int64((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0 ?? 0),
+                            sizeBytes: ImageTransport.fileSize(atPath: path),
                             mimeType: "image/png"
                         )
                     }

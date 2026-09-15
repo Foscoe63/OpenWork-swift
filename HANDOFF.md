@@ -479,6 +479,12 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 Permanent fix needs your password: `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
 
+**Grep build output for `warning:`, not just `error:`.** Two redundant `?? 0 ?? 0` warnings
+shipped in the perception work because every build check in that session filtered for `error:`
+alone. `attributesOfItem` throws *and* its subscript returns `Any?`, so the obvious inline
+spelling is a `try?` around an `as?`, which yields a doubly-optional and invites exactly that
+mistake — `ImageTransport.fileSize(atPath:)` is now the one place that does it.
+
 **`swift-jinja` was declared and used by no target — and it was a version cap, not dead weight.**
 
 Both manifests declared `swift-jinja` at `2.0.0..<2.4.0` while no target depended on it, which
