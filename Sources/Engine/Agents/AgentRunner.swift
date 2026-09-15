@@ -640,6 +640,22 @@ private final class AgentStreamStopper: @unchecked Sendable {
     }
 }
 
+/// Text accumulated off the main actor.
+///
+/// `SubAgentAccumulator` is `@MainActor`, which was fine while sub-agents ran one at a time on
+/// the main actor and is not once their streams fan out across a task group.
+final class ConcurrentTextBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = ""
+    func append(_ text: String) {
+        lock.lock(); buffer += text; lock.unlock()
+    }
+    var text: String {
+        lock.lock(); defer { lock.unlock() }
+        return buffer
+    }
+}
+
 @MainActor
 public final class AgentRunner {
     public static let shared = AgentRunner()
@@ -713,84 +729,110 @@ public final class AgentRunner {
             AgentCommunicationHub.shared.postMessage(planMsg)
             onInterAgentMessage(planMsg)
 
-            for subId in agent.subAgentIds.prefix(2) {
-                guard let subAgent = allAgents.first(where: { $0.id == subId }) else { continue }
-                
-                var subTask = SubAgentTask(
-                    parentAgentId: agent.id,
-                    parentAgentName: agent.name,
-                    subAgentId: subAgent.id,
-                    subAgentName: subAgent.name,
-                    subAgentAvatar: subAgent.avatar,
-                    taskTitle: "\(subAgent.role): Analyze and plan for user request",
-                    taskDescription: "Executing autonomous evaluation scoped to \(subAgent.role)",
-                    status: .planning,
-                    progress: 0.1,
-                    // Depth 1 is this level; the budget is what stops it recursing further.
-                    depth: min(1, subAgentDepthBudget)
-                )
-                
-                assistantMsg.subAgentTasks.append(subTask)
-                onMessageUpdated(assistantMsg)
-                onSubAgentTaskCreated(subTask)
+            // Sub-agents run concurrently.
+            //
+            // They used to run in a `for` loop, each awaiting a full completion before the next
+            // began, so two advisory calls cost the sum of their latencies for no reason: they
+            // do not share state, they take no tools (`tools: []`), and they never touch the
+            // filesystem, so nothing about them is ordered. This class is `@MainActor`, so the
+            // streams fan out and every mutation of `assistantMsg` is applied back here in
+            // order — concurrency in the waiting, not in the bookkeeping.
+            let delegated: [(agent: Agent, task: SubAgentTask)] = agent.subAgentIds
+                .prefix(2)
+                .compactMap { subId in
+                    guard let subAgent = allAgents.first(where: { $0.id == subId }) else { return nil }
+                    let subTask = SubAgentTask(
+                        parentAgentId: agent.id,
+                        parentAgentName: agent.name,
+                        subAgentId: subAgent.id,
+                        subAgentName: subAgent.name,
+                        subAgentAvatar: subAgent.avatar,
+                        taskTitle: "\(subAgent.role): Analyze and plan for user request",
+                        taskDescription: "Executing autonomous evaluation scoped to \(subAgent.role)",
+                        status: .planning,
+                        progress: 0.1,
+                        // Depth 1 is this level; the budget is what stops it recursing further.
+                        depth: min(1, subAgentDepthBudget)
+                    )
+                    return (subAgent, subTask)
+                }
 
+            for var entry in delegated {
+                assistantMsg.subAgentTasks.append(entry.task)
+                onSubAgentTaskCreated(entry.task)
                 let delegationMsg = AgentMessage(
                     fromAgentId: agent.id,
                     fromAgentName: agent.name,
-                    toAgentId: subAgent.id,
-                    toAgentName: subAgent.name,
+                    toAgentId: entry.agent.id,
+                    toAgentName: entry.agent.name,
                     messageType: .taskDelegation,
-                    content: "Sub-task delegated: \(subTask.taskTitle)"
+                    content: "Sub-task delegated: \(entry.task.taskTitle)"
                 )
                 AgentCommunicationHub.shared.postMessage(delegationMsg)
                 onInterAgentMessage(delegationMsg)
 
-                subTask.status = .running
-                subTask.progress = 0.5
-                if let idx = assistantMsg.subAgentTasks.firstIndex(where: { $0.id == subTask.id }) {
-                    assistantMsg.subAgentTasks[idx] = subTask
+                entry.task.status = .running
+                entry.task.progress = 0.5
+                if let idx = assistantMsg.subAgentTasks.firstIndex(where: { $0.id == entry.task.id }) {
+                    assistantMsg.subAgentTasks[idx] = entry.task
                 }
-                onMessageUpdated(assistantMsg)
-                onSubAgentTaskUpdated(subTask)
+                onSubAgentTaskUpdated(entry.task)
+            }
+            onMessageUpdated(assistantMsg)
 
-                // Dispatch real sub-agent LLM query stream
-                let subAgentStartTime = CFAbsoluteTimeGetCurrent()
-                let subAccumulator = SubAgentAccumulator()
-                let subSystemPrompt = "\(subAgent.systemPrompt)\n\nYou are operating as an autonomous specialized sub-agent supporting \(agent.name). Provide a concise, highly actionable technical assessment for the following goal."
-
-                do {
-                    try await ProviderRouter.shared.stream(
-                        provider: provider,
-                        model: model,
-                        systemPrompt: subSystemPrompt,
-                        messages: [ChatMessage(sessionId: session.id, role: .user, content: "Sub-task Objective: \(subTask.taskTitle)\nContext: \(lastPrompt)")],
-                        temperature: subAgent.temperature,
-                        maxTokens: 512,
-                        reasoningEffort: .off,
-                        tools: []
-                    ) { chunk in
-                        Task { @MainActor in
-                            if !chunk.deltaText.isEmpty {
-                                subAccumulator.append(chunk.deltaText)
+            let subAgentStartTime = CFAbsoluteTimeGetCurrent()
+            let replies: [(taskId: String, text: String)] = await withTaskGroup(
+                of: (String, String).self
+            ) { group in
+                for entry in delegated {
+                    let subAgent = entry.agent
+                    let taskId = entry.task.id
+                    let title = entry.task.taskTitle
+                    group.addTask {
+                        let box = ConcurrentTextBox()
+                        let subSystemPrompt = "\(subAgent.systemPrompt)\n\nYou are operating as an autonomous specialized sub-agent supporting \(agent.name). Provide a concise, highly actionable technical assessment for the following goal."
+                        do {
+                            try await ProviderRouter.shared.stream(
+                                provider: provider,
+                                model: model,
+                                systemPrompt: subSystemPrompt,
+                                messages: [ChatMessage(sessionId: session.id, role: .user, content: "Sub-task Objective: \(title)\nContext: \(lastPrompt)")],
+                                temperature: subAgent.temperature,
+                                maxTokens: 512,
+                                reasoningEffort: .off,
+                                tools: []
+                            ) { chunk in
+                                if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
                             }
+                        } catch {
+                            box.append("Sub-agent \(subAgent.name) completed evaluation with standard \(subAgent.role) heuristics.")
                         }
+                        let text = box.text.isEmpty
+                            ? "Sub-agent \(subAgent.name) finalized analysis for \(title)."
+                            : box.text
+                        return (taskId, text)
                     }
-                } catch {
-                    subAccumulator.append("Sub-agent \(subAgent.name) completed evaluation with standard \(subAgent.role) heuristics.")
                 }
+                var collected: [(String, String)] = []
+                for await result in group { collected.append(result) }
+                return collected
+            }
 
-                let subAgentResultText = subAccumulator.text.isEmpty ? "Sub-agent \(subAgent.name) finalized analysis for \(subTask.taskTitle)." : subAccumulator.text
-
+            // Apply in the order the sub-agents were delegated, not the order they happened to
+            // finish, so the transcript does not reshuffle itself run to run.
+            for entry in delegated {
+                guard let reply = replies.first(where: { $0.taskId == entry.task.id }) else { continue }
+                var subTask = entry.task
                 subTask.status = .completed
                 subTask.progress = 1.0
-                subTask.resultSummary = subAgentResultText.trimmingCharacters(in: .whitespacesAndNewlines)
+                subTask.resultSummary = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 subTask.completedAt = Date()
-                subTask.tokensUsed = max(180, subAgentResultText.count / 4)
+                subTask.tokensUsed = max(180, reply.text.count / 4)
                 subTask.durationMs = (CFAbsoluteTimeGetCurrent() - subAgentStartTime) * 1000
 
                 let replyMsg = AgentMessage(
-                    fromAgentId: subAgent.id,
-                    fromAgentName: subAgent.name,
+                    fromAgentId: entry.agent.id,
+                    fromAgentName: entry.agent.name,
                     toAgentId: agent.id,
                     toAgentName: agent.name,
                     messageType: .taskResponse,

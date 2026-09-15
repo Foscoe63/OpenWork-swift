@@ -867,6 +867,63 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
 
+        case "worktree_create":
+            let name = (dict["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else {
+                return Self.failure("worktree_create needs a 'name' for the task being isolated.", startTime)
+            }
+            do {
+                let info = try AgentWorktree.create(workspacePath: workspace.folderPath, name: name)
+                return ToolExecutionResult(
+                    success: true,
+                    output: """
+                    Worktree ready at \(info.path)
+                    Branch: \(info.branch) (from \(info.head))
+
+                    Work in that directory by absolute path. Changes there do not touch the main                     checkout, and git_commit can checkpoint them.
+                    """,
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            } catch {
+                return Self.failure(error.localizedDescription, startTime)
+            }
+
+        case "worktree_list":
+            do {
+                let trees = try AgentWorktree.list(workspacePath: workspace.folderPath)
+                guard !trees.isEmpty else {
+                    return ToolExecutionResult(success: true, output: "No agent worktrees.", durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+                }
+                let body = trees.map { "- \($0.branch) @ \($0.head)\n  \($0.path)" }.joined(separator: "\n")
+                return ToolExecutionResult(success: true, output: body, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            } catch {
+                return Self.failure(error.localizedDescription, startTime)
+            }
+
+        case "worktree_remove":
+            let name = (dict["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            let force = dict["force"] as? Bool ?? false
+            guard !name.isEmpty else {
+                return Self.failure("worktree_remove needs a 'name'.", startTime)
+            }
+            do {
+                let message = try AgentWorktree.remove(workspacePath: workspace.folderPath, name: name, force: force)
+                return ToolExecutionResult(success: true, output: message, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            } catch {
+                return Self.failure(error.localizedDescription, startTime)
+            }
+
+        case "git_commit":
+            let rawPath = (dict["worktree_path"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            let message = dict["message"] as? String ?? ""
+            let target = rawPath.isEmpty ? workspace.folderPath : rawPath
+            do {
+                let result = try AgentWorktree.commit(worktreePath: target, message: message)
+                return ToolExecutionResult(success: true, output: result, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            } catch {
+                return Self.failure(error.localizedDescription, startTime)
+            }
+
         case "screenshot_window", "screenshot_app":
             let appQuery = (dict["app"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             guard !appQuery.isEmpty else {

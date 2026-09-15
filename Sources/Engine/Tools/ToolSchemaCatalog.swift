@@ -44,6 +44,40 @@ public enum ToolSchemaCatalog {
     public static var parityDefaults: [Tool] {
         [
             Tool(
+                id: "worktree_create",
+                name: "worktree_create",
+                displayName: "Create Worktree",
+                description: "Create an isolated git worktree on its own branch for a task. Changes there do not touch the user's checkout, which is what makes committing safe.",
+                category: .system,
+                parametersJsonSchema: schemas["worktree_create"]!
+            ),
+            Tool(
+                id: "worktree_list",
+                name: "worktree_list",
+                displayName: "List Worktrees",
+                description: "List agent worktrees and their branches.",
+                category: .system,
+                parametersJsonSchema: schemas["worktree_list"]!
+            ),
+            Tool(
+                id: "worktree_remove",
+                name: "worktree_remove",
+                displayName: "Remove Worktree",
+                description: "Remove an agent worktree. Refuses to discard uncommitted changes unless force is set.",
+                category: .system,
+                parametersJsonSchema: schemas["worktree_remove"]!,
+                requiresApproval: true
+            ),
+            Tool(
+                id: "git_commit",
+                name: "git_commit",
+                displayName: "Commit (Worktree Only)",
+                description: "Commit all changes inside an agent worktree. Refused outside one: on the user's own checkout, committing stays theirs. Use this to checkpoint work across turns, which turn-scoped undo cannot do.",
+                category: .system,
+                parametersJsonSchema: schemas["git_commit"]!,
+                requiresApproval: true
+            ),
+            Tool(
                 id: "screenshot_window",
                 name: "screenshot_window",
                 displayName: "Screenshot Window",
@@ -203,6 +237,13 @@ public enum ToolSchemaCatalog {
     }
 
     private static let schemas: [String: String] = [
+        // Isolation. A worktree is where an agent may commit, because history added on a branch
+        // of its own cannot rewrite anything you wrote.
+        "worktree_create": #"{"type":"object","properties":{"name":{"type":"string","description":"Short name for the task being isolated, e.g. 'dark-mode-fix'. Becomes branch openwork/<name>."}},"required":["name"]}"#,
+        "worktree_list": #"{"type":"object","properties":{}}"#,
+        "worktree_remove": #"{"type":"object","properties":{"name":{"type":"string"},"force":{"type":"boolean","description":"Discard uncommitted changes. Refused without this if the worktree is dirty."}},"required":["name"]}"#,
+        "git_commit": #"{"type":"object","properties":{"worktree_path":{"type":"string","description":"Absolute path of the agent worktree to commit in. Committing anywhere else is refused."},"message":{"type":"string","description":"Commit message."}},"required":["worktree_path","message"]}"#,
+
         // Perception. The agent could write a view and never look at it; these are the eyes.
         "screenshot_window": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name, e.g. 'OpenWork' or 'ai.openwork.OpenWorkSwift'. The app must already be running - use run_app first."}},"required":["app"]}"#,
         "accessibility_tree": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name. The app must already be running."},"max_depth":{"type":"integer","description":"Tree depth budget, default 14."}},"required":["app"]}"#,
