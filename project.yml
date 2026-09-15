@@ -95,19 +95,21 @@ targets:
         # on every `xcodegen generate`, so anything set through Xcode's Signing & Capabilities
         # pane survives only until the next regeneration — and the project file is regenerated
         # whenever a source file is added.
-        CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: 5XKHL47YG3
-        CODE_SIGN_IDENTITY: "Apple Development"
-        # macOS-specific ad-hoc override, which beats the line above on this platform.
+        # A local self-signed certificate, created by Scripts/create-local-signing-cert.sh.
         #
-        # It is here because there is currently no signing certificate installed
-        # (`security find-identity -v` reports none), and without this the build would fail
-        # looking for one. "Apple Development" is also the wrong certificate for distribution:
-        # shipping a notarised app outside the App Store needs "Developer ID Application".
+        # This is about TCC, not distribution. Ad-hoc signing (`-`) makes macOS identify the app
+        # by its binary hash, so **every rebuild silently invalidates Accessibility and Screen
+        # Recording** while leaving the app ticked in System Settings: it reads "granted" and
+        # behaves "denied", and the perception tools die without saying why. A stable certificate
+        # makes TCC key on the certificate instead, so those grants survive rebuilds.
         #
-        # Once that certificate is installed, delete this line and set
-        # CODE_SIGN_IDENTITY to "Developer ID Application" to produce a signable build.
-        "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
+        # It does nothing for distribution — shipping outside the App Store still needs a real
+        # "Developer ID Application" certificate and notarisation. CI has no keychain, so
+        # .github/workflows/ci.yml overrides this with `CODE_SIGN_IDENTITY="-"` on the command
+        # line; anyone building without the local certificate can do the same.
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_IDENTITY: "OpenWork Local Signing"
         OTHER_SWIFT_FLAGS: "$(inherited) -strict-concurrency=minimal"
         OTHER_CPLUSPLUSFLAGS: "$(inherited) -std=c++17 -Wno-c++17-extensions"
         OTHER_CFLAGS: "$(inherited) -Wno-c++17-extensions"
