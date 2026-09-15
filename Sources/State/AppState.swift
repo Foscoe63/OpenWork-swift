@@ -987,6 +987,18 @@ public final class AppState: ObservableObject {
     }
 
     // MARK: - MLX Local Runtime & Discovery
+
+    /// Re-apply the GPU memory budget ratio to the models already in memory.
+    ///
+    /// Moving that slider changes every "Runs well" / "Memory may be tight" badge, because the
+    /// verdict is measured against `physicalRAM * ratio`. The alternative — a full rescan per
+    /// slider step — walks every attached model volume, so re-judge what is already loaded
+    /// instead. A rescan produces the same verdicts; see `scanInstalledModels`.
+    public func rejudgeLocalMLXCompatibility() {
+        let ratio = settings.mlxGpuMemoryBudgetRatio
+        localMLXModels = localMLXModels.map { $0.judged(atBudgetRatio: ratio) }
+    }
+
     public func rescanMLXModels() {
         isScanningMLX = true
         Task.detached(priority: .userInitiated) {

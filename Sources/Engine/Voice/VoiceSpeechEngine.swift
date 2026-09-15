@@ -105,13 +105,51 @@ public final class VoiceSpeechEngine: NSObject, ObservableObject, AVSpeechSynthe
         guard !cleanText.isEmpty else { return }
 
         let utterance = AVSpeechUtterance(string: cleanText)
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utterance.voice = Self.preferredVoice()
         utterance.rate = 0.52
         utterance.pitchMultiplier = 1.0
 
         isSpeaking = true
         speechSynthesizer.speak(utterance)
     }
+
+    /// The voice named by `speechVoiceIdentifier`, or the system default for en-US.
+    ///
+    /// That setting was stored, defaulted to Alex, had no control anywhere in the UI, and was
+    /// never read: every utterance used `AVSpeechSynthesisVoice(language: "en-US")`. The
+    /// identifier can also name a voice that is not installed on this Mac — installed voices are
+    /// per-user downloads — so a miss has to fall back rather than go silent.
+    static func preferredVoice() -> AVSpeechSynthesisVoice? {
+        let identifier = PersistenceManager.shared.loadSettings().speechVoiceIdentifier
+        if !identifier.isEmpty, let voice = AVSpeechSynthesisVoice(identifier: identifier) {
+            return voice
+        }
+        return AVSpeechSynthesisVoice(language: "en-US")
+    }
+
+    /// `identifier` if it names a voice installed here, otherwise "" for the system default.
+    ///
+    /// The picker and `preferredVoice()` have to agree about an identifier that does not resolve,
+    /// or the UI claims a voice that speech is not using.
+    public static func resolvedVoiceIdentifier(_ identifier: String) -> String {
+        guard !identifier.isEmpty, AVSpeechSynthesisVoice(identifier: identifier) != nil else { return "" }
+        return identifier
+    }
+
+    /// Voices actually installed for this user, for the settings picker to offer.
+    ///
+    /// Cached because the picker asks for this from a SwiftUI body, and enumerating the installed
+    /// voices is not free. The set only changes when the user downloads a voice in System
+    /// Settings, which does not happen while this picker is on screen.
+    public static func installedVoices() -> [AVSpeechSynthesisVoice] {
+        if let cached = cachedInstalledVoices { return cached }
+        let voices = AVSpeechSynthesisVoice.speechVoices()
+            .sorted { ($0.language, $0.name) < ($1.language, $1.name) }
+        cachedInstalledVoices = voices
+        return voices
+    }
+
+    private static var cachedInstalledVoices: [AVSpeechSynthesisVoice]?
 
     public func stopSpeaking() {
         if speechSynthesizer.isSpeaking {

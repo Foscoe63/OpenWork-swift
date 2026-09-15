@@ -333,21 +333,24 @@ public struct ComposerView: View {
                 .buttonStyle(.plain)
                 .help("Attach file from workspace")
 
-                // Voice Dictation Button
-                Button {
-                    voiceEngine.toggleDictation { spokenText in
-                        appState.composerText = spokenText
+                // Voice Dictation Button. Hidden when dictation is switched off in Settings —
+                // that toggle was stored and never read, so this was drawn whatever it said.
+                if appState.settings.voiceInputEnabled {
+                    Button {
+                        voiceEngine.toggleDictation { spokenText in
+                            appState.composerText = spokenText
+                        }
+                    } label: {
+                        Image(systemName: voiceEngine.isRecording ? "waveform.circle.fill" : "mic.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(voiceEngine.isRecording ? .red : ThemeColors.textSecondary(for: appState.settings.theme))
+                            .frame(width: 28, height: 28)
+                            .background(voiceEngine.isRecording ? Color.red.opacity(0.15) : ThemeColors.cardBg(for: appState.settings.theme))
+                            .cornerRadius(6)
                     }
-                } label: {
-                    Image(systemName: voiceEngine.isRecording ? "waveform.circle.fill" : "mic.fill")
-                        .font(.system(size: 14))
-                        .foregroundColor(voiceEngine.isRecording ? .red : ThemeColors.textSecondary(for: appState.settings.theme))
-                        .frame(width: 28, height: 28)
-                        .background(voiceEngine.isRecording ? Color.red.opacity(0.15) : ThemeColors.cardBg(for: appState.settings.theme))
-                        .cornerRadius(6)
+                    .buttonStyle(.plain)
+                    .help(voiceEngine.isRecording ? "Stop Dictation" : "Dictate with Voice (macOS STT)")
                 }
-                .buttonStyle(.plain)
-                .help(voiceEngine.isRecording ? "Stop Dictation" : "Dictate with Voice (macOS STT)")
 
                 // Text Input Field (Return sends, Shift/Option/Slash+Return inserts newline)
                 ChatInputRepresentable(

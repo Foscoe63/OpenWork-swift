@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 import UniformTypeIdentifiers
 
 public struct SettingsView: View {
@@ -814,9 +815,18 @@ public struct SettingsView: View {
                 }
                 .padding(.vertical, 4)
 
-                SettingsRow(title: "GPU Memory Budget Ratio", subtitle: "Fraction of unified RAM allocated for weights + KV cache", icon: "gauge.with.dots.needle.bottom.50percent") {
+                SettingsRow(title: "GPU Memory Budget Ratio", subtitle: "Caps MLX's buffer cache and decides which models are marked as fitting", icon: "gauge.with.dots.needle.bottom.50percent") {
                     HStack(spacing: 8) {
-                        Slider(value: $appState.settings.mlxGpuMemoryBudgetRatio, in: 0.5...0.9, step: 0.05)
+                        // Re-judge on commit, not per step: the badges below depend on this ratio,
+                        // and a rescan per 0.05 increment walks every attached model volume.
+                        Slider(
+                            value: $appState.settings.mlxGpuMemoryBudgetRatio,
+                            in: 0.5...0.9,
+                            step: 0.05,
+                            onEditingChanged: { editing in
+                                if !editing { appState.rejudgeLocalMLXCompatibility() }
+                            }
+                        )
                             .frame(width: 140)
                         Text("\(Int(appState.settings.mlxGpuMemoryBudgetRatio * 100))%")
                             .font(.system(size: 11, design: .monospaced))
@@ -1660,6 +1670,38 @@ public struct SettingsView: View {
                         }
                     ))
                     .toggleStyle(.switch)
+                }
+
+                // `speechVoiceIdentifier` was stored, defaulted to Alex, and had no control
+                // anywhere — the one setting with neither a reader nor a way to set it.
+                if appState.settings.voiceSynthesisEnabled {
+                    SettingsRow(title: "Voice", subtitle: "Installed macOS voice used for spoken replies", icon: "waveform") {
+                        HStack(spacing: 8) {
+                            Picker("", selection: Binding(
+                                // An identifier naming a voice this Mac does not have must show
+                                // as the system default, not as an empty control. Normalised on
+                                // read rather than migrated, because resolving a voice means
+                                // touching AVFoundation and `loadSettings` runs per turn.
+                                get: { VoiceSpeechEngine.resolvedVoiceIdentifier(appState.settings.speechVoiceIdentifier) },
+                                set: { val in
+                                    appState.settings.speechVoiceIdentifier = val
+                                    appState.updateSettings(appState.settings)
+                                }
+                            )) {
+                                Text("System Default").tag("")
+                                ForEach(VoiceSpeechEngine.installedVoices(), id: \.identifier) { voice in
+                                    Text("\(voice.name) (\(voice.language))").tag(voice.identifier)
+                                }
+                            }
+                            .frame(width: 220)
+
+                            Button("Preview") {
+                                VoiceSpeechEngine.shared.speak(text: "This is the OpenWork speaking voice.")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
                 }
 
                 SettingsRow(title: "Generative Media & MLX Vision", subtitle: "Enable DALL-E, local Stable Diffusion, and Apple Vision tools", icon: "paintpalette.fill") {

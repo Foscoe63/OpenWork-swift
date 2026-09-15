@@ -137,16 +137,19 @@ public struct MessageBubbleView: View {
 
                     Spacer()
 
-                    // Speak Text (TTS) Action
-                    Button {
-                        VoiceSpeechEngine.shared.speak(text: message.content)
-                    } label: {
-                        Image(systemName: "speaker.wave.2")
-                            .font(.system(size: 11))
-                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                    // Speak Text (TTS) Action. Gated on the Settings toggle, which was stored
+                    // and never read — this button appeared whether it was on or off.
+                    if appState.settings.voiceSynthesisEnabled {
+                        Button {
+                            VoiceSpeechEngine.shared.speak(text: message.content)
+                        } label: {
+                            Image(systemName: "speaker.wave.2")
+                                .font(.system(size: 11))
+                                .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Read Aloud (macOS Speech Synthesizer)")
                     }
-                    .buttonStyle(.plain)
-                    .help("Read Aloud (macOS Speech Synthesizer)")
 
                     // Copy Action
                     Button {

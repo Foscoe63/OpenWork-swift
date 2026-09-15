@@ -154,6 +154,9 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
 }
 
 public struct AppSettings: Codable, Hashable, Sendable {
+    /// Which migrations have already run against this file. See `AppSettings.currentSchemaVersion`.
+    public var settingsSchemaVersion: Int
+
     // General
     public var defaultWorkspaceId: String
     public var defaultAgentId: String
@@ -232,6 +235,15 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var developerMode: Bool
     public var verboseLogging: Bool
 
+    /// Bumped when a stored settings.json needs fixing up rather than merely decoding.
+    ///
+    /// Version 2 turns the two voice toggles on for files written before they controlled
+    /// anything. Both shipped defaulting to `false` while the mic button in the composer and the
+    /// speak button on every assistant message were drawn unconditionally, so a stored `false` is
+    /// not a preference anyone expressed — it is the default of a switch that was never wired.
+    /// Honouring it literally would delete a working feature from every existing install.
+    public static let currentSchemaVersion = 2
+
     public static var defaultMCPServers: [MCPServerConfig] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let workspaceMain = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces/Main")
@@ -283,6 +295,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
     }
 
     public init(
+        settingsSchemaVersion: Int = AppSettings.currentSchemaVersion,
         defaultWorkspaceId: String = "default-workspace",
         defaultAgentId: String = "lead-assistant",
         // The built-in Apple Silicon MLX engine, which is what `defaultProviders` marks
@@ -328,9 +341,21 @@ public struct AppSettings: Codable, Hashable, Sendable {
         showInterAgentCommunicationLogs: Bool = true,
         enableAgentCollaborationRoom: Bool = true,
         mcpServers: [MCPServerConfig] = defaultMCPServers,
-        voiceInputEnabled: Bool = false,
-        voiceSynthesisEnabled: Bool = false,
-        speechVoiceIdentifier: String = "com.apple.speech.synthesis.voice.Alex",
+        // Both features are built and reachable — the mic button in `ComposerView` and the
+        // speak button in `MessageBubbleView`. These defaulted to `false` only because nothing
+        // read them; now that they gate those buttons, the default has to match the behaviour
+        // the app has always had, or wiring the switch would amount to removing the feature.
+        voiceInputEnabled: Bool = true,
+        voiceSynthesisEnabled: Bool = true,
+        // Empty means "whatever macOS picks for the system language".
+        //
+        // This used to ship as `com.apple.speech.synthesis.voice.Alex`, which is an
+        // *NSSpeechSynthesizer* identifier. Speech here goes through AVSpeechSynthesizer, whose
+        // identifiers look like `com.apple.voice.compact.en-US.Samantha` — so the shipped default
+        // matched none of the 186 voices installed on this Mac. Nothing noticed while the field
+        // was unread; the moment it gained a picker, that picker rendered blank, because a
+        // SwiftUI Picker whose selection matches no tag shows nothing at all.
+        speechVoiceIdentifier: String = "",
         imageGenerationEnabled: Bool = true,
         googleAccountEmail: String = "",
         gmailExtensionEnabled: Bool = false,
@@ -352,6 +377,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         developerMode: Bool = true,
         verboseLogging: Bool = false
     ) {
+        self.settingsSchemaVersion = settingsSchemaVersion
         self.defaultWorkspaceId = defaultWorkspaceId
         self.defaultAgentId = defaultAgentId
         self.defaultProviderId = defaultProviderId
@@ -413,6 +439,10 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let def = AppSettings.default
+
+        // Absent means a file written before this key existed, so it is version 1 and has not
+        // been migrated — *not* the current version. `def` cannot be the fallback here.
+        self.settingsSchemaVersion = try container.decodeIfPresent(Int.self, forKey: .settingsSchemaVersion) ?? 1
 
         self.defaultWorkspaceId = try container.decodeIfPresent(String.self, forKey: .defaultWorkspaceId) ?? def.defaultWorkspaceId
         self.defaultAgentId = try container.decodeIfPresent(String.self, forKey: .defaultAgentId) ?? def.defaultAgentId

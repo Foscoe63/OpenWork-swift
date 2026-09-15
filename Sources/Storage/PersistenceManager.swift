@@ -123,31 +123,74 @@ public final class PersistenceManager: @unchecked Sendable {
     }
 
     // MARK: - Settings
+    /// Read the stored settings. Writes only when something actually needs writing.
+    ///
+    /// This is called per turn, per tool call, and six times over in `MCPProtocol` — 26 sites in
+    /// all. Every branch below used to end in a write, including the steady-state one, so a
+    /// function whose entire job is to read rewrote `mcp_servers.json` on every call: a
+    /// synchronous atomic write, under a lock, from the main thread among others. Proving it took
+    /// nothing more than watching the file's mtime move during a test that only read settings.
+    ///
+    /// The repairs and the migration are still applied in memory on every load, so callers always
+    /// see corrected values; they just do not hit the disk once they have converged.
     public func loadSettings() -> AppSettings {
         var settings: AppSettings
+        var needsSave = false
         if let loaded = storage.load(AppSettings.self, from: "settings.json") {
             settings = loaded
         } else {
             settings = AppSettings.default
-            saveSettings(settings)
+            needsSave = true
         }
 
-        // Synchronize MCP servers (repair known-bad launch args before either side wins)
+        if Self.applyMigrations(to: &settings) {
+            needsSave = true
+        }
+
+        // Synchronize MCP servers (repair known-bad launch args before either side wins).
         let backupMcp = loadMCPServers()
         if settings.mcpServers.isEmpty {
             settings.mcpServers = backupMcp
-            saveSettings(settings)
+            needsSave = true
         } else {
             let repaired = repairMCPServerArgs(settings.mcpServers)
             if repaired != settings.mcpServers {
                 settings.mcpServers = repaired
-                saveSettings(settings)
-            } else {
-                saveMCPServers(settings.mcpServers)
+                needsSave = true
+            } else if backupMcp != settings.mcpServers {
+                // The backup store has drifted from settings.json. `saveSettings` mirrors both,
+                // so this converges after one write instead of repeating forever.
+                needsSave = true
             }
         }
 
+        if needsSave {
+            saveSettings(settings)
+        }
+
         return settings
+    }
+
+    /// Fix up a stored settings file whose schema predates the current one.
+    ///
+    /// Returns whether anything changed. A migration must be keyed on the stored version, not on
+    /// the values themselves: re-deriving "this looks unset" on every load would mean the user
+    /// could never turn the setting back off.
+    static func applyMigrations(to settings: inout AppSettings) -> Bool {
+        guard settings.settingsSchemaVersion < AppSettings.currentSchemaVersion else { return false }
+
+        if settings.settingsSchemaVersion < 2 {
+            // The voice toggles shipped defaulting to false while nothing read them, and the mic
+            // button in the composer and the speak button on every assistant message were drawn
+            // regardless. Now that those buttons honour the settings, a stored `false` written by
+            // a build where the switch did nothing would silently remove a working feature. It
+            // was never a preference, so it does not survive as one.
+            settings.voiceInputEnabled = true
+            settings.voiceSynthesisEnabled = true
+        }
+
+        settings.settingsSchemaVersion = AppSettings.currentSchemaVersion
+        return true
     }
 
     public func saveSettings(_ settings: AppSettings) {

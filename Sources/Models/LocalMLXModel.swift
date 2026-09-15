@@ -101,6 +101,39 @@ public struct LocalMLXModel: Identifiable, Codable, Sendable, Equatable {
         self.downloadCount = downloadCount
     }
 
+    /// The same model with its compatibility verdict re-judged against `budgetRatio`.
+    ///
+    /// The curated catalog is a `static` built without access to settings, so it bakes a verdict
+    /// at the shipped default ratio. Anything actually shown to the user is re-judged here
+    /// against the ratio the user set, because a "Runs well" badge measured against a budget the
+    /// user has since halved is the same kind of confident-but-unbacked number the GPU budget
+    /// readout used to be.
+    public func judged(atBudgetRatio budgetRatio: Double) -> LocalMLXModel {
+        LocalMLXModel(
+            id: id,
+            name: name,
+            description: description,
+            sizeBytes: sizeBytes,
+            parameterCount: parameterCount,
+            quantization: quantization,
+            modelType: modelType,
+            contextWindow: contextWindow,
+            isDownloaded: isDownloaded,
+            localDirectory: localDirectory,
+            isVLM: isVLM,
+            useCase: useCase,
+            compatibility: LocalMLXEngine.assessCompatibility(
+                requiredRAMGB: estimatedRAMGB,
+                budgetRatio: budgetRatio
+            ),
+            estimatedRAMGB: estimatedRAMGB,
+            tags: tags,
+            isTopPick: isTopPick,
+            releasedAt: releasedAt,
+            downloadCount: downloadCount
+        )
+    }
+
     /// Formatted download size (e.g. "4.2 GB").
     public var formattedSize: String {
         guard let sizeBytes, sizeBytes > 0 else {

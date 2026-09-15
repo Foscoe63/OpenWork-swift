@@ -47,11 +47,39 @@ public final class LocalMLXEngine: @unchecked Sendable {
         return 500.0
     }
 
-    public static func assessCompatibility(requiredRAMGB: Double) -> ModelCompatibility {
-        let budget = physicalRAMGB * 0.75
+    /// The user's "GPU Memory Budget Ratio", clamped to something a machine can survive.
+    ///
+    /// The slider offers 0.5...0.9, but settings.json is hand-editable and a stored 0 or 5 is a
+    /// wedged or swapping machine rather than a preference.
+    public static func clampedBudgetRatio(_ ratio: Double) -> Double {
+        guard ratio.isFinite else { return AppSettings.default.mlxGpuMemoryBudgetRatio }
+        return min(max(ratio, 0.1), 0.95)
+    }
+
+    /// Whether a model of `requiredRAMGB` fits inside the GPU memory budget.
+    ///
+    /// `budgetRatio` is the user's "GPU Memory Budget Ratio". It used to be a hardcoded 0.75 —
+    /// one of two separate hardcodes (the other being MLX's own cache limit at 0.5) behind a
+    /// settings slider that the MLX page rendered as "Safe GPU Memory Budget: N GB" in green.
+    /// Nothing read the setting, and 0.75 is its default, so the readout agreed with the verdict
+    /// right up until someone moved the slider.
+    ///
+    /// The default here exists so `curatedModels` — a `static` with no access to settings, read
+    /// from SwiftUI bodies where a disk read would be wrong — can still be built. Every verdict
+    /// actually shown to the user is re-judged against the stored ratio in `scanInstalledModels`.
+    public static func assessCompatibility(
+        requiredRAMGB: Double,
+        budgetRatio: Double = AppSettings.default.mlxGpuMemoryBudgetRatio
+    ) -> ModelCompatibility {
+        let ratio = clampedBudgetRatio(budgetRatio)
+        let budget = physicalRAMGB * ratio
+        // "Tight" is the band between the budget and what the machine can physically hold. At the
+        // top of the clamp that band is empty, which is correct: there is no headroom left to
+        // call tight.
+        let ceiling = physicalRAMGB * max(ratio, 0.95)
         if requiredRAMGB <= budget {
             return .runsWell
-        } else if requiredRAMGB <= (physicalRAMGB * 0.95) {
+        } else if requiredRAMGB <= ceiling {
             return .tight
         } else {
             return .notRecommended
@@ -554,7 +582,15 @@ public final class LocalMLXEngine: @unchecked Sendable {
             finalCatalog.append(remaining)
         }
 
-        return finalCatalog
+        // Re-judge every verdict against the ratio the user set.
+        //
+        // Both sources upstream of here are built without settings — the curated catalog is a
+        // `static`, and `buildModel` runs inside a recursive directory walk — so both carry a
+        // verdict measured against the shipped default. This is the one place that has the user's
+        // ratio and knows the list is about to be displayed, and `appState.localMLXModels` (fed
+        // only from here) is what both the Local Models page and the MLX settings page render.
+        let budgetRatio = settings.mlxGpuMemoryBudgetRatio
+        return finalCatalog.map { $0.judged(atBudgetRatio: budgetRatio) }
     }
 
     private func scanDirectoryRecursively(root: URL, current: URL, depth: Int, results: inout [String: LocalMLXModel]) {

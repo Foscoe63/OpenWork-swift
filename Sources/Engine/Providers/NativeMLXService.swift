@@ -549,7 +549,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         // first is the quickest way to exhaust unified memory on a machine that can just barely
         // hold one — the same policy GrizzyBot's generator applies.
         evictOtherModels(keeping: modelId)
-        Self.applyMemoryPolicy()
+        Self.applyMemoryPolicy(budgetRatio: settings.mlxGpuMemoryBudgetRatio)
 
         onProgress("Loading \(modelId) from \(localDir.path)")
         return try await LLMModelFactory.shared.loadContainer(
@@ -577,14 +577,18 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     }
 
     /// Cap MLX's buffer cache so a resident model does not squeeze the rest of the machine.
-    static func applyMemoryPolicy() {
+    ///
+    /// `budgetRatio` is the user's "GPU Memory Budget Ratio". This used to be a hardcoded 0.5
+    /// while the MLX settings page rendered `physicalRAM * ratio` in green as the "Safe GPU
+    /// Memory Budget" and ProvidersView repeated it — so the slider moved a number nothing read.
+    /// It went unnoticed because the setting's default (0.75) matched a *different* hardcode in
+    /// `assessCompatibility`, which made the two readouts agree until someone moved the slider.
+    static func applyMemoryPolicy(budgetRatio: Double) {
         MLX.Memory.cacheLimit = Int(
-            Double(ProcessInfo.processInfo.physicalMemory) * cacheLimitFraction
+            Double(ProcessInfo.processInfo.physicalMemory)
+                * LocalMLXEngine.clampedBudgetRatio(budgetRatio)
         )
     }
-
-    /// Fraction of physical memory MLX's buffer cache may hold.
-    static let cacheLimitFraction = 0.5
 
     /// Where in-process downloads land. Also a `knownMLXSearchRoots` entry, so anything fetched
     /// here resolves on the next turn without a rescan.
