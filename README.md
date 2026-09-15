@@ -11,7 +11,7 @@
 
 <p align="center">
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-black?style=flat-square&logo=apple&logoColor=white" />
-  <img alt="Swift 5.9" src="https://img.shields.io/badge/Swift-5.9-F05138?style=flat-square&logo=swift&logoColor=white" />
+  <img alt="Swift 5.9 language mode" src="https://img.shields.io/badge/Swift-5.9%20language%20mode-F05138?style=flat-square&logo=swift&logoColor=white" />
   <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-MLX-5AC8FA?style=flat-square&logo=apple&logoColor=white" />
   <img alt="MCP" src="https://img.shields.io/badge/MCP-Swift%20SDK-412991?style=flat-square" />
   <img alt="License MIT" src="https://img.shields.io/badge/License-MIT-green?style=flat-square" />
@@ -151,7 +151,9 @@ OpenWork-Swift/
     ├── Models/              # Agent, Workspace, Session, Settings, ProviderSelection
     ├── State/               # AppState
     ├── Storage/             # Persistence, Keychain, WindowLayoutStore
-    ├── Utils/               # AsyncDeadline (timeouts for uncancellable work)
+    ├── Utils/               # AsyncDeadline (timeouts for uncancellable work),
+    │                        # AppLog (verbose logging, gated by the setting),
+    │                        # LaunchAtLogin (SMAppService)
     ├── Engine/
     │   ├── Agents/          # AgentRunner, approvals, ContextCompactor
     │   ├── Providers/       # OpenAI, Anthropic, Ollama, NativeMLX, LocalMLXEngine
@@ -193,7 +195,8 @@ OpenWork-Swift/
 | Use case | Need |
 |---|---|
 | **Run a built `.app`** | macOS 14+ (Sonoma or later); Apple Silicon recommended for MLX |
-| **Build from source** | Xcode 15+, Swift 5.9+, macOS 14+ SDK |
+| **Build from source** | **Xcode 26.6+ (Swift 6.3)**, macOS 14+ SDK — `mlx-swift` declares `swift-tools-version: 6.3`, so the package graph will not resolve on an older toolchain whatever this project's own 5.9 language mode says |
+| **…and its Metal toolchain** | A separate download as of Xcode 26: `xcodebuild -downloadComponent MetalToolchain`. Without it `mlx-swift` fails at `CompileMetalFile` |
 | **Optional local servers** | Ollama, LM Studio, oMLX / `mlx-lm`, or Osaurus — only if you use those backends |
 | **Optional MacUse MCP** | [MacUse.app](https://macuse.app); Accessibility / Automation for write actions |
 
@@ -219,21 +222,41 @@ Select the **OpenWorkSwift** scheme → Build / Run.
 
 ### Swift Package Manager
 
+SwiftPM has to be pointed at the **Xcode** toolchain. If `xcode-select -p` reports
+`/Library/Developer/CommandLineTools`, the Command Line Tools toolchain is used instead and the
+build dies early with `unknown argument: '-target-arch-variant'` — misleading, because nothing
+is wrong with the package.
+
 ```bash
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+
 swift build
 swift run OpenWorkSwift
-swift test
+swift test                      # 402 tests
 ```
+
+To fix it for good rather than per-shell (needs your password):
+
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+```
+
+> If a build fails with `unable to spawn process '.../Metal.xctoolchain/usr/bin/metal'` while
+> `xcrun -f metal` resolves fine, the Metal toolchain is a cryptex whose mount path changes on
+> reboot and XCBuild has cached the old one. Clear `.build/out/Intermediates.noindex/XCBuildData`.
 
 ### Install a Debug build (optional)
 
+The product is named **`OpenWork.app`**, not `OpenWork-Swift.app` — `PRODUCT_NAME` is
+`OpenWork` while the Swift module and scheme stay `OpenWorkSwift`.
+
 ```bash
 # After a successful Debug build:
-cp -R ~/Library/Developer/Xcode/DerivedData/OpenWorkSwift-*/Build/Products/Debug/OpenWork-Swift.app \
-  /Applications/OpenWork-Swift.app
+cp -R ~/Library/Developer/Xcode/DerivedData/OpenWorkSwift-*/Build/Products/Debug/OpenWork.app \
+  /Applications/OpenWork.app
 ```
 
-Quit any running OpenWork-Swift instance before replacing the bundle.
+Quit any running OpenWork instance before replacing the bundle.
 
 ---
 
@@ -247,7 +270,10 @@ Quit any running OpenWork-Swift instance before replacing the bundle.
 | 📬 | **Dispatcher MCP servers** | e.g. `use the macuse mcp-server and check the mail on this computer` — the catalog is promoted on first listing |
 | 📄 | **Per-repo rules** | Drop `OPENWORK.md` or `AGENTS.md` at the workspace root — build commands, house style, what not to touch |
 | 🤖 | **Agents & skills** | Per-agent tools; enabled skills land in the system prompt |
-| 🎛️ | **Advanced** | Plan Mode, Max Turn Tokens, auto context compaction |
+| 🎛️ | **Advanced** | Plan Mode, Max Turn Tokens, sub-agent depth, collaboration room |
+| 🧠 | **Context** | Settings → Preferences — auto-compaction and the token threshold that triggers it |
+| 🎚️ | **GPU budget** | Settings → Apple Silicon MLX — the budget ratio caps MLX's buffer cache *and* decides which models are badged as fitting |
+| 🗣️ | **Voice** | Settings → Extensions — dictation and read-aloud each have a switch, plus a picker for the spoken voice |
 | 🗓️ | **Schedules** | Automations — Morning Brief–style prompts, frequency text (`Daily at 6:00 AM`), Run Now |
 | 🗂️ | **Workspaces** | Chat header or sidebar — stays synced with the current session |
 | 🪟 | **Layout** | Drag splits / move the window — restored automatically next launch |
@@ -257,6 +283,18 @@ Quit any running OpenWork-Swift instance before replacing the bundle.
 ## Privacy
 
 OpenWork-Swift is **local-first**. It talks only to LLM endpoints and MCP servers **you** configure. No bundled third-party analytics or telemetry.
+
+**A local turn never silently becomes a cloud one.** When the selected provider runs on this
+Mac and is switched off, OpenWork will substitute another *local* provider — and if there is
+none, it stops and says so rather than answering from whatever cloud endpoint happens to be
+enabled. This is not hypothetical: provider selection used to fall through to the first enabled
+provider in list order, and a cloud provider commonly sits earlier in that list than the
+built-in engine. A disabled *cloud* provider still falls back normally; the rule is about not
+leaving the machine.
+
+The built-in Apple Silicon provider means **in-process MLX and nothing else**. It never probes
+for a local server to answer on its behalf, so a turn you sent to it either ran here or failed
+with the reason.
 
 ---
 
