@@ -515,6 +515,18 @@ alone. `attributesOfItem` throws *and* its subscript returns `Any?`, so the obvi
 spelling is a `try?` around an `as?`, which yields a doubly-optional and invites exactly that
 mistake — `ImageTransport.fileSize(atPath:)` is now the one place that does it.
 
+**The loop breaker stopped covering reasoning the moment reasoning got its own channel.** It was
+gated on `deltaText` being non-empty, which held while reasoning arrived inline in the visible
+stream. Routing an unclosed `<think>` block to `deltaReasoning` left `deltaText` empty for the
+whole turn, so the breaker never ran: an exported session shows **12,117 characters of reasoning
+over 192.7 seconds with zero visible output**, stopped by hand. It now checks `fullReasoning` too.
+Reasoning models spiral exactly where the visible text never grows, which is what the breaker was
+built for — the guard and the thing it guards were separated by a later change to a different file.
+
+**The thinking panel had no way to get text out of it** — not selectable, no copy button. That is
+the one place holding the evidence when a turn goes wrong, and it could not be reported or
+diagnosed. Both added.
+
 **Dead-end detection only ever covered MCP.** `mcpDeadEnds` warns at 3 and disables MCP at 5, and
 nothing equivalent existed for first-party tools — so one could fail identically forever. Observed:
 a model called `screenshot_window` with the same arguments eight times and was still going when

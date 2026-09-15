@@ -25,6 +25,22 @@ public final class AgentStreamAccumulator {
             fullReasoning += deltaR
             message.reasoning = fullReasoning
             message.thinkingTimeMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+
+            // The loop breaker has to watch reasoning, not only visible text.
+            //
+            // It was gated on `deltaText` being non-empty, which held while reasoning arrived
+            // inline in the visible stream. Once `ReasoningChannel` started routing an
+            // unclosed `<think>` block to `deltaReasoning`, `deltaText` stayed empty for the
+            // whole turn and the breaker never ran — so a spiral produced 12,000 characters of
+            // reasoning over 192 seconds with nothing on screen, and had to be stopped by hand.
+            // This is precisely the case the breaker was built for: reasoning models spiral
+            // where the visible text never grows.
+            if self.isLoopBreakerEnabled && checkRepetitionLoop(in: fullReasoning) {
+                isLoopDetected = true
+                message.isStreaming = false
+                onUpdate(message)
+                return
+            }
         }
         if !chunk.deltaText.isEmpty {
             fullText += chunk.deltaText

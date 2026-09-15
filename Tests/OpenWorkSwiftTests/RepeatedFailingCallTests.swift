@@ -53,3 +53,38 @@ final class RepeatedFailingCallTests: XCTestCase {
         XCTAssertLessThan(failures[key] ?? 0, AgentRunner.identicalFailureLimit)
     }
 }
+
+/// The loop breaker has to watch reasoning, not only visible text.
+///
+/// It was gated on `deltaText` being non-empty, which held while reasoning arrived inline in the
+/// visible stream. Once `ReasoningChannel` began routing an unclosed `<think>` block to
+/// `deltaReasoning`, `deltaText` stayed empty for the whole turn and the breaker never ran — an
+/// exported session shows 12,117 characters of reasoning over 192.7 seconds with zero visible
+/// output, stopped by hand. Reasoning models spiral exactly where the visible text never grows,
+/// which is the case this was built for.
+final class LoopBreakerWatchesReasoningTests: XCTestCase {
+
+    func testARepeatingReasoningStreamIsDetected() {
+        let spiral = String(repeating: "Let me reconsider the screenshot I cannot see. ", count: 40)
+        XCTAssertTrue(AgentStreamAccumulator.detectsRepetitionLoop(in: spiral),
+                      "a degenerate reasoning stream must be detectable")
+    }
+
+    func testOrdinaryReasoningIsNotFlaggedAsALoop() {
+        let normal = """
+        The user wants the accessibility tree for Finder. I should call the tool rather than
+        guess. If it fails I will report the error verbatim and say what would unblock it,
+        because inventing a tree would be worse than returning nothing at all.
+        """
+        XCTAssertFalse(AgentStreamAccumulator.detectsRepetitionLoop(in: normal))
+    }
+
+    /// A turn that spirals in reasoning produces no visible text, so `deltaText` alone can never
+    /// be the trigger.
+    func testAReasoningOnlyStreamHasNoVisibleTextToTriggerOn() {
+        let chunk = LLMStreamChunk(deltaText: "", deltaReasoning: "thinking and thinking")
+        XCTAssertTrue(chunk.deltaText.isEmpty,
+                      "gating the breaker on deltaText skips this chunk entirely")
+        XCTAssertNotNil(chunk.deltaReasoning)
+    }
+}
