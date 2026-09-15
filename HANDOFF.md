@@ -7,10 +7,10 @@ against this machine, not remembered.
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` (`3521dce`) | 412 |
+| OpenWork-Swift | yes, `main` (`ebd556d`) | 418 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
-OpenWork went from 13 tests to 412 over this work. Released as 1.1.0.
+OpenWork went from 13 tests to 418 over this work. Released as 1.1.0.
 
 ---
 
@@ -357,6 +357,21 @@ To exercise them for real, grant Screen Recording and Accessibility to the built
 and drive them from the app. Screen Recording is only re-read at launch, so relaunch after
 granting.
 
+**Two bugs came out of running this against a real model, neither of which any test caught.**
+This is the feature justifying itself on its first outing.
+
+- **`run_app` terminated the app it launched**, so the two tools it exists to feed —
+  `screenshot_window` and `accessibility_tree` — structurally could not see it. Ornith hit that
+  within one turn: it launched the app, read "then terminated", and reasoned it would have to
+  relaunch before inspecting anything. It now leaves the app **running by default**, with
+  `quit_app` to clean up.
+- **`AgentRunner` discarded a failing tool's entire `output`**, keeping only `error`. Any tool
+  that fails *and* explains why lost the explanation. `run_app` returned `error: nil` for an app
+  that exited non-zero, so the model received the literal string `Error: unknown error` with the
+  exit code, stdout and stderr all thrown away. `describeToolResult` now keeps both, and a
+  failure with no reason says so instead of claiming the reason is unknown. **This affected every
+  tool, not just the new ones.**
+
 **`run_app` closes the loop `build_project` and `run_tests` leave open.** Note the gotcha it
 exists to remove: a child process started from a shell dies with that shell, so a hand-rolled
 launch looks successful and is gone before anything inspects it.
@@ -555,7 +570,7 @@ The model library on this machine is `/Volumes/Models/Models` (13 loadable bundl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 412 tests
+$SWIFT test                    # 418 tests
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list

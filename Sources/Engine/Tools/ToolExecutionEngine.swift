@@ -867,6 +867,30 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
 
+        case "quit_app":
+            let appQuery = (dict["app"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            guard !appQuery.isEmpty else {
+                return Self.failure("quit_app needs an 'app' — a bundle id or app name.", startTime)
+            }
+            guard let running = ScreenPerception.runningApplication(matching: appQuery) else {
+                return ToolExecutionResult(
+                    success: true,
+                    output: "'\(appQuery)' is not running — nothing to quit.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            let name = running.localizedName ?? appQuery
+            // Ask first. Force-killing a GUI app discards whatever it had not written yet, and
+            // the app under test is often the one holding the work.
+            let asked = running.terminate()
+            return ToolExecutionResult(
+                success: true,
+                output: asked
+                    ? "Asked '\(name)' to quit."
+                    : "'\(name)' refused to quit — it may have an unsaved-changes dialog open.",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
         case "worktree_create":
             let name = (dict["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty else {
@@ -975,6 +999,12 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         case "run_app", "launch_app":
             let rawPath = (dict["app_path"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             let seconds = min(max(dict["observe_seconds"] as? Double ?? 8, 1), 60)
+            // Left running by default. `run_app` used to always terminate, which made the two
+            // tools it exists to feed — screenshot_window and accessibility_tree — structurally
+            // unable to see what it had just launched. A real model hit that within one turn of
+            // the feature shipping: it launched the app, read "then terminated", and reasoned
+            // that it would have to relaunch to inspect anything.
+            let keepRunning = dict["keep_running"] as? Bool ?? true
             guard !rawPath.isEmpty else {
                 return Self.failure("run_app needs an 'app_path' — the built .app bundle or executable.", startTime)
             }
@@ -986,11 +1016,17 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 let outcome = try await AppRunner.run(
                     appBundle: URL(fileURLWithPath: full),
                     arguments: (dict["arguments"] as? [String]) ?? [],
-                    observeSeconds: seconds
+                    observeSeconds: seconds,
+                    terminateAfter: !keepRunning
                 )
-                var report = outcome.stillRunningAtDeadline
-                    ? "Launched and still running after \(Int(seconds))s (pid \(outcome.pid ?? 0)), then terminated.\n"
-                    : "Exited after less than \(Int(seconds))s with code \(outcome.exitCode.map(String.init) ?? "unknown").\n"
+                var report: String
+                if outcome.stillRunningAtDeadline {
+                    report = keepRunning
+                        ? "Launched and still running after \(Int(seconds))s (pid \(outcome.pid ?? 0)). It is STILL RUNNING — inspect it now with accessibility_tree or screenshot_window, then call quit_app when done.\n"
+                        : "Launched and still running after \(Int(seconds))s (pid \(outcome.pid ?? 0)), then terminated.\n"
+                } else {
+                    report = "Exited after less than \(Int(seconds))s with code \(outcome.exitCode.map(String.init) ?? "unknown").\n"
+                }
                 if let crash = outcome.crashReport {
                     report += "\n**A crash report was written:**\n```\n\(crash)\n```\n"
                 }
@@ -999,14 +1035,27 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 if !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { report += "\nstdout:\n```\n\(out)\n```\n" }
                 if !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { report += "\nstderr:\n```\n\(err)\n```\n" }
                 if outcome.stillRunningAtDeadline && outcome.crashReport == nil && out.isEmpty && err.isEmpty {
-                    report += "\nNo output. Staying up this long without logging is usually a clean launch — "
-                    report += "use screenshot_window or accessibility_tree while it runs to see the UI."
+                    report += "\nNo output, which for a GUI app is usually a clean launch. "
+                    report += keepRunning
+                        ? "Look at it: accessibility_tree or screenshot_window, app: \"\((full as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: ""))\"."
+                        : "Pass keep_running: true to leave it up long enough to inspect."
                 }
-                // Exiting immediately is a failure of the thing being asked, so report it as one.
+                // Exiting immediately is a failure of the thing being asked, so report it as one
+                // — but never as a bare failure. A `nil` error here reached a model as
+                // "Error: unknown error" with the exit code, stdout and stderr discarded.
+                let succeeded = outcome.stillRunningAtDeadline || outcome.exitCode == 0
+                let reason: String?
+                if succeeded {
+                    reason = nil
+                } else if outcome.crashReport != nil {
+                    reason = "the app crashed on launch"
+                } else {
+                    reason = "the app exited immediately with code \(outcome.exitCode.map(String.init) ?? "unknown")"
+                }
                 return ToolExecutionResult(
-                    success: outcome.stillRunningAtDeadline || outcome.exitCode == 0,
+                    success: succeeded,
                     output: report,
-                    error: outcome.crashReport != nil ? "the app crashed on launch" : nil,
+                    error: reason,
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
             } catch {

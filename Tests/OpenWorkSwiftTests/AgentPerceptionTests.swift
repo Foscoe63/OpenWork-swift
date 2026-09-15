@@ -71,3 +71,80 @@ final class AgentPerceptionTests: XCTestCase {
         XCTAssertFalse(ScreenPerception.runningApplicationNames().isEmpty)
     }
 }
+
+/// `run_app` exists to feed `accessibility_tree` and `screenshot_window`. It used to terminate
+/// the app it launched, which made that pairing structurally impossible — a real model hit it
+/// within one turn of the feature shipping, launched the app, read "then terminated", and
+/// concluded it would have to relaunch before it could inspect anything.
+final class RunAppLeavesTheAppInspectableTests: XCTestCase {
+
+    /// The default has to be "still running", or the perception tools have nothing to look at.
+    func testTheDefaultLeavesTheAppRunning() throws {
+        let schema = ToolSchemaCatalog.schemaJSON(for: "run_app")
+        let parsed = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(schema.utf8)) as? [String: Any]
+        )
+        let properties = try XCTUnwrap(parsed["properties"] as? [String: Any])
+        let keepRunning = try XCTUnwrap(properties["keep_running"] as? [String: Any])
+        let description = try XCTUnwrap(keepRunning["description"] as? String)
+        XCTAssertTrue(description.contains("Default true"), "got: \(description)")
+        XCTAssertTrue(description.contains("quit_app"), "the cleanup partner must be named")
+    }
+
+    /// A tool the model is told to call must exist to call.
+    func testQuitAppIsAvailableToCleanUp() {
+        var tools: [Tool] = []
+        _ = ToolSchemaCatalog.ensureParityTools(in: &tools)
+        let names = Set(tools.map(\.name))
+        for expected in ["run_app", "quit_app", "screenshot_window", "accessibility_tree"] {
+            XCTAssertTrue(names.contains(expected), "\(expected) is missing from the parity set")
+        }
+    }
+
+    /// Every perception tool ships with a real parameter schema — an empty one breaks tool
+    /// calling on local models, which is the whole reason ToolSchemaCatalog exists.
+    func testPerceptionToolsHaveRealSchemas() throws {
+        for name in ["run_app", "quit_app", "screenshot_window", "accessibility_tree",
+                     "worktree_create", "git_commit"] {
+            let schema = ToolSchemaCatalog.schemaJSON(for: name)
+            XCTAssertNotEqual(schema, #"{"type":"object","properties":{}}"#, "\(name) has no schema")
+            let parsed = try JSONSerialization.jsonObject(with: Data(schema.utf8)) as? [String: Any]
+            XCTAssertNotNil(parsed?["properties"], "\(name) schema does not parse")
+        }
+    }
+}
+
+/// A failing tool used to be reduced to `"Error: \(error)"` with `output` discarded, so any tool
+/// that fails *and* explains why lost the explanation. Found live: `run_app` on an app that
+/// exited immediately reported "Error: unknown error" and threw away the exit code, stdout and
+/// stderr — the only things that would have identified the fault.
+@MainActor
+final class FailingToolsKeepTheirDiagnosticsTests: XCTestCase {
+
+    func testAFailureKeepsTheOutputThatExplainsIt() {
+        let result = ToolExecutionResult(
+            success: false,
+            output: "Exited after less than 8s with code 1.\nstderr:\ndyld: missing symbol",
+            error: "the app exited immediately with code 1"
+        )
+        let described = AgentRunner.describeToolResult(result)
+        XCTAssertTrue(described.contains("the app exited immediately"), "the reason must survive")
+        XCTAssertTrue(described.contains("dyld: missing symbol"), "the diagnostics must survive")
+    }
+
+    /// The literal string a model received before this was fixed.
+    func testAFailureWithNoReasonSaysSoRatherThanSayingUnknown() {
+        let described = AgentRunner.describeToolResult(
+            ToolExecutionResult(success: false, output: "", error: nil)
+        )
+        XCTAssertFalse(described.contains("unknown error"))
+        XCTAssertTrue(described.contains("without giving a reason"), "got: \(described)")
+    }
+
+    func testASuccessIsPassedThroughUnchanged() {
+        let described = AgentRunner.describeToolResult(
+            ToolExecutionResult(success: true, output: "all good")
+        )
+        XCTAssertEqual(described, "all good")
+    }
+}

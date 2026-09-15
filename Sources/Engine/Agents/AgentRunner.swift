@@ -658,6 +658,20 @@ final class ConcurrentTextBox: @unchecked Sendable {
 
 @MainActor
 public final class AgentRunner {
+
+    /// What the model is told about a tool call, success or not.
+    ///
+    /// A failing tool used to be reduced to `"Error: \(error)"`, discarding `output` entirely —
+    /// so any tool that reports a failure *and* explains it lost the explanation at exactly the
+    /// moment it mattered. `run_app` hit this live: an app that exited non-zero produced
+    /// "Error: unknown error", with the exit code, stdout and stderr all thrown away.
+    static func describeToolResult(_ result: ToolExecutionResult) -> String {
+        if result.success { return result.output }
+        let reason = result.error ?? "the tool reported failure without giving a reason"
+        let detail = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return detail.isEmpty ? "Error: \(reason)" : "Error: \(reason)\n\n\(detail)"
+    }
+
     public static let shared = AgentRunner()
 
     private init() {}
@@ -1431,7 +1445,7 @@ public final class AgentRunner {
                             currentAgent: agent
                         )
                         resultSuccess = result.success
-                        resultOutput = result.success ? result.output : "Error: \(result.error ?? "unknown error")"
+                        resultOutput = Self.describeToolResult(result)
                         resultError = result.error
                         producedImages = result.producedImages
 
@@ -1455,7 +1469,7 @@ public final class AgentRunner {
                                 currentAgent: agent
                             )
                             resultSuccess = retry.success
-                            resultOutput = retry.success ? retry.output : "Error: \(retry.error ?? "unknown error")"
+                            resultOutput = Self.describeToolResult(retry)
                             resultError = retry.error
                             producedImages = retry.producedImages
                         }

@@ -44,6 +44,14 @@ public enum ToolSchemaCatalog {
     public static var parityDefaults: [Tool] {
         [
             Tool(
+                id: "quit_app",
+                name: "quit_app",
+                displayName: "Quit App",
+                description: "Ask a running app to quit. Use after run_app + inspection to clean up.",
+                category: .system,
+                parametersJsonSchema: schemas["quit_app"]!
+            ),
+            Tool(
                 id: "worktree_create",
                 name: "worktree_create",
                 displayName: "Create Worktree",
@@ -97,7 +105,7 @@ public enum ToolSchemaCatalog {
                 id: "run_app",
                 name: "run_app",
                 displayName: "Run App",
-                description: "Launch a built app, watch it for a few seconds, and report whether it stayed up, what it logged, and any crash report. build_project says the code compiled; this says it runs.",
+                description: "Launch a built app, watch it, and report whether it stayed up, what it logged, and any crash report. Leaves it RUNNING by default so accessibility_tree and screenshot_window can then inspect it; call quit_app when done. build_project says the code compiled; this says it runs.",
                 category: .system,
                 parametersJsonSchema: schemas["run_app"]!,
                 requiresApproval: true
@@ -247,7 +255,8 @@ public enum ToolSchemaCatalog {
         // Perception. The agent could write a view and never look at it; these are the eyes.
         "screenshot_window": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name, e.g. 'OpenWork' or 'ai.openwork.OpenWorkSwift'. The app must already be running - use run_app first."}},"required":["app"]}"#,
         "accessibility_tree": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name. The app must already be running."},"max_depth":{"type":"integer","description":"Tree depth budget, default 14."}},"required":["app"]}"#,
-        "run_app": #"{"type":"object","properties":{"app_path":{"type":"string","description":"Path to the built .app bundle or executable."},"observe_seconds":{"type":"number","description":"How long to watch before reporting, 1-60. Default 8."},"arguments":{"type":"array","items":{"type":"string"},"description":"Launch arguments."}},"required":["app_path"]}"#,
+        "run_app": #"{"type":"object","properties":{"app_path":{"type":"string","description":"Path to the built .app bundle or executable."},"observe_seconds":{"type":"number","description":"How long to watch before reporting, 1-60. Default 8."},"keep_running":{"type":"boolean","description":"Leave the app running so accessibility_tree and screenshot_window can inspect it. Default true. Call quit_app when finished."},"arguments":{"type":"array","items":{"type":"string"},"description":"Launch arguments."}},"required":["app_path"]}"#,
+        "quit_app": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name to quit."}},"required":["app"]}"#,
 
         "file_read": #"{"type":"object","properties":{"path":{"type":"string","description":"File path"},"offset":{"type":"integer","description":"First line (1-indexed, optional)"},"limit":{"type":"integer","description":"Max lines (optional)"}},"required":["path"]}"#,
         "read_file": #"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}"#,
