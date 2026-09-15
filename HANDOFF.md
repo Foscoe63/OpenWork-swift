@@ -7,7 +7,7 @@ against this machine, not remembered.
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` (`935f50a`) | 402 |
+| OpenWork-Swift | yes, `main` (`6d0f537`) | 402 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
 OpenWork went from 13 tests to 402 over this work. Released as 1.1.0.
@@ -483,7 +483,7 @@ The model library on this machine is `/Volumes/Models/Models` (13 loadable bundl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 374 tests
+$SWIFT test                    # 402 tests
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list
