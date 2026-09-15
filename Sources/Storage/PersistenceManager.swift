@@ -405,8 +405,15 @@ public final class PersistenceManager: @unchecked Sendable {
             saveProviders(loaded)
         }
 
-        // Hydrate API keys securely from macOS Keychain if available
-        for i in 0..<loaded.count {
+        // Hydrate API keys from the Keychain — but only where one can exist.
+        //
+        // This used to query all ten seeded providers, including every local one, which has no
+        // API key concept at all. Each query can block on securityd and, after the app's signing
+        // identity changes, each can raise its own authorisation dialog. That happens inside
+        // `AppState.loadAll()` on the main thread *before the window exists*, so the app appears
+        // to launch and then hang with nothing on screen — which is exactly what it did the
+        // first time this app was signed with a real certificate.
+        for i in 0..<loaded.count where loaded[i].type == .cloud {
             if let secret = KeychainManager.shared.getSecret(forKey: "provider_key_\(loaded[i].id)"), !secret.isEmpty {
                 loaded[i].apiKey = secret
             }
@@ -415,12 +422,21 @@ public final class PersistenceManager: @unchecked Sendable {
     }
 
     public func saveProviders(_ providers: [ModelProvider]) {
-        // Save sensitive API keys to Keychain securely and sanitize for JSON backup
-        let sanitized = providers
-        for i in 0..<sanitized.count {
+        // Move API keys into the Keychain, and actually remove them from the JSON.
+        //
+        // This said "sanitize for JSON backup" above `let sanitized = providers`, which copies
+        // the array and sanitises nothing. Keys were written to the Keychain *and* left in
+        // providers.json in plaintext, in a world-readable file — while the README advertised
+        // "cloud keys in Keychain". Both halves were true; the second one was the whole risk.
+        //
+        // The key is cleared only once the Keychain has accepted it, so a Keychain failure
+        // degrades to the old behaviour rather than destroying the user's credential.
+        var sanitized = providers
+        for i in sanitized.indices {
             let key = sanitized[i].apiKey
-            if !key.isEmpty {
-                KeychainManager.shared.saveSecret(key, forKey: "provider_key_\(sanitized[i].id)")
+            guard !key.isEmpty else { continue }
+            if KeychainManager.shared.saveSecret(key, forKey: "provider_key_\(sanitized[i].id)") {
+                sanitized[i].apiKey = ""
             }
         }
         storage.save(sanitized, to: "providers.json")

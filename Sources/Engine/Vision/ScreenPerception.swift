@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import ScreenCaptureKit
+import CoreGraphics
 import ApplicationServices
 
 /// Letting the agent see what it built.
@@ -48,7 +49,10 @@ public enum ScreenPerception {
             case .appNotRunning(let app):
                 return "No running application matches '\(app)'. Launch it first, or use run_app."
             case .noWindows(let app):
-                return "'\(app)' is running but has no on-screen windows to capture."
+                return """
+                '\(app)' is running but has no on-screen window to capture — it may be minimised, \
+                or have no window open. Screen Recording permission is granted; this is not that.
+                """
             case .captureFailed(let reason):
                 return "Capture failed: \(reason)"
             }
@@ -88,11 +92,24 @@ public enum ScreenPerception {
             throw PerceptionError.appNotRunning(appQuery)
         }
 
+        // Ask CoreGraphics, not ScreenCaptureKit, whether we may capture.
+        //
+        // `SCShareableContent` does **not** throw when Screen Recording is denied — it quietly
+        // returns a filtered list. Relying on a throw meant a denial was reported as "this app
+        // has no on-screen windows", about a window sitting visibly on the display. The wrong
+        // diagnosis is worse than the failure: it sends you looking at the app instead of at
+        // System Settings.
+        guard CGPreflightScreenCaptureAccess() else {
+            // Prompts the first time; afterwards macOS stays silent and the message has to carry
+            // the instructions itself.
+            CGRequestScreenCaptureAccess()
+            throw PerceptionError.screenRecordingDenied
+        }
+
         let content: SCShareableContent
         do {
             content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
         } catch {
-            // SCShareableContent is the permission gate; a denial surfaces here, not at capture.
             throw PerceptionError.screenRecordingDenied
         }
 
@@ -102,6 +119,8 @@ public enum ScreenPerception {
             .sorted { $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height }
 
         guard let window = windows.first else {
+            // Permission is confirmed above, so an empty list really does mean no window —
+            // minimised, closed, or an agent-style app that has none.
             throw PerceptionError.noWindows(app.localizedName ?? appQuery)
         }
 

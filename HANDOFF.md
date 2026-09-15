@@ -515,6 +515,17 @@ alone. `attributesOfItem` throws *and* its subscript returns `Any?`, so the obvi
 spelling is a `try?` around an `as?`, which yields a doubly-optional and invites exactly that
 mistake — `ImageTransport.fileSize(atPath:)` is now the one place that does it.
 
+**Changing the signing identity makes the Keychain treat the app as a stranger.** Signing with
+the new certificate immediately hung the app at launch with no window: `AppState.loadAll()` →
+`loadProviders()` → `KeychainManager.getSecret` → blocked on securityd, because a
+differently-signed binary needs fresh authorisation for every stored item, and that happens on
+the main thread *before the window exists*. `sample <pid>` is how to see it; a running
+`SecurityAgent` process is the tell that a dialog is waiting somewhere.
+
+Answer "Always Allow", once per item. Hydration now only queries **cloud** providers, so that is
+one prompt rather than ten — local providers have no API key concept and were being queried for
+one anyway.
+
 **Ad-hoc signing silently kills TCC permissions on every rebuild.** This cost an hour and looks
 like nothing else. With no Developer ID the app was ad-hoc signed, so macOS identified it by the
 binary's *content hash*: each rebuild invalidated Accessibility and Screen Recording **while

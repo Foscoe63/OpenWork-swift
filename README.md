@@ -266,7 +266,7 @@ Quit any running OpenWork instance before replacing the bundle.
 
 | | Area | Where / tip |
 |:---:|---|---|
-| 🔑 | **Providers** | Settings → AI Providers — cloud keys in Keychain; local base URLs for Ollama / LM Studio / MLX servers |
+| 🔑 | **Providers** | Settings → AI Providers — cloud keys are held in the macOS Keychain and removed from `providers.json`; local base URLs for Ollama / LM Studio / MLX servers |
 | 🧊 | **Local Models** | Local Models tab — pick an on-device MLX model |
 | 🔌 | **MCP** | Settings → Skills & MCP — enable servers, **Refresh Status** / **Test**, restore defaults (disabled) |
 | 📬 | **Dispatcher MCP servers** | e.g. `use the macuse mcp-server and check the mail on this computer` — the catalog is promoted on first listing |

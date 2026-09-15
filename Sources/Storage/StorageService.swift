@@ -39,6 +39,11 @@ public final class StorageService: @unchecked Sendable {
             let data = try encoder.encode(object)
             let url = fileURL(for: filename)
             try data.write(to: url, options: .atomic)
+            // Owner-only. These files hold workspace paths, full chat transcripts and — until
+            // `saveProviders` was fixed — API keys, and were being written world-readable (644).
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: url.path
+            )
         } catch {
             print("[StorageService] Error saving \(filename): \(error.localizedDescription)")
         }
