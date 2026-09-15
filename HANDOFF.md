@@ -454,9 +454,10 @@ read, which is correct.
 - **Narrowed re-runs for more runners.** Only SwiftPM, `go test` and pytest can be narrowed.
   cargo and npm return nil, correctly, and stay whole-suite.
 - **Notarised releases.** `OpenWork.zip` on the GitHub releases is ad-hoc signed, so macOS blocks
-  it on first launch and users need right-click → Open. This machine has no signing identity
-  (`security find-identity -v -p codesigning` reports none) and no notarytool profile, so it needs
-  your Developer ID and an App Store Connect key before the release workflow can be automated.
+  it on first launch and users need right-click → Open. Local development builds are now signed
+  (see the TCC note in Environment gotchas), but that self-signed certificate does nothing for
+  distribution: this still needs your Developer ID Application certificate and an App Store
+  Connect key for notarytool before the release workflow can be automated.
 
 ### Explicitly decided against — with reasons, so they are not re-proposed
 
@@ -513,6 +514,22 @@ shipped in the perception work because every build check in that session filtere
 alone. `attributesOfItem` throws *and* its subscript returns `Any?`, so the obvious inline
 spelling is a `try?` around an `as?`, which yields a doubly-optional and invites exactly that
 mistake — `ImageTransport.fileSize(atPath:)` is now the one place that does it.
+
+**Ad-hoc signing silently kills TCC permissions on every rebuild.** This cost an hour and looks
+like nothing else. With no Developer ID the app was ad-hoc signed, so macOS identified it by the
+binary's *content hash*: each rebuild invalidated Accessibility and Screen Recording **while
+leaving the app ticked in System Settings**. It reads "granted" and behaves "denied", and the
+perception tools fail with a permission error you can see is already granted.
+
+Fixed by signing local builds with a self-signed certificate — `Scripts/create-local-signing-cert.sh`,
+run once. TCC then keys on the certificate, so grants survive rebuilds. `codesign -dvvv` should
+report `Authority=OpenWork Local Signing`; if it says `Signature=adhoc`, the certificate is gone
+and permissions will start decaying again.
+
+**Changing to a stable certificate does not repair the existing entry** — the old grant points at
+the old ad-hoc identity, so it must be removed and re-added once, after which it stays. In
+macOS 26, Accessibility lives under **Privacy & Security › Device Control and Data Access**, not
+a pane of its own.
 
 **`swift-jinja` was declared and used by no target — and it was a version cap, not dead weight.**
 
