@@ -60,17 +60,27 @@ public struct SideInspectorView: View {
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: tab.icon)
-                            .font(.system(size: 11))
+                            .font(.system(size: 13))
                         Text(tab.title)
                             .font(.system(size: 9.5, weight: isSelected ? .bold : .regular))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
                     .foregroundColor(isSelected ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.textSecondary(for: appState.settings.theme))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 8)
                     .background(isSelected ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
                     .cornerRadius(6)
+                    // Without this the button is only clickable where something is *drawn* —
+                    // the glyph strokes and the letters. A selected tab paints an opaque
+                    // background so its whole area works; an unselected one is `Color.clear`,
+                    // so the padding and the gap between icon and label are dead. The tab you
+                    // are already on is easy to hit and every other one is not, which is a
+                    // strange bug to describe and an obvious one to feel.
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .help(tab.title)
             }
         }
         .padding(6)

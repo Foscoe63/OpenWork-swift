@@ -374,6 +374,9 @@ public struct SettingsView: View {
             .padding(.vertical, 6)
             .background(isSelected ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
             .cornerRadius(6)
+            // See SideInspectorView: a transparent background leaves only the glyphs clickable,
+            // so every row except the selected one has a hit target the size of its text.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

@@ -532,6 +532,14 @@ over 192.7 seconds with zero visible output**, stopped by hand. It now checks `f
 Reasoning models spiral exactly where the visible text never grows, which is what the breaker was
 built for — the guard and the thing it guards were separated by a later change to a different file.
 
+**A `.buttonStyle(.plain)` button is only clickable where something is drawn.** No
+`.contentShape(Rectangle())` means SwiftUI hit-tests the rendered glyphs — the icon strokes and
+the letters — not the frame or the padding. It is invisible in a screenshot and unmistakable in
+use: a *selected* tab paints an opaque background so its whole area works, while every unselected
+one has a hit target the size of its text. Reported as "the icons at the top are very small and
+hard to choose". Fixed in the inspector tab bar and the Settings sidebar; the pattern is common
+across `Sources/UI` and only matters where the background is `Color.clear`.
+
 **The thinking panel had no way to get text out of it** — not selectable, no copy button. That is
 the one place holding the evidence when a turn goes wrong, and it could not be reported or
 diagnosed. Both added.
