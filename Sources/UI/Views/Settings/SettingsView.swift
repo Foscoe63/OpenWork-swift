@@ -906,7 +906,7 @@ public struct SettingsView: View {
 
                 SettingsRow(title: "Custom MLX Models Directory", subtitle: "Specific folder on external SSD or hard drive", icon: "externaldrive.fill") {
                     HStack(spacing: 6) {
-                        TextField("/Volumes/Storage/Models", text: $appState.settings.customMLXModelsDirectory)
+                        TextField("e.g. /Volumes/YourDrive/Models — leave empty to sweep mounted volumes", text: $appState.settings.customMLXModelsDirectory)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 220)
                         Button("Browse...") {
@@ -1037,18 +1037,19 @@ public struct SettingsView: View {
     // 2. Preferences
     private var preferencesPage: some View {
         VStack(spacing: 16) {
-            SettingsCard(title: "Inference & Reasoning", description: "Sampling parameters for autonomous LLM responses", icon: "slider.horizontal.3") {
+            // Two cards, because these two groups behave differently and used to sit together
+            // under one heading that described only the second. Temperature, Max Tokens and
+            // Reasoning Effort are per-agent fields; a turn reads `agent.temperature`, so these
+            // seed *new* agents and never touch an existing one. Top-P and the penalties below
+            // are read live from settings on every request. A user dragging Temperature to 0.1
+            // for "precise coding" was changing nothing about the agent actually answering.
+            SettingsCard(title: "Defaults for New Agents", description: "Seeds the agent editor. Existing agents keep their own values — change those in AI Agents.", icon: "person.badge.plus") {
                 SettingsRow(title: "Temperature (\(String(format: "%.2f", appState.settings.defaultTemperature)))", subtitle: "Lower for precise coding, higher for creative research", icon: "thermometer.medium") {
                     Slider(value: $appState.settings.defaultTemperature, in: 0.0...1.0, step: 0.05)
                         .frame(width: 180)
                 }
 
-                SettingsRow(title: "Top-P Sampling (\(String(format: "%.2f", appState.settings.defaultTopP)))", subtitle: "Nucleus sampling probability threshold", icon: "chart.bar.xaxis") {
-                    Slider(value: $appState.settings.defaultTopP, in: 0.1...1.0, step: 0.05)
-                        .frame(width: 180)
-                }
-
-                SettingsRow(title: "Max Output Tokens (\(appState.settings.defaultMaxTokens))", subtitle: "Maximum completion token ceiling per turn", icon: "number") {
+                SettingsRow(title: "Max Output Tokens (\(appState.settings.defaultMaxTokens))", subtitle: "Completion token ceiling a new agent starts with", icon: "number") {
                     Stepper("", value: $appState.settings.defaultMaxTokens, in: 1024...32768, step: 1024)
                 }
 
@@ -1059,6 +1060,23 @@ public struct SettingsView: View {
                         }
                     }
                     .frame(width: 200)
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Apply to All Existing Agents") {
+                        applyAgentDefaultsToAllAgents()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.top, 2)
+            }
+
+            SettingsCard(title: "Sampling", description: "Read live on every request, for every agent and provider", icon: "slider.horizontal.3") {
+                SettingsRow(title: "Top-P Sampling (\(String(format: "%.2f", appState.settings.defaultTopP)))", subtitle: "Nucleus sampling probability threshold", icon: "chart.bar.xaxis") {
+                    Slider(value: $appState.settings.defaultTopP, in: 0.1...1.0, step: 0.05)
+                        .frame(width: 180)
                 }
             }
 
@@ -1151,6 +1169,14 @@ public struct SettingsView: View {
                 SettingsRow(title: "Auto-Compact Context", subtitle: "Summarize old messages when nearing context limit", icon: "arrow.triangle.merge") {
                     Toggle("", isOn: $appState.settings.autoCompactContext)
                         .toggleStyle(.switch)
+                }
+
+                // `AgentRunner` has always read this; it had no control anywhere, so the only way
+                // to change the threshold was to hand-edit settings.json.
+                if appState.settings.autoCompactContext {
+                    SettingsRow(title: "Compaction Threshold (\(appState.settings.contextCompactionThresholdTokens / 1000)k tokens)", subtitle: "Transcript size that triggers a summarize pass", icon: "arrow.down.right.and.arrow.up.left") {
+                        Stepper("", value: $appState.settings.contextCompactionThresholdTokens, in: 8000...256_000, step: 4000)
+                    }
                 }
 
                 SettingsRow(title: "Audio Notifications", subtitle: "Play chime when agents finish long tasks", icon: "speaker.wave.2") {
@@ -1706,7 +1732,16 @@ public struct SettingsView: View {
 
                 SettingsRow(title: "Generative Media & MLX Vision", subtitle: "Enable DALL-E, local Stable Diffusion, and Apple Vision tools", icon: "paintpalette.fill") {
                     Toggle("", isOn: Binding(
-                        get: { appState.settings.imageGenerationEnabled },
+                        // Read the tools, not the stored Bool. This toggle writes through to the
+                        // `.mediaVision` category, so enabling one of those tools from the Tools
+                        // page left the switch reading "off" while the tools were on. A switch
+                        // that reports the opposite of the truth is worse than one that does
+                        // nothing.
+                        get: {
+                            let media = appState.tools.filter { $0.category == .mediaVision }
+                            guard !media.isEmpty else { return appState.settings.imageGenerationEnabled }
+                            return media.contains { $0.isEnabled }
+                        },
                         set: { val in
                             appState.settings.imageGenerationEnabled = val
                             appState.updateSettings(appState.settings)
@@ -2038,8 +2073,15 @@ public struct SettingsView: View {
                     Stepper("", value: $appState.settings.maxGlobalSubAgentDepth, in: 1...5)
                 }
 
-                SettingsRow(title: "Inter-Agent Collaboration Hub", subtitle: "Enable direct agent message routing", icon: "bubble.left.and.exclamationmark.bubble.right.fill") {
+                SettingsRow(title: "Multi-Agent Collaboration Room", subtitle: "Show the collaboration tab in AI Agents", icon: "bubble.left.and.exclamationmark.bubble.right.fill") {
                     Toggle("", isOn: $appState.settings.enableAgentCollaborationRoom)
+                        .toggleStyle(.switch)
+                }
+
+                // Also previously unreadable and unsettable: the Agent Messages tab was always
+                // in the inspector whatever this said.
+                SettingsRow(title: "Agent Messages Inspector Tab", subtitle: "Show the inter-agent communication log", icon: "list.bullet.rectangle") {
+                    Toggle("", isOn: $appState.settings.showInterAgentCommunicationLogs)
                         .toggleStyle(.switch)
                 }
             }
@@ -2116,8 +2158,14 @@ public struct SettingsView: View {
                     Stepper("", value: $appState.settings.editorFontSize, in: 10...22)
                 }
 
-                SettingsRow(title: "Translucent Window Background", subtitle: "Enable macOS vibrancy effect", icon: "macwindow") {
+                SettingsRow(title: "Translucent Window Background", subtitle: "Show macOS vibrancy behind the sidebar and inspector", icon: "macwindow") {
                     Toggle("", isOn: $appState.settings.useTranslucentBackground)
+                        .toggleStyle(.switch)
+                }
+
+                // `compactSidebar` was stored with no reader and no control anywhere.
+                SettingsRow(title: "Compact Sidebar", subtitle: "Tighter rows and no workspace subtitle", icon: "sidebar.left") {
+                    Toggle("", isOn: $appState.settings.compactSidebar)
                         .toggleStyle(.switch)
                 }
             }
@@ -2172,7 +2220,8 @@ public struct SettingsView: View {
         VStack(spacing: 16) {
             SettingsCard(title: "Software Updates & Branding", description: "OpenWork-Swift standalone desktop client", icon: "arrow.triangle.2.circlepath") {
                 HStack(spacing: 14) {
-                    if let appIconImage = NSImage(contentsOfFile: "/Volumes/Storage/Icons/OpenWork__Alt__8jJIgN0S63_icns-95b0064150.icns") ?? NSImage(named: "AppIcon") {
+                    // Was a hardcoded absolute path into a volume on one developer's machine.
+                    if let appIconImage = NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage {
                         Image(nsImage: appIconImage)
                             .resizable()
                             .frame(width: 48, height: 48)
@@ -2183,7 +2232,8 @@ public struct SettingsView: View {
                         Text("OpenWork-Swift")
                             .font(.system(size: 14, weight: .bold))
                             .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
-                        Text("Version 1.0.0 (Darwin arm64)")
+                        // Was hardcoded "1.0.0" while the shipped release was 1.1.0.
+                        Text("Version \(Self.appVersionString) (Darwin arm64)")
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
                         Text("Autonomous Multi-Agent AI Engineering Platform")
@@ -2204,16 +2254,14 @@ public struct SettingsView: View {
 
                 Divider()
 
-                SettingsRow(title: "Auto-Check Updates", subtitle: "Periodically check for releases on launch", icon: "bell") {
-                    Toggle("", isOn: Binding(
-                        get: { appState.settings.autoCheckForUpdates },
-                        set: { val in
-                            appState.settings.autoCheckForUpdates = val
-                            appState.updateSettings(appState.settings)
-                            appState.showToast(val ? "Auto-check for updates enabled" : "Auto-check for updates disabled")
-                        }
-                    ))
-                    .toggleStyle(.switch)
+                // The switch beside a disabled button promised periodic checks against an
+                // update feed that does not exist, and toasted "Auto-check for updates enabled"
+                // to confirm it. Same fabrication as the "you are on the latest version" message
+                // the button above used to show, one row down.
+                SettingsRow(title: "Auto-Check Updates", subtitle: "Unavailable: this build has no update feed to check", icon: "bell") {
+                    Toggle("", isOn: .constant(false))
+                        .toggleStyle(.switch)
+                        .disabled(true)
                 }
             }
         }
@@ -2261,27 +2309,63 @@ public struct SettingsView: View {
                         .toggleStyle(.switch)
                 }
 
-                SettingsRow(title: "Verbose Logging", subtitle: "Log raw SSE chunks and tool execution payloads", icon: "doc.plaintext") {
+                SettingsRow(title: "Verbose Logging", subtitle: "Log raw SSE chunks and tool payloads to the unified log (subsystem ai.openwork)", icon: "doc.plaintext") {
                     Toggle("", isOn: $appState.settings.verboseLogging)
                         .toggleStyle(.switch)
                 }
             }
 
-            SettingsCard(title: "Live Runtime Telemetry", description: "Real-time state snapshot", icon: "chart.xyaxis.line") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("• Storage Path: \(StorageService.shared.baseDirectory.path)")
-                        .font(.system(size: 11, design: .monospaced))
-                    Text("• Registered Agents: \(appState.agents.count)")
-                        .font(.system(size: 11, design: .monospaced))
-                    Text("• Stored Sessions: \(appState.sessions.count)")
-                        .font(.system(size: 11, design: .monospaced))
-                    Text("• Enabled Tools: \(appState.tools.filter { $0.isEnabled }.count)")
-                        .font(.system(size: 11, design: .monospaced))
+            // `developerMode` was stored, was labelled "Enable advanced telemetry and model
+            // diagnostics", and nothing read it — this card was here either way. It gates the
+            // card rather than the page, or the switch would hide itself.
+            if appState.settings.developerMode {
+                SettingsCard(title: "Live Runtime Telemetry", description: "Real-time state snapshot", icon: "chart.xyaxis.line") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("• Storage Path: \(StorageService.shared.baseDirectory.path)")
+                            .font(.system(size: 11, design: .monospaced))
+                        Text("• Registered Agents: \(appState.agents.count)")
+                            .font(.system(size: 11, design: .monospaced))
+                        Text("• Stored Sessions: \(appState.sessions.count)")
+                            .font(.system(size: 11, design: .monospaced))
+                        Text("• Enabled Tools: \(appState.tools.filter { $0.isEnabled }.count)")
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.black.opacity(0.3))
+                    .cornerRadius(8)
                 }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.black.opacity(0.3))
-                .cornerRadius(8)
+
+                // The "model diagnostics" half of that label. The search roots in particular
+                // existed only inside a not-downloaded error message, so a user whose library
+                // sits somewhere unusual had no way to see where the app looked.
+                SettingsCard(title: "MLX Diagnostics", description: "Resident models, memory policy, and every directory searched for weights", icon: "cpu") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("• Resident models: \(appState.loadedMLXModelIds.isEmpty ? "none" : appState.loadedMLXModelIds.joined(separator: ", "))")
+                            .font(.system(size: 11, design: .monospaced))
+                        Text(String(
+                            format: "• GPU budget: %.0f%% of %.1f GB = %.1f GB",
+                            appState.settings.mlxGpuMemoryBudgetRatio * 100,
+                            LocalMLXEngine.physicalRAMGB,
+                            LocalMLXEngine.physicalRAMGB * appState.settings.mlxGpuMemoryBudgetRatio
+                        ))
+                        .font(.system(size: 11, design: .monospaced))
+                        Text("• Discovered models: \(appState.localMLXModels.filter { $0.isDownloaded }.count)")
+                            .font(.system(size: 11, design: .monospaced))
+                        Text("• Search roots:")
+                            .font(.system(size: 11, design: .monospaced))
+                        ForEach(LocalMLXEngine.knownMLXSearchRoots(settings: appState.settings), id: \.self) { root in
+                            Text("    \(root.path)")
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.black.opacity(0.3))
+                    .cornerRadius(8)
+                }
             }
         }
     }
@@ -2896,6 +2980,38 @@ public struct SettingsView: View {
             }
             mcpStatusBusy = false
         }
+    }
+
+    /// The version this build actually is, from its own bundle.
+    ///
+    /// The About row hardcoded "1.0.0" while the shipped release was 1.1.0. `project.yml` now sets
+    /// MARKETING_VERSION, so the string here and the bundle agree by construction.
+    static var appVersionString: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        switch (short, build) {
+        case let (short?, build?) where short != build: return "\(short) (\(build))"
+        case let (short?, _): return short
+        default: return "unknown"
+        }
+    }
+
+    /// Push the new-agent defaults onto every existing agent.
+    ///
+    /// Without this the settings above are reachable only by creating a new agent, which is a
+    /// strange thing to have to do to change the temperature of the one you already use.
+    private func applyAgentDefaultsToAllAgents() {
+        let temperature = appState.settings.defaultTemperature
+        let maxTokens = appState.settings.defaultMaxTokens
+        let effort = appState.settings.defaultReasoningEffort
+        for index in appState.agents.indices {
+            appState.agents[index].temperature = temperature
+            appState.agents[index].maxTokens = maxTokens
+            appState.agents[index].reasoningEffort = effort
+        }
+        PersistenceManager.shared.saveAgents(appState.agents)
+        let count = appState.agents.count
+        appState.showToast("Applied to \(count) agent\(count == 1 ? "" : "s")")
     }
 
     private func tabTitle(for tab: String) -> String {

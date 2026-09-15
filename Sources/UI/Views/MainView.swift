@@ -99,6 +99,13 @@ public struct MainView: View {
             }
         }
         .frame(minWidth: WindowLayoutStore.minWindowWidth, minHeight: WindowLayoutStore.minWindowHeight)
+        // "Translucent Window Background" was a stored switch nothing read. The material goes
+        // behind everything; the sidebar and inspector thin their fills so it shows through.
+        .background {
+            if appState.settings.useTranslucentBackground {
+                VisualEffectBackground().ignoresSafeArea()
+            }
+        }
         .background(WindowFramePersistenceInstaller())
         .onAppear {
             sidebarWidth = CGFloat(WindowLayoutStore.sidebarWidth)

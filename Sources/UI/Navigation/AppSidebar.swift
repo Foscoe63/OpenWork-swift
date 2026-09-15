@@ -48,7 +48,7 @@ public struct AppSidebar: View {
             bottomFooter
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ThemeColors.sidebarBg(for: appState.settings.theme))
+        .background(ThemeColors.paneBg(for: appState.settings.theme, translucent: appState.settings.useTranslucentBackground))
     }
 
     // MARK: - Workspace Header
@@ -67,10 +67,15 @@ public struct AppSidebar: View {
                         .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
                         .lineLimit(1)
 
-                    Text(workspaceSubtitle(for: appState.currentWorkspace))
-                        .font(.system(size: 9.5))
-                        .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
-                        .lineLimit(1)
+                    // `compactSidebar` was a stored Bool with neither a reader nor a control.
+                    // Compact means fewer secondary lines and tighter rows, not a narrower
+                    // pane — the width is a drag handle the user already owns.
+                    if !appState.settings.compactSidebar {
+                        Text(workspaceSubtitle(for: appState.currentWorkspace))
+                            .font(.system(size: 9.5))
+                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                            .lineLimit(1)
+                    }
                 }
                 Spacer()
                 Image(systemName: "chevron.up.chevron.down")
@@ -78,7 +83,7 @@ public struct AppSidebar: View {
                     .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.vertical, appState.settings.compactSidebar ? 5 : 8)
             .contentShape(Rectangle())
         }
     }
@@ -119,7 +124,7 @@ public struct AppSidebar: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6.5)
+            .padding(.vertical, appState.settings.compactSidebar ? 3 : 6.5)
             .background(isSelected ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
             .cornerRadius(8)
         }

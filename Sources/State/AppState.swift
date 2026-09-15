@@ -123,6 +123,12 @@ public final class AppState: ObservableObject {
     @Published public var settings: AppSettings = AppSettings.default {
         didSet {
             persistence.saveSettings(settings)
+            // Switching the Agent Messages log off while its tab is selected would leave the
+            // inspector on a tab that is no longer in the tab bar. Corrected here rather than in
+            // the view, so nothing publishes a change during a view update.
+            if !settings.showInterAgentCommunicationLogs, inspectorTab == .comms {
+                inspectorTab = .subagents
+            }
         }
     }
     @Published public var interAgentMessages: [AgentMessage] = []
@@ -174,12 +180,11 @@ public final class AppState: ObservableObject {
     public func loadAll() {
         self.workspaces = persistence.loadWorkspaces()
         self.settings = persistence.loadSettings()
-        // Prefer the shared Storage Models library when the setting is still empty.
-        if settings.customMLXModelsDirectory.isEmpty,
-           FileManager.default.fileExists(atPath: "/Volumes/Storage/Models") {
-            settings.customMLXModelsDirectory = "/Volumes/Storage/Models"
-            persistence.saveSettings(settings)
-        }
+        // There used to be a block here that wrote "/Volumes/Storage/Models" into the user's
+        // settings whenever that path existed and the field was empty — a hardcoded developer
+        // volume, persisted into their configuration without asking. `knownMLXSearchRoots`
+        // sweeps the mounted volumes for library folders already, so an empty field is not a
+        // gap to be filled.
         self.providers = persistence.loadProviders()
         self.agents = persistence.loadAgents()
         self.sessions = persistence.loadSessions()

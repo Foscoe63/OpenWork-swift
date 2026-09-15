@@ -67,7 +67,34 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         return env
     }
 
+    /// Run a tool, logging the call and its result when verbose logging is on.
+    ///
+    /// The wrapper exists because `performExecute` returns from a couple of dozen places; the
+    /// "Verbose Logging" switch promises "tool execution payloads" by name, and threading a log
+    /// call through every exit is how one of them ends up missing it.
     public func execute(
+        toolName: String,
+        argumentsJson: String,
+        workspace: Workspace,
+        currentAgent: Agent
+    ) async -> ToolExecutionResult {
+        AppLog.verbose(.tools, "call \(toolName) args=\(AppLog.truncated(argumentsJson))")
+        let result = await performExecute(
+            toolName: toolName,
+            argumentsJson: argumentsJson,
+            workspace: workspace,
+            currentAgent: currentAgent
+        )
+        AppLog.verbose(
+            .tools,
+            "result \(toolName) success=\(result.success) ms=\(Int(result.durationMs)) "
+                + (result.error.map { "error=\($0) " } ?? "")
+                + "output=\(AppLog.truncated(result.output))"
+        )
+        return result
+    }
+
+    private func performExecute(
         toolName: String,
         argumentsJson: String,
         workspace: Workspace,

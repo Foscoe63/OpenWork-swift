@@ -20,7 +20,15 @@ public struct SideInspectorView: View {
             case .subagents:
                 SubAgentTreeVisualizer(appState: appState)
             case .comms:
-                InterAgentCommLogView(appState: appState)
+                // The selection is corrected in `AppState.settings.didSet`, not here. Mutating
+                // an `@Published` from a view body's `onAppear` — which is what this used to do
+                // — publishes a change during a view update, and `inspectorTab.didSet` writes to
+                // `WindowLayoutStore` on top of that.
+                if appState.settings.showInterAgentCommunicationLogs {
+                    InterAgentCommLogView(appState: appState)
+                } else {
+                    SubAgentTreeVisualizer(appState: appState)
+                }
             case .artifacts:
                 ArtifactsPanelView(appState: appState)
             case .tools:
@@ -30,13 +38,22 @@ public struct SideInspectorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ThemeColors.sidebarBg(for: appState.settings.theme))
+        .background(ThemeColors.paneBg(for: appState.settings.theme, translucent: appState.settings.useTranslucentBackground))
+    }
+
+    /// `showInterAgentCommunicationLogs` had no reader and no control — the Agent Messages tab
+    /// was always here. Hiding the selected tab has to move the selection, or the inspector shows
+    /// a tab bar with nothing selected and the content of a tab the user just switched off.
+    private var visibleTabs: [InspectorTab] {
+        InspectorTab.allCases.filter {
+            $0 != .comms || appState.settings.showInterAgentCommunicationLogs
+        }
     }
 
     // MARK: - Inspector Tab Bar
     private var inspectorTabBar: some View {
         HStack(spacing: 4) {
-            ForEach(InspectorTab.allCases) { tab in
+            ForEach(visibleTabs) { tab in
                 let isSelected = appState.inspectorTab == tab
                 Button {
                     appState.inspectorTab = tab
@@ -165,7 +182,7 @@ public struct IntegratedTerminalView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(ThemeColors.sidebarBg(for: appState.settings.theme))
+            .background(ThemeColors.paneBg(for: appState.settings.theme, translucent: appState.settings.useTranslucentBackground))
 
             Divider()
 

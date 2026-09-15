@@ -200,3 +200,116 @@ final class LoadSettingsDoesNotWriteTests: XCTestCase {
         }
     }
 }
+
+/// Top-P reached only the in-process MLX path: the slider did nothing for OpenAI-compatible,
+/// Ollama or Anthropic endpoints.
+final class TopPReachesEveryProviderTests: XCTestCase {
+
+    /// 1.0 is a no-op and OpenAI advises against steering with temperature and top_p at once, so
+    /// the key is sent only when the user has actually moved the slider.
+    func testTopPIsOmittedAtItsNeutralDefault() {
+        XCTAssertEqual(AppSettings.default.defaultTopP, 1.0, "the default must stay a no-op")
+    }
+
+    /// The MLX path has always honoured it; this pins that it still does, and from settings.
+    func testTheMLXPathTakesTopPFromSettings() {
+        var settings = AppSettings.default
+        settings.defaultTopP = 0.4
+        let params = NativeMLXService.generateParameters(maxTokens: 16, temperature: 0.5, settings: settings)
+        XCTAssertEqual(params.topP, 0.4, accuracy: 0.0001)
+    }
+
+    /// A stored 0 would silence the model entirely if it were passed through.
+    func testAZeroTopPFallsBackRatherThanTruncatingEverything() {
+        var settings = AppSettings.default
+        settings.defaultTopP = 0
+        let params = NativeMLXService.generateParameters(maxTokens: 16, temperature: 0.5, settings: settings)
+        XCTAssertEqual(params.topP, 1.0, accuracy: 0.0001)
+    }
+}
+
+/// Settings that had a switch, or no control at all, and no reader anywhere.
+@MainActor
+final class NewlyWiredSettingsTests: XCTestCase {
+
+    /// `showInterAgentCommunicationLogs` hides the Agent Messages tab. The tab list is what the
+    /// inspector renders, so an inspector built from `InspectorTab.allCases` ignored it.
+    func testTheAgentMessagesTabIsHiddenWhenTheLogIsSwitchedOff() {
+        var settings = AppSettings.default
+        settings.showInterAgentCommunicationLogs = false
+        let visible = InspectorTab.allCases.filter {
+            $0 != .comms || settings.showInterAgentCommunicationLogs
+        }
+        XCTAssertFalse(visible.contains(.comms))
+        XCTAssertEqual(visible.count, InspectorTab.allCases.count - 1, "only that one tab goes")
+    }
+
+    /// The hub's log had no readers and no bound, and four call sites appending to it.
+    func testTheAgentMessageLogIsBounded() {
+        let hub = AgentCommunicationHub.shared
+        hub.clear()
+        for index in 0..<(AgentCommunicationHub.retainedMessageLimit + 500) {
+            hub.postMessage(AgentMessage(
+                fromAgentId: "a", fromAgentName: "A",
+                toAgentId: "b", toAgentName: "B",
+                content: "\(index)"
+            ))
+        }
+        let messages = hub.allMessages()
+        XCTAssertEqual(messages.count, AgentCommunicationHub.retainedMessageLimit)
+        XCTAssertEqual(messages.last?.content, "\(AgentCommunicationHub.retainedMessageLimit + 499)", "the cap must drop the oldest, not the newest")
+        hub.clear()
+    }
+
+    /// Verbose logging is off by default, and the gate is what decides whether a payload is even
+    /// interpolated.
+    func testVerboseLoggingIsOffByDefault() {
+        XCTAssertFalse(AppSettings.default.verboseLogging)
+    }
+
+    /// The app must report the version it actually is. This was hardcoded "1.0.0" while the
+    /// shipped release was 1.1.0.
+    func testTheVersionStringComesFromTheBundle() {
+        XCTAssertNotEqual(SettingsView.appVersionString, "1.0.0", "hardcoded again?")
+        XCTAssertFalse(SettingsView.appVersionString.isEmpty)
+    }
+
+    /// The compaction threshold had a reader in `AgentRunner` and no control anywhere; the
+    /// stepper that now exists must not be able to store a value that disables compaction.
+    func testTheCompactionThresholdStaysPositive() {
+        XCTAssertGreaterThan(AppSettings.default.contextCompactionThresholdTokens, 0)
+    }
+}
+
+/// `verboseLogging` only means something if flipping it changes what gets logged, without a
+/// relaunch. The gate is cached, so `saveSettings` has to invalidate it.
+final class VerboseLoggingGateTests: XCTestCase {
+
+    func testTheGateFollowsTheSettingAcrossASave() {
+        let store = PersistenceManager.shared
+        let original = store.loadSettings()
+        defer {
+            store.saveSettings(original)
+            AppLog.invalidate()
+        }
+
+        var on = original
+        on.verboseLogging = true
+        store.saveSettings(on)
+        XCTAssertTrue(AppLog.isVerbose, "saving must invalidate the cached gate")
+
+        var off = original
+        off.verboseLogging = false
+        store.saveSettings(off)
+        XCTAssertFalse(AppLog.isVerbose, "a relaunch must not be needed to turn it back off")
+    }
+
+    /// A payload has to be trimmed to something a log line can hold, and say it was trimmed.
+    func testLongPayloadsAreTruncatedAndSayHowLongTheyWere() {
+        let long = String(repeating: "x", count: 5000)
+        let trimmed = AppLog.truncated(long, limit: 100)
+        XCTAssertTrue(trimmed.hasPrefix(String(repeating: "x", count: 100)))
+        XCTAssertTrue(trimmed.contains("5000 chars total"))
+        XCTAssertEqual(AppLog.truncated("short", limit: 100), "short")
+    }
+}

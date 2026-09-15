@@ -142,6 +142,7 @@
 		EE2F4C5C60961F1851667B29 /* MCPEffectCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654E1A64A5FD024EC68F0B79 /* MCPEffectCatalog.swift */; };
 		EE4B28F7C964275571EA3170 /* ProvidersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77FB7E4EB8A354B28338BCB1 /* ProvidersView.swift */; };
 		EF7B02CF91DB2422C835AFE7 /* ProviderRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2B607A0096A0E91FE5BBBC /* ProviderRouter.swift */; };
+		F0FCB1DFD95FA4D1590A35EB /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C91AD32377B4ABF826FD605B /* AppLog.swift */; };
 		F316ACD45FDD8F34AE536B19 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39DBC95F559B997C4EE0A643 /* SettingsView.swift */; };
 		F373D879A0B774422F5344C0 /* ToolCallCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E7FA7A51B91D06DB9DE2451 /* ToolCallCardView.swift */; };
 		F3BF1AC15D981B7D70473970 /* SkillsAndMcpModals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 450CEB362948C974CE49355A /* SkillsAndMcpModals.swift */; };
@@ -281,6 +282,7 @@
 		C141C1FA405606BE54ACF2B1 /* LoadWatchdogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoadWatchdogTests.swift; sourceTree = "<group>"; };
 		C193C2751861F29065057037 /* AgentCommunicationHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCommunicationHub.swift; sourceTree = "<group>"; };
 		C6F1ECABCC17DFB05140C0E7 /* UserChoiceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserChoiceManager.swift; sourceTree = "<group>"; };
+		C91AD32377B4ABF826FD605B /* AppLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLog.swift; sourceTree = "<group>"; };
 		C921F2067565A25DB554BD9C /* AppSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSidebar.swift; sourceTree = "<group>"; };
 		CEA8DE54FB8B872ABD8B10EB /* ExtensionPluginModals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionPluginModals.swift; sourceTree = "<group>"; };
 		CEEC8F8318BAD62B0D7A3010 /* CodeIndexAndCompactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeIndexAndCompactionTests.swift; sourceTree = "<group>"; };
@@ -711,6 +713,7 @@
 		C6E85D44771CF5C0813E274F /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				C91AD32377B4ABF826FD605B /* AppLog.swift */,
 				56AAA06FB40C914404F6276E /* AsyncDeadline.swift */,
 				D9D4BEB27831CFE0CBF62046 /* LaunchAtLogin.swift */,
 				029050CBBECD5CCE3CF55123 /* ViewExtensions.swift */,
@@ -909,6 +912,7 @@
 				313D4FB5E9CEAF5807F31D28 /* AgentsView.swift in Sources */,
 				9637BC087675828D448B39B2 /* AnthropicService.swift in Sources */,
 				92191F53CA07034C5B96266B /* AppExtensionPlugin.swift in Sources */,
+				F0FCB1DFD95FA4D1590A35EB /* AppLog.swift in Sources */,
 				B4FC1B362637B29CD76B3E1D /* AppSidebar.swift in Sources */,
 				D3E4D759F620DF88E0D43C3A /* AppState.swift in Sources */,
 				9F3461D19EB1A7FD1188132A /* ArtifactsPanelView.swift in Sources */,
@@ -1070,6 +1074,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5XKHL47YG3;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = OpenWork;
@@ -1081,6 +1086,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.1.0;
 				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
@@ -1267,6 +1273,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5XKHL47YG3;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = OpenWork;
@@ -1278,6 +1285,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.1.0;
 				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";

@@ -131,17 +131,23 @@ public final class OllamaService: LLMProviderClient, @unchecked Sendable {
         let presPenalty = loadedSettings.autoAdjustPenaltiesForLocalModels ? max(0.30, loadedSettings.defaultPresencePenalty) : loadedSettings.defaultPresencePenalty
         let freqPenalty = loadedSettings.autoAdjustPenaltiesForLocalModels ? max(0.30, loadedSettings.defaultFrequencyPenalty) : loadedSettings.defaultFrequencyPenalty
 
+        var options: [String: Any] = [
+            "temperature": temperature,
+            "num_predict": maxTokens,
+            "repeat_penalty": repPenalty,
+            "presence_penalty": presPenalty,
+            "frequency_penalty": freqPenalty
+        ]
+        // See OpenAIService: the Top-P setting used to reach only the in-process MLX path.
+        if loadedSettings.defaultTopP > 0, loadedSettings.defaultTopP < 1.0 {
+            options["top_p"] = loadedSettings.defaultTopP
+        }
+
         var body: [String: Any] = [
             "model": model.id,
             "messages": formattedMessages,
             "stream": true,
-            "options": [
-                "temperature": temperature,
-                "num_predict": maxTokens,
-                "repeat_penalty": repPenalty,
-                "presence_penalty": presPenalty,
-                "frequency_penalty": freqPenalty
-            ]
+            "options": options
         ]
 
         if !tools.isEmpty {

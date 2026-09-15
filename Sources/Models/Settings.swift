@@ -360,9 +360,12 @@ public struct AppSettings: Codable, Hashable, Sendable {
         googleAccountEmail: String = "",
         gmailExtensionEnabled: Bool = false,
         googleCalendarExtensionEnabled: Bool = false,
-        customMLXModelsDirectory: String = FileManager.default.fileExists(atPath: "/Volumes/Storage/Models")
-            ? "/Volumes/Storage/Models"
-            : "",
+        // Was `/Volumes/Storage/Models` if that path happened to exist — one developer's volume
+        // layout, shipped as a default. `knownMLXSearchRoots` already sweeps the mounted volumes
+        // for the usual library folder names, which is how the real library here
+        // (`/Volumes/Models/Models`) is found with this field empty. Set it only for a library
+        // somewhere the sweep does not look.
+        customMLXModelsDirectory: String = "",
         scanHuggingFaceCache: Bool = true,
         scanLMStudioModels: Bool = true,
         customHFCachePath: String = "",

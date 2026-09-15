@@ -196,6 +196,8 @@ public final class PersistenceManager: @unchecked Sendable {
     public func saveSettings(_ settings: AppSettings) {
         storage.save(settings, to: "settings.json")
         saveMCPServers(settings.mcpServers)
+        // So flipping "Verbose Logging" takes effect without a relaunch.
+        AppLog.invalidate()
     }
 
     // MARK: - MCP Servers Backup Store

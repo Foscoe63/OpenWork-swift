@@ -134,6 +134,12 @@ public final class AnthropicService: LLMProviderClient, @unchecked Sendable {
             ]
         } else {
             body["temperature"] = temperature
+            // Only outside the thinking branch: the Anthropic API rejects top_p alongside
+            // extended thinking, and requires temperature 1 there.
+            let topP = PersistenceManager.shared.loadSettings().defaultTopP
+            if topP > 0, topP < 1.0 {
+                body["top_p"] = topP
+            }
         }
 
         // Add native tools in Anthropic schema { name: "...", description: "...", input_schema: {...} }

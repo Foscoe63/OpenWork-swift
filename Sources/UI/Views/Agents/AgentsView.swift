@@ -23,16 +23,20 @@ public struct AgentsView: View {
             Divider()
                 .background(ThemeColors.border(for: appState.settings.theme))
 
-            // Mode Selector: Agents Inventory vs Multi-Agent Collaboration Room
-            Picker("", selection: $selectedTab) {
-                Text("AI Agents & Sub-Agents").tag("list")
-                Text("Multi-Agent Collaboration Room").tag("collaboration")
+            // Mode Selector: Agents Inventory vs Multi-Agent Collaboration Room.
+            // `enableAgentCollaborationRoom` is what this segment is for; it was stored, had a
+            // toggle in Advanced Settings, and gated nothing.
+            if appState.settings.enableAgentCollaborationRoom {
+                Picker("", selection: $selectedTab) {
+                    Text("AI Agents & Sub-Agents").tag("list")
+                    Text("Multi-Agent Collaboration Room").tag("collaboration")
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
 
-            if selectedTab == "list" {
+            if selectedTab == "list" || !appState.settings.enableAgentCollaborationRoom {
                 agentsListContent
             } else {
                 collaborationRoomContent
@@ -540,6 +544,20 @@ public struct AgentEditModalView: View {
                         }
 
                         Stepper("Max Output Tokens: \(draft.maxTokens)", value: $draft.maxTokens, in: 512...32768, step: 512)
+
+                        // The turn uses `agent.reasoningEffort`, and this was the only one of the
+                        // three sampling fields with no control on an existing agent: Settings
+                        // seeds it into new agents only, so an agent created before you changed
+                        // your mind could never be adjusted.
+                        HStack {
+                            Text("Reasoning Effort")
+                                .font(.system(size: 11.5))
+                            Picker("", selection: $draft.reasoningEffort) {
+                                ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                                    Text(effort.displayName).tag(effort)
+                                }
+                            }
+                        }
                     }
                 }
                 .padding(16)

@@ -23,6 +23,15 @@ public struct ThemeColors {
         }
     }
 
+    /// The sidebar / inspector fill, thinned when the window is showing vibrancy behind it.
+    ///
+    /// An opaque fill over an `NSVisualEffectView` hides it completely, which is why the
+    /// "Translucent Window Background" switch would have looked broken even once something read
+    /// it. See `VisualEffectBackground`.
+    public static func paneBg(for theme: AppTheme, translucent: Bool) -> Color {
+        translucent ? sidebarBg(for: theme).opacity(0.55) : sidebarBg(for: theme)
+    }
+
     public static func cardBg(for theme: AppTheme) -> Color {
         switch theme {
         case .light: return Color.white

@@ -254,6 +254,13 @@ public final class OpenAIService: LLMProviderClient, @unchecked Sendable {
             "frequency_penalty": frequencyPenalty
         ]
 
+        // Top-P reached only the in-process MLX path; the slider on the Sampling card did nothing
+        // for any OpenAI-compatible endpoint. Sent only when the user has moved it off 1.0, since
+        // 1.0 is a no-op and OpenAI advises against steering with temperature and top_p together.
+        if loadedSettings.defaultTopP > 0, loadedSettings.defaultTopP < 1.0 {
+            body["top_p"] = loadedSettings.defaultTopP
+        }
+
         if model.supportsReasoning && reasoningEffort != .off {
             body["reasoning_effort"] = reasoningEffort.rawValue
         }
@@ -412,10 +419,14 @@ public final class OpenAIService: LLMProviderClient, @unchecked Sendable {
         // Track accumulating tool calls across streaming deltas
         var pendingToolCalls: [Int: (id: String, name: String, args: String)] = [:]
 
+        AppLog.verbose(.stream, "POST \(url.absoluteString) model=\(model.id) tools=\(tools.filter(\.isEnabled).count)")
+
         for try await line in bytes.lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.hasPrefix("data:") else { continue }
             let payload = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            // What "Verbose Logging" promises by name: the raw SSE payloads.
+            AppLog.verbose(.stream, "SSE \(AppLog.truncated(payload))")
             if payload == "[DONE]" {
                 // Finalize any pending streamed tool calls
                 var finalizedTools: [ToolCallInfo] = []
