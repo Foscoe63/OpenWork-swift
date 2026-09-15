@@ -61,12 +61,10 @@ public struct SideInspectorView: View {
                     VStack(spacing: 4) {
                         Image(systemName: tab.icon)
                             .font(.system(size: 13))
-                            // A fixed box, because these glyphs are not the same shape.
-                            // `bubble.left.and.exclamationmark.bubble.right.fill` is 23pt wide
-                            // against 15-19 for the others, so the Agent Messages tab rendered
-                            // with almost no clear margin and read as something you had to hit
-                            // precisely — the one tab still reported as awkward after the hit
-                            // area was fixed.
+                            // A fixed box, because these glyphs are not the same shape:
+                            // `bubble.left.and.exclamationmark.bubble.right.fill` measures 23pt
+                            // wide against 15-19 for the others, so that tab rendered edge to
+                            // edge with no clear margin.
                             .frame(width: 20, height: 16)
                         Text(tab.title)
                             .font(.system(size: 9.5, weight: isSelected ? .bold : .regular))
@@ -78,15 +76,14 @@ public struct SideInspectorView: View {
                     .padding(.vertical, 8)
                     .background(isSelected ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
                     .cornerRadius(6)
-                    // Without this the button is only clickable where something is *drawn* —
-                    // the glyph strokes and the letters. A selected tab paints an opaque
-                    // background so its whole area works; an unselected one is `Color.clear`,
-                    // so the padding and the gap between icon and label are dead. The tab you
-                    // are already on is easy to hit and every other one is not, which is a
-                    // strange bug to describe and an obvious one to feel.
-                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                // A `.plain` button is hit-tested against what it *draws*. An unselected tab has
+                // a `Color.clear` background, so without this only the glyph strokes and the
+                // letters are clickable — the padding, and the gap between icon and label, are
+                // dead. Declared on the Button rather than inside the label so it covers the
+                // whole control.
+                .contentShape(Rectangle())
                 .help(tab.title)
             }
         }
