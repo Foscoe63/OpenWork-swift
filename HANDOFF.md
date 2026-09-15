@@ -7,10 +7,10 @@ against this machine, not remembered.
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` (`6d0f537`) | 402 |
+| OpenWork-Swift | yes, `main` (`3521dce`) | 412 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
-OpenWork went from 13 tests to 402 over this work. Released as 1.1.0.
+OpenWork went from 13 tests to 412 over this work. Released as 1.1.0.
 
 ---
 
@@ -323,6 +323,57 @@ read settings. `LoadSettingsDoesNotWriteTests` pins it, and a real MLX turn now 
 
 ---
 
+## What landed 2026-09-15 (second pass): the agent can see
+
+Prompted by a question about what would make this a better app for vibe coding. The answer
+came from the session's own evidence rather than from research: a settings picker was added,
+402 tests passed, the compiler was happy, and it rendered **completely blank**. Only launching
+the app and looking found it. The 2026 consensus agrees — VS Code 1.110 and Copilot both
+shipped browser access for agents this year, and the visual feedback loop is the thing that
+separates an agent that can check its work from one that cannot.
+
+**Vision was declared everywhere and wired nowhere.** `supportsVision` on every `ModelInfo`,
+`isVLM` detected from each model's `config.json` at discovery, `attachments` with a `mimeType`
+on every `ChatMessage`, a "Vision OCR" extension in the UI — and every provider serialized
+`msg.content`, a `String`, and nothing else. Exactly the fault class of the settings sweep
+above, one layer up. `ImageTransport` now carries images to all four providers.
+
+Two things to know before touching that path:
+
+- **A `tool` message may not carry image blocks in the OpenAI schema**, so pixels follow as
+  their own user turn. Anthropic *does* allow them inside `tool_result`, so there they stay
+  attached to the call that produced them. The shapes genuinely differ; do not unify them.
+- **`mergeToolMessagesIntoFollowingUser` rebuilds messages**, so it drops attachments unless
+  told not to. The transport was undone one function later until that was fixed.
+
+**`accessibility_tree` is the one to reach for first.** It reads a window as text: ~20× cheaper
+than a screenshot, it states control *values* a screenshot only implies, and it works with a
+**text-only model**. A vision-only feedback loop would abandon local MLX exactly where this app
+is strongest. `screenshot_window` is for layout and colour.
+
+Both need TCC permissions **per binary**, so the xctest runner has neither and cannot verify
+them live — they are covered by their failure path, which names the exact System Settings pane.
+To exercise them for real, grant Screen Recording and Accessibility to the built `OpenWork.app`
+and drive them from the app. Screen Recording is only re-read at launch, so relaunch after
+granting.
+
+**`run_app` closes the loop `build_project` and `run_tests` leave open.** Note the gotcha it
+exists to remove: a child process started from a shell dies with that shell, so a hand-rolled
+launch looks successful and is gone before anything inspects it.
+
+**`git_commit` is confined to agent worktrees, and that is the whole design.** This is not the
+session-wide undo that was rejected below — it is the opposite. Commits on a branch in a
+directory of its own are additive history that cannot rewrite anything the user wrote. The
+pinning test asserts that committing on the user's own checkout is refused *and* their log is
+unchanged. Worktrees live *beside* the repo, never inside it, or the parent's status, build and
+file search pick them up.
+
+**Sub-agents take no tools** (`tools: []`) and never touch the filesystem — worth knowing before
+anyone assumes worktrees isolate them. They are advisory LLM calls; they now run through a task
+group instead of a serial loop, results applied in delegation order so the transcript is stable.
+
+---
+
 ## What is left
 
 ### Settings still dead
@@ -504,7 +555,7 @@ The model library on this machine is `/Volumes/Models/Models` (13 loadable bundl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 402 tests
+$SWIFT test                    # 412 tests
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list

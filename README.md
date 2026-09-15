@@ -49,11 +49,13 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 | 📁 | Filesystem — `file_read` (paginated, numbered), `file_write`, `edit_file`, `multi_edit` (several edits, all or nothing), `file_list`, `file_copy`, `file_move`, `file_delete` |
 | 🔎 | Code search — `grep` (regex → `path:line: text`), `glob` (`**/*.swift`), `find_symbol` (declarations only), `search_workspace` (BM25 index) |
 | 🔨 | Build & test — `build_project`, `run_tests` — failures come back as `file:line: message`, and `run_tests(only_failing: true)` re-runs just the ones that failed |
-| 🌿 | Git — `git_status`, `git_diff`, `git_log` (read-only; committing stays yours) |
+| 🌿 | Git — `git_status`, `git_diff`, `git_log`. Committing stays yours *on your checkout*; the agent may commit only inside a worktree of its own, where history is additive and cannot rewrite yours |
 | ↩️ | Undo — `changed_files`, `revert_changes` restore everything a turn touched |
 | 💻 | Shell — `terminal_command` / `run_command` |
 | 🌐 | Network — `fetch_url`, `web_search` |
 | 💬 | Interaction — `ask_user`, `exit_plan_mode`, `todo_write` |
+| 👁️ | **Perception** — `screenshot_window` (see any running app's window), `accessibility_tree` (read it as text — cheap, and works with text-only models), `run_app` (launch it and report what happened) |
+| 🌿 | Isolation — `worktree_create`, `worktree_list`, `worktree_remove`, `git_commit` (confined to agent worktrees) |
 | 🧮 | Utilities — `calculator`, `get_current_date`, `document_extract` |
 | 📧 | Optional Google — `gmail_*`, `google_calendar_*` |
 
@@ -281,6 +283,12 @@ Quit any running OpenWork instance before replacing the bundle.
 ---
 
 ## Privacy
+
+**The agent can see what it built.** A screenshot of any running app — not just a browser tab,
+because this is a native macOS app — reaches a vision model directly, and
+`accessibility_tree` gives the same window as text, which is cheaper and works with a
+text-only local model. Screen Recording and Accessibility are asked for only when a
+perception tool is first used, and refusing them disables those two tools and nothing else.
 
 OpenWork-Swift is **local-first**. It talks only to LLM endpoints and MCP servers **you** configure. No bundled third-party analytics or telemetry.
 
