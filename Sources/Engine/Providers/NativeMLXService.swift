@@ -305,6 +305,16 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             }
         }
 
+        // Ornith-class templates end their generation prompt with a bare `<think>`, so the model
+        // generates reasoning with no opening tag and is meant to close with `</think>`. When it
+        // forgets, the text carries no tags at all and `AssistantContentSanitizer` — correctly —
+        // will not guess, so chain-of-thought reaches the user as the answer. Knowing the
+        // template opened the block makes that determinate instead of a guess.
+        let preOpensThinking = LocalMLXEngine.shared
+            .resolveLocalModelDirectory(modelId: model.id, settings: PersistenceManager.shared.loadSettings())
+            .map { ReasoningChannel.templatePreOpensThinking(modelDirectory: $0) } ?? false
+        let splitter = ReasoningChannel.StreamSplitter(startsInsideReasoning: preOpensThinking)
+
         for try await generation in stream {
             if Task.isCancelled { break }
             switch generation {
@@ -312,7 +322,13 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                 if !piece.isEmpty {
                     totalTokens += 1
                     assistantText += piece
-                    onChunk(LLMStreamChunk(deltaText: piece))
+                    let split = splitter.consume(piece)
+                    if !split.visible.isEmpty || !split.reasoning.isEmpty {
+                        onChunk(LLMStreamChunk(
+                            deltaText: split.visible,
+                            deltaReasoning: split.reasoning.isEmpty ? nil : split.reasoning
+                        ))
+                    }
                 }
             case .toolCall(let call):
                 let argsObject = call.function.arguments.mapValues { $0.anyValue }
@@ -337,6 +353,15 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             @unknown default:
                 break
             }
+        }
+
+        // A block the model never closed is reasoning, not an answer.
+        let tail = splitter.flush()
+        if !tail.visible.isEmpty || !tail.reasoning.isEmpty {
+            onChunk(LLMStreamChunk(
+                deltaText: tail.visible,
+                deltaReasoning: tail.reasoning.isEmpty ? nil : tail.reasoning
+            ))
         }
         completedNormally = !Task.isCancelled
 

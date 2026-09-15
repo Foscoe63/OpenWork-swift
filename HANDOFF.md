@@ -7,10 +7,10 @@ against this machine, not remembered.
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` (`ebd556d`) | 418 |
+| OpenWork-Swift | yes, `main` (`72b7f01`) | 437 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
-OpenWork went from 13 tests to 418 over this work. Released as 1.1.0.
+OpenWork went from 13 tests to 437 over this work. Released as 1.1.0.
 
 ---
 
@@ -389,6 +389,41 @@ group instead of a serial loop, results applied in delegation order so the trans
 
 ---
 
+## What landed 2026-09-15 (third pass): sub-agents that do the work
+
+**Sub-agents were theatre, and now are not.** `agent_spawn` built a `SubAgentTask`, returned
+"Spawned sub-agent […] to execute task", and ran nothing. Auto-delegation made one call with
+`tools: []` and a 512-token ceiling. `SubAgentExecutor` gives them a real ReAct loop with tools,
+iteration and wall-clock budgets, unattended approvals, and a git worktree each.
+
+**The parent now reads the result.** This was the actual defect: reports reached the Sub-Agent
+Tree and the Agent Messages log and stopped — `workingMessages` never saw them, so the parent
+answered as though nothing had been delegated. Work was done, displayed, and ignored by the only
+participant who could act on it. Check this first if sub-agent output ever looks ignored again.
+
+**`allowedToolIds` was a third dead control, and it bites anything that starts honouring it.** It
+is shown in the Agents editor and stored on every agent; nothing read it until now. Its seeded
+value predates most of the catalog — no grep, no edit_file, no build_project, no run_tests — so
+respecting it as found would have crippled every sub-agent. The untouched seed is migrated to
+empty ("everything the workspace allows"); a deliberately changed list is left alone. **Same shape
+as the voice toggles: a value stored by a control that did nothing is not a preference.**
+
+**Reasoning leaking into the answer is fixed, and the handoff's guessed fix was wrong.** It said
+to "consume MLX's own reasoning channel where the model exposes one". There is no such channel —
+`Generation` here is `.chunk`, `.info`, `.toolCall`. The mechanism is in the chat template: Ornith's
+generation prompt ends with a bare `{{- '<think>\n' }}`, so the model begins generating *inside* a
+block it never opened, and is meant to close with `</think>`. When it forgets, the text carries no
+tags at all and `AssistantContentSanitizer` correctly refuses to guess. `ReasoningChannel` reads
+the template, knows the block was pre-opened, and routes accordingly — determinate, not a heuristic.
+Verified live: 212 characters of reasoning filed as reasoning, visible output exactly `SPLIT OK`.
+
+**`NoDeadSettingsTests` is the sweep, as a test.** Two passes of `AppSettings` found ~20 switches
+that changed a value and nothing else. A sweep is something you do once and stop doing, so it now
+runs every build: every field needs a reader *and* a control, or an entry in `knownDead` with a
+stated reason. It caught `autoCheckForUpdates` immediately.
+
+---
+
 ## What is left
 
 ### Settings still dead
@@ -411,12 +446,6 @@ read, which is correct.
 
 ### Worth building next
 
-- **Reasoning that never closes its tag.** Ornith sometimes emits its chain of thought with no
-  `</think>` at all, and `AssistantContentSanitizer` — correctly — only strips what it can prove is
-  reasoning, so that text reaches the user as the answer. Observed in a live run, not fixed:
-  guessing where reasoning ends without a delimiter is how you truncate a real answer. The
-  honest fix is probably to consume MLX's own reasoning channel where the model exposes one,
-  rather than to parse harder.
 - **Local Models could still surface the search roots.** Settings › Debug now lists them, behind
   `developerMode`. A user whose library sits somewhere unusual has to find that page; the Local
   Models view itself is where they would look first.
@@ -576,7 +605,7 @@ The model library on this machine is `/Volumes/Models/Models` (13 loadable bundl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 418 tests
+$SWIFT test                    # 437 tests
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list
