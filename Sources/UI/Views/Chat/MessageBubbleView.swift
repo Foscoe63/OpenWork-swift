@@ -20,24 +20,47 @@ public struct MessageBubbleView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .contextMenu {
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(message.content, forType: .string)
-            } label: {
-                Label("Copy Message", systemImage: "doc.on.doc")
-            }
+    }
 
-            if canForkHere {
-                Divider()
-                Button {
-                    guard let session = appState.currentSession else { return }
-                    appState.forkSession(session, at: message.id)
-                } label: {
-                    Label("Fork Conversation From Here", systemImage: "arrow.triangle.branch")
-                }
+    /// Right-click actions, attached to the message's *chrome* rather than to the whole bubble.
+    ///
+    /// A `.contextMenu` on the container wrapping the message text installs a hit-testing region
+    /// over the entire subtree, and on macOS that swallows the mouse drag `.textSelection`
+    /// depends on. The text was marked selectable and could not be selected, and clicks aimed at
+    /// the buttons inside the bubble were intercepted on the way — so the reply could be neither
+    /// highlighted nor copied. Anchoring the menu to the avatar and header keeps right-click
+    /// where people reach for it while leaving the text alone.
+    @ViewBuilder
+    private var messageActions: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(copyableText, forType: .string)
+        } label: {
+            Label("Copy Message", systemImage: "doc.on.doc")
+        }
+
+        if canForkHere {
+            Divider()
+            Button {
+                guard let session = appState.currentSession else { return }
+                appState.forkSession(session, at: message.id)
+            } label: {
+                Label("Fork Conversation From Here", systemImage: "arrow.triangle.branch")
             }
         }
+    }
+
+    /// What "Copy Message" should actually put on the pasteboard.
+    ///
+    /// Copying `content` alone silently yields an empty string for a turn that produced only
+    /// reasoning — which reads exactly like a broken Copy button.
+    private var copyableText: String {
+        let visible = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !visible.isEmpty { return message.content }
+        if let reasoning = message.reasoning, !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return reasoning
+        }
+        return message.content
     }
 
     /// Forking at the last message would copy the session rather than branch it.
@@ -93,6 +116,7 @@ public struct MessageBubbleView: View {
             Image(systemName: "person.crop.circle.fill")
                 .font(.system(size: 24))
                 .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                .contextMenu { messageActions }
         }
     }
 
@@ -113,6 +137,7 @@ public struct MessageBubbleView: View {
                 .frame(width: 30, height: 30)
                 .background(Color(hex: message.agentColor ?? "#8B5CF6"))
                 .clipShape(Circle())
+                .contextMenu { messageActions }
 
             VStack(alignment: .leading, spacing: 8) {
                 // Header (Agent Name & Model Pill)
@@ -154,7 +179,7 @@ public struct MessageBubbleView: View {
                     // Copy Action
                     Button {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(message.content, forType: .string)
+                        NSPasteboard.general.setString(copyableText, forType: .string)
                         appState.showToast("Copied to clipboard")
                     } label: {
                         Image(systemName: "doc.on.doc")

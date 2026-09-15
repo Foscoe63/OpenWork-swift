@@ -515,6 +515,25 @@ alone. `attributesOfItem` throws *and* its subscript returns `Any?`, so the obvi
 spelling is a `try?` around an `as?`, which yields a doubly-optional and invites exactly that
 mistake — `ImageTransport.fileSize(atPath:)` is now the one place that does it.
 
+**Dead-end detection only ever covered MCP.** `mcpDeadEnds` warns at 3 and disables MCP at 5, and
+nothing equivalent existed for first-party tools — so one could fail identically forever. Observed:
+a model called `screenshot_window` with the same arguments eight times and was still going when
+the user stopped it by hand. `AgentRunner.callSignature` + `identicalFailureLimit` now refuse the
+third identical failing call and tell the model why. Two, not one, because a single retry after a
+transient failure is reasonable.
+
+**`MLXVLM` was not linked, so vision models loaded as text-only.** `NativeMLXService` loaded every
+checkpoint through `LLMModelFactory`, which builds a pipeline with no vision tower and no image
+processor — images handed to it in `Chat.Message.images` are dropped in silence. The factory now
+branches on `LocalMLXEngine.declaresVisionSupport`, and `MLXVLM` is a declared dependency in both
+`Package.swift` and `project.yml`.
+
+**`.contextMenu` on a container swallows text selection.** It was attached to the whole message
+bubble, which installs a hit-testing region over the entire subtree and eats the mouse drag
+`.textSelection(.enabled)` depends on — so replies were marked selectable, could not be selected,
+and clicks aimed at the buttons inside the bubble were intercepted on the way. It now hangs off
+the avatar. **Never put `.contextMenu` on a view that contains selectable text.**
+
 **Changing the signing identity makes the Keychain treat the app as a stranger.** Signing with
 the new certificate immediately hung the app at launch with no window: `AppState.loadAll()` →
 `loadProviders()` → `KeychainManager.getSecret` → blocked on securityd, because a

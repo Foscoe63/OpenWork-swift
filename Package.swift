@@ -30,6 +30,9 @@ let package = Package(
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                // Vision checkpoints need their own factory; LLMModelFactory builds a text-only
+                // pipeline that silently drops images. See NativeMLXService.loadContainer…
+                .product(name: "MLXVLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),

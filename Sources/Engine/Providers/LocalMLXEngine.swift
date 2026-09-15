@@ -584,7 +584,13 @@ public final class LocalMLXEngine: @unchecked Sendable {
                     contextWindow: curated.contextWindow,
                     isDownloaded: true,
                     localDirectory: installed.localDirectory,
-                    isVLM: curated.isVLM,
+                    // The checkpoint on disk outranks the catalog. `curated.isVLM` is editorial
+                    // metadata typed by hand, and Ornith's entry omits it — so it defaulted to
+                    // false and overwrote the value just read from the model's own
+                    // `config.json`, which carries a `vision_config`. Detection was fixed and
+                    // then discarded one struct later: the model captured a screenshot and was
+                    // told it could not look at it.
+                    isVLM: installed.isVLM || curated.isVLM,
                     useCase: curated.useCase,
                     compatibility: curated.compatibility,
                     estimatedRAMGB: curated.estimatedRAMGB,

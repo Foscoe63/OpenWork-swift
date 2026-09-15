@@ -61,3 +61,36 @@ final class VisionDetectionTests: XCTestCase {
                        "detection must agree with what the checkpoint actually carries")
     }
 }
+
+/// Detection reading the checkpoint correctly is worth nothing if the catalog then overwrites it.
+/// `scanInstalledModels` merged curated metadata with `isVLM: curated.isVLM` — and the curated
+/// entries are hand-written, with Ornith's omitting the flag entirely, so it defaulted to false
+/// and discarded the value just read from the model's own config.json.
+final class CuratedMetadataDoesNotOverrideDetectionTests: XCTestCase {
+
+    private func model(id: String, isVLM: Bool, downloaded: Bool) -> LocalMLXModel {
+        LocalMLXModel(id: id, name: id, description: "", isDownloaded: downloaded, isVLM: isVLM)
+    }
+
+    /// What the merge has to preserve: the installed checkpoint's own answer.
+    func testAnInstalledVisionModelStaysAVisionModel() {
+        let detected = model(id: "x", isVLM: true, downloaded: true)
+        let curated = model(id: "x", isVLM: false, downloaded: false)
+        XCTAssertTrue(detected.isVLM || curated.isVLM,
+                      "the disk read must win over an omitted catalog flag")
+    }
+
+    /// And a curated `true` is not lost when detection is the one that missed.
+    func testACuratedVisionFlagSurvivesWhenDetectionMisses() {
+        let detected = model(id: "x", isVLM: false, downloaded: true)
+        let curated = model(id: "x", isVLM: true, downloaded: false)
+        XCTAssertTrue(detected.isVLM || curated.isVLM)
+    }
+
+    /// A text-only model stays text-only from both directions.
+    func testNeitherSourceInventsVision() {
+        let detected = model(id: "x", isVLM: false, downloaded: true)
+        let curated = model(id: "x", isVLM: false, downloaded: false)
+        XCTAssertFalse(detected.isVLM || curated.isVLM)
+    }
+}

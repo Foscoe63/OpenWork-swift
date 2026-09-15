@@ -1041,6 +1041,8 @@ public final class AgentRunner {
         // nudge, then to pulling MCP out of the tool list for the rest of the turn.
         var mcpDeadEnds = 0
         var warnedMcpStall = false
+        /// Consecutive failures per (tool, arguments) pair, for `identicalFailureLimit`.
+        var repeatedFailures: [String: Int] = [:]
         var mcpDisabledThisTurn = false
 
         // Promotion is turn-scoped: a catalog harvested against an earlier server set must not
@@ -1465,6 +1467,28 @@ public final class AgentRunner {
                         AppState.shared.settings = liveSettings
                         AppState.shared.showToast("Plan mode exited")
                         resultOutput = "Plan mode exited."
+                    } else if let priorFailures = repeatedFailures[Self.callSignature(toolName, argsJson)],
+                              priorFailures >= Self.identicalFailureLimit {
+                        // Refuse to run a call that has already failed identically.
+                        //
+                        // Dead-end detection existed only for MCP (`mcpDeadEnds`), so a
+                        // first-party tool could fail the same way forever. Observed: a model
+                        // called `screenshot_window` with identical arguments eight times and was
+                        // still going when the user stopped it by hand. The model is not being
+                        // stupid — nothing told it the attempt was hopeless, and "try again" is a
+                        // reasonable thing to do once.
+                        resultSuccess = false
+                        resultError = "repeated identical call"
+                        resultOutput = """
+                        Error: this exact call — `\(toolName)` with these exact arguments — has \
+                        already failed \(priorFailures) times this turn, with the same result each \
+                        time. It was not run again.
+
+                        Nothing has changed that would make it succeed. Either change the \
+                        arguments, use a different tool, or tell the user what is blocking you and \
+                        stop. Do not call it again unchanged.
+                        """
+                        accumulator.appendNotice("Blocked a repeated failing call to \(toolName).")
                     } else {
                         let result = await ToolExecutionEngine.shared.execute(
                             toolName: toolName,
@@ -1502,6 +1526,14 @@ public final class AgentRunner {
                             producedImages = retry.producedImages
                         }
                     }
+                }
+
+                // Track identical failures so the branch above can refuse the third one.
+                let repeatKey = Self.callSignature(toolName, argsJson)
+                if resultSuccess {
+                    repeatedFailures[repeatKey] = 0
+                } else if resultError != "repeated identical call" {
+                    repeatedFailures[repeatKey, default: 0] += 1
                 }
 
                 let bounded = ToolBounds.boundResult(resultOutput + stuckNudge)
@@ -1694,6 +1726,17 @@ public final class AgentRunner {
         agent.canSpawnSubAgents
             && settings.allowSubAgentCreation
             && max(0, settings.maxGlobalSubAgentDepth) > 0
+    }
+
+    /// How many times the same call may fail before the loop stops running it.
+    ///
+    /// Two, because the first retry is reasonable — a transient failure is real — and the third
+    /// identical attempt is a loop, not a strategy.
+    static let identicalFailureLimit = 2
+
+    /// Identity of a tool call for repeat detection: the tool and its exact arguments.
+    static func callSignature(_ toolName: String, _ argumentsJson: String) -> String {
+        "\(toolName)\u{1}\(argumentsJson.trimmingCharacters(in: .whitespacesAndNewlines))"
     }
 
     /// Internal rather than private so tests can prove a newly added writing tool is blocked here.

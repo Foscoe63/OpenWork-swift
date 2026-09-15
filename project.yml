@@ -64,6 +64,10 @@ targets:
       - package: mlx-swift-lm
         product: MLXLLM
       - package: mlx-swift-lm
+        # Vision checkpoints need their own factory; MLXLLM builds a text-only pipeline that
+        # silently drops images.
+        product: MLXVLM
+      - package: mlx-swift-lm
         product: MLXLMCommon
       - package: mlx-swift-lm
         product: MLXHuggingFace

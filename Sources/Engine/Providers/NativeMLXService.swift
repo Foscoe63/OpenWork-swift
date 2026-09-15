@@ -3,6 +3,7 @@ import Foundation
 import MLX
 import MLXLMCommon
 import MLXLLM
+import MLXVLM
 import MLXHuggingFace
 import HuggingFace
 import Tokenizers
@@ -585,7 +586,24 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         evictOtherModels(keeping: modelId)
         Self.applyMemoryPolicy(budgetRatio: settings.mlxGpuMemoryBudgetRatio)
 
-        onProgress("Loading \(modelId) from \(localDir.path)")
+        // Pick the factory that matches the checkpoint.
+        //
+        // Everything used to load through `LLMModelFactory`, which builds a **text-only**
+        // pipeline: no vision tower, no image processor. Images handed to it in
+        // `Chat.Message.images` are dropped without a word, so a vision model captured a
+        // screenshot, was told it was attached, and then reasoned its way around never having
+        // seen it. `MLXVLM` was not even linked.
+        let usesVision = (try? Data(contentsOf: localDir.appendingPathComponent("config.json")))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            .map { LocalMLXEngine.declaresVisionSupport(config: $0) } ?? false
+
+        onProgress("Loading \(modelId) from \(localDir.path)\(usesVision ? " (vision)" : "")")
+        if usesVision {
+            return try await VLMModelFactory.shared.loadContainer(
+                from: localDir,
+                using: tokenizerLoader
+            )
+        }
         return try await LLMModelFactory.shared.loadContainer(
             from: localDir,
             using: tokenizerLoader
