@@ -122,7 +122,18 @@ public final class OllamaService: LLMProviderClient, @unchecked Sendable {
                     ])
                 }
             } else {
-                formattedMessages.append(["role": msg.role.rawValue, "content": msg.content])
+                var entry: [String: Any] = ["role": msg.role.rawValue, "content": msg.content]
+                // Ollama takes images as a sibling array of bare base64 strings, not as
+                // content blocks.
+                let images = ImageTransport.imageAttachments(in: msg)
+                if model.supportsVision, !images.isEmpty {
+                    let encoded = ImageTransport.ollamaImages(images)
+                    if !encoded.isEmpty { entry["images"] = encoded }
+                } else if !images.isEmpty {
+                    entry["content"] = msg.content
+                        + ImageTransport.blindModelNotice(count: images.count, modelName: model.name)
+                }
+                formattedMessages.append(entry)
             }
         }
 

@@ -100,22 +100,43 @@ public final class AnthropicService: LLMProviderClient, @unchecked Sendable {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
         var formattedMessages: [[String: Any]] = []
+        var blindImageCount = 0
         for msg in messages {
+            let images = ImageTransport.imageAttachments(in: msg)
+            let canSee = model.supportsVision && !images.isEmpty
+            if !images.isEmpty && !model.supportsVision { blindImageCount += images.count }
+
             if msg.role == .tool {
+                // Unlike OpenAI, a `tool_result` block may itself contain images, so a screenshot
+                // stays attached to the call that produced it.
+                var resultContent: Any = msg.content
+                if canSee {
+                    resultContent = ImageTransport.anthropicContent(text: msg.content, images: images)
+                }
                 formattedMessages.append([
                     "role": "user",
                     "content": [
                         [
                             "type": "tool_result",
                             "tool_use_id": msg.id,
-                            "content": msg.content
+                            "content": resultContent
                         ]
                     ]
                 ])
             } else {
                 let role = msg.role == .assistant ? "assistant" : "user"
-                formattedMessages.append(["role": role, "content": msg.content])
+                formattedMessages.append([
+                    "role": role,
+                    "content": canSee
+                        ? ImageTransport.anthropicContent(text: msg.content, images: images)
+                        : msg.content
+                ])
             }
+        }
+        if blindImageCount > 0, let last = formattedMessages.indices.last,
+           let text = formattedMessages[last]["content"] as? String {
+            formattedMessages[last]["content"] = text
+                + ImageTransport.blindModelNotice(count: blindImageCount, modelName: model.name)
         }
 
         var body: [String: Any] = [

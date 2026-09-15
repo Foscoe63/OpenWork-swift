@@ -226,7 +226,14 @@ public final class OpenAIService: LLMProviderClient, @unchecked Sendable {
             formattedMessages.append(["role": "system", "content": systemPrompt])
         }
         let isLocalEndpoint = provider.baseUrl.contains("mlx") || provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.contains("localhost")
+        // Images. Every provider used to serialize `content` as a bare String, so an attached
+        // screenshot never reached the model and the reply discussed a picture it had not seen.
+        var blindImageCount = 0
         for msg in messages {
+            let images = ImageTransport.imageAttachments(in: msg)
+            let canSee = model.supportsVision && !images.isEmpty
+            if !images.isEmpty && !model.supportsVision { blindImageCount += images.count }
+
             if msg.role == .tool {
                 // Radiant / OpenAI-compat: native tool role + tool_call_id.
                 // (Legacy user-role wrapping caused local models to ignore observations.)
@@ -235,9 +242,33 @@ public final class OpenAIService: LLMProviderClient, @unchecked Sendable {
                     "content": msg.content,
                     "tool_call_id": msg.id
                 ])
+                // A `tool` message may not carry image blocks in the OpenAI schema, so the
+                // pixels follow as their own user turn rather than being dropped.
+                if canSee {
+                    formattedMessages.append([
+                        "role": "user",
+                        "content": ImageTransport.openAIContent(
+                            text: "Screenshot produced by the previous tool call:",
+                            images: images
+                        )
+                    ])
+                }
+            } else if canSee {
+                formattedMessages.append([
+                    "role": msg.role.rawValue,
+                    "content": ImageTransport.openAIContent(text: msg.content, images: images)
+                ])
             } else {
                 formattedMessages.append(["role": msg.role.rawValue, "content": msg.content])
             }
+        }
+
+        // Say so rather than discarding silently — the old behaviour let the model discuss a
+        // screenshot it had never received.
+        if blindImageCount > 0, let last = formattedMessages.indices.last {
+            let text = formattedMessages[last]["content"] as? String ?? ""
+            formattedMessages[last]["content"] = text
+                + ImageTransport.blindModelNotice(count: blindImageCount, modelName: model.name)
         }
 
         let loadedSettings = PersistenceManager.shared.loadSettings()

@@ -44,6 +44,31 @@ public enum ToolSchemaCatalog {
     public static var parityDefaults: [Tool] {
         [
             Tool(
+                id: "screenshot_window",
+                name: "screenshot_window",
+                displayName: "Screenshot Window",
+                description: "Capture a running app's frontmost window as an image, and SEE it. Use this after changing UI code to check what actually rendered: a view that compiles and passes tests can still render blank. Requires Screen Recording permission.",
+                category: .mediaVision,
+                parametersJsonSchema: schemas["screenshot_window"]!
+            ),
+            Tool(
+                id: "accessibility_tree",
+                name: "accessibility_tree",
+                displayName: "Read UI Tree",
+                description: "Read a running app's window as a text accessibility tree: roles, labels, values, enabled state. Much cheaper than a screenshot, states control values a screenshot only implies, and works with text-only models. Prefer this for checking whether a control exists, is enabled, or holds the right value; use screenshot_window for layout and colour. Requires Accessibility permission.",
+                category: .mediaVision,
+                parametersJsonSchema: schemas["accessibility_tree"]!
+            ),
+            Tool(
+                id: "run_app",
+                name: "run_app",
+                displayName: "Run App",
+                description: "Launch a built app, watch it for a few seconds, and report whether it stayed up, what it logged, and any crash report. build_project says the code compiled; this says it runs.",
+                category: .system,
+                parametersJsonSchema: schemas["run_app"]!,
+                requiresApproval: true
+            ),
+            Tool(
                 id: "edit_file",
                 name: "edit_file",
                 displayName: "Edit File",
@@ -178,6 +203,11 @@ public enum ToolSchemaCatalog {
     }
 
     private static let schemas: [String: String] = [
+        // Perception. The agent could write a view and never look at it; these are the eyes.
+        "screenshot_window": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name, e.g. 'OpenWork' or 'ai.openwork.OpenWorkSwift'. The app must already be running - use run_app first."}},"required":["app"]}"#,
+        "accessibility_tree": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name. The app must already be running."},"max_depth":{"type":"integer","description":"Tree depth budget, default 14."}},"required":["app"]}"#,
+        "run_app": #"{"type":"object","properties":{"app_path":{"type":"string","description":"Path to the built .app bundle or executable."},"observe_seconds":{"type":"number","description":"How long to watch before reporting, 1-60. Default 8."},"arguments":{"type":"array","items":{"type":"string"},"description":"Launch arguments."}},"required":["app_path"]}"#,
+
         "file_read": #"{"type":"object","properties":{"path":{"type":"string","description":"File path"},"offset":{"type":"integer","description":"First line (1-indexed, optional)"},"limit":{"type":"integer","description":"Max lines (optional)"}},"required":["path"]}"#,
         "read_file": #"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}"#,
         "file_write": #"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string","description":"Full file content"}},"required":["path","content"]}"#,

@@ -8,6 +8,10 @@ public struct ToolExecutionResult: Sendable {
     public var durationMs: Double
     public var createdSubAgentTask: SubAgentTask?
     public var createdAgentMessage: AgentMessage?
+    /// Absolute paths to images this tool produced, to be attached to the tool result so the
+    /// model actually receives them. A tool that returns only a file path describes a picture
+    /// the model cannot see.
+    public var producedImages: [String]
 
     public init(
         success: Bool,
@@ -15,7 +19,8 @@ public struct ToolExecutionResult: Sendable {
         error: String? = nil,
         durationMs: Double = 0,
         createdSubAgentTask: SubAgentTask? = nil,
-        createdAgentMessage: AgentMessage? = nil
+        createdAgentMessage: AgentMessage? = nil,
+        producedImages: [String] = []
     ) {
         self.success = success
         self.output = output
@@ -23,6 +28,7 @@ public struct ToolExecutionResult: Sendable {
         self.durationMs = durationMs
         self.createdSubAgentTask = createdSubAgentTask
         self.createdAgentMessage = createdAgentMessage
+        self.producedImages = producedImages
     }
 }
 
@@ -72,6 +78,22 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     /// The wrapper exists because `performExecute` returns from a couple of dozen places; the
     /// "Verbose Logging" switch promises "tool execution payloads" by name, and threading a log
     /// call through every exit is how one of them ends up missing it.
+    /// Where perception artefacts land: inside the workspace, so they are reviewable and are
+    /// swept up by the same cleanup as anything else the agent writes.
+    static func perceptionDirectory(for workspace: Workspace) -> URL {
+        URL(fileURLWithPath: workspace.folderPath)
+            .appendingPathComponent(".openwork/screenshots", isDirectory: true)
+    }
+
+    static func failure(_ message: String, _ startTime: CFAbsoluteTime) -> ToolExecutionResult {
+        ToolExecutionResult(
+            success: false,
+            output: "",
+            error: message,
+            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        )
+    }
+
     public func execute(
         toolName: String,
         argumentsJson: String,
@@ -844,6 +866,95 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 output: descriptionText,
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
+
+        case "screenshot_window", "screenshot_app":
+            let appQuery = (dict["app"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            guard !appQuery.isEmpty else {
+                return Self.failure("screenshot_window needs an 'app' — a bundle id or app name.", startTime)
+            }
+            do {
+                let dir = Self.perceptionDirectory(for: workspace)
+                let url = try await ScreenPerception.captureWindow(appQuery: appQuery, to: dir)
+                let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+                return ToolExecutionResult(
+                    success: true,
+                    output: """
+                    Captured the frontmost window of '\(appQuery)'.
+                    File: \(url.path) (\((size ?? 0) / 1024) KB)
+                    The image is attached to this result — look at it rather than reasoning about the path.
+                    """,
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000,
+                    producedImages: [url.path]
+                )
+            } catch {
+                let running = ScreenPerception.runningApplicationNames().prefix(25).joined(separator: ", ")
+                return Self.failure(
+                    "\(error.localizedDescription)\n\nRunning apps: \(running)",
+                    startTime
+                )
+            }
+
+        case "accessibility_tree", "ui_tree", "inspect_window":
+            let appQuery = (dict["app"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            guard !appQuery.isEmpty else {
+                return Self.failure("accessibility_tree needs an 'app' — a bundle id or app name.", startTime)
+            }
+            let maxDepth = dict["max_depth"] as? Int ?? 14
+            do {
+                let tree = try ScreenPerception.accessibilityTree(appQuery: appQuery, maxDepth: maxDepth)
+                return ToolExecutionResult(
+                    success: true,
+                    output: tree,
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            } catch {
+                let running = ScreenPerception.runningApplicationNames().prefix(25).joined(separator: ", ")
+                return Self.failure(
+                    "\(error.localizedDescription)\n\nRunning apps: \(running)",
+                    startTime
+                )
+            }
+
+        case "run_app", "launch_app":
+            let rawPath = (dict["app_path"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            let seconds = min(max(dict["observe_seconds"] as? Double ?? 8, 1), 60)
+            guard !rawPath.isEmpty else {
+                return Self.failure("run_app needs an 'app_path' — the built .app bundle or executable.", startTime)
+            }
+            let full = rawPath.hasPrefix("/") ? rawPath : (workspace.folderPath as NSString).appendingPathComponent(rawPath)
+            guard FileManager.default.fileExists(atPath: full) else {
+                return Self.failure("Nothing at \(full). Build first, then pass the built .app path.", startTime)
+            }
+            do {
+                let outcome = try await AppRunner.run(
+                    appBundle: URL(fileURLWithPath: full),
+                    arguments: (dict["arguments"] as? [String]) ?? [],
+                    observeSeconds: seconds
+                )
+                var report = outcome.stillRunningAtDeadline
+                    ? "Launched and still running after \(Int(seconds))s (pid \(outcome.pid ?? 0)), then terminated.\n"
+                    : "Exited after less than \(Int(seconds))s with code \(outcome.exitCode.map(String.init) ?? "unknown").\n"
+                if let crash = outcome.crashReport {
+                    report += "\n**A crash report was written:**\n```\n\(crash)\n```\n"
+                }
+                let out = ToolBounds.boundResult(outcome.stdout).text
+                let err = ToolBounds.boundResult(outcome.stderr).text
+                if !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { report += "\nstdout:\n```\n\(out)\n```\n" }
+                if !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { report += "\nstderr:\n```\n\(err)\n```\n" }
+                if outcome.stillRunningAtDeadline && outcome.crashReport == nil && out.isEmpty && err.isEmpty {
+                    report += "\nNo output. Staying up this long without logging is usually a clean launch — "
+                    report += "use screenshot_window or accessibility_tree while it runs to see the UI."
+                }
+                // Exiting immediately is a failure of the thing being asked, so report it as one.
+                return ToolExecutionResult(
+                    success: outcome.stillRunningAtDeadline || outcome.exitCode == 0,
+                    output: report,
+                    error: outcome.crashReport != nil ? "the app crashed on launch" : nil,
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            } catch {
+                return Self.failure(error.localizedDescription, startTime)
+            }
 
         case "agent_spawn":
             let taskTitle = dict["task_title"] as? String ?? "Sub-task"

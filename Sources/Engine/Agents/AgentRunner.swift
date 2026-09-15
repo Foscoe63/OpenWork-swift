@@ -1343,6 +1343,7 @@ public final class AgentRunner {
                 var resultOutput: String
                 var resultSuccess = true
                 var resultError: String?
+                var producedImages: [String] = []
 
                 if toolName == "ask_user" {
                     askUserStreak += 1
@@ -1390,6 +1391,7 @@ public final class AgentRunner {
                         resultSuccess = result.success
                         resultOutput = result.success ? result.output : "Error: \(result.error ?? "unknown error")"
                         resultError = result.error
+                        producedImages = result.producedImages
 
                         // Dispatcher servers reject `"arguments":"{}"` (a string). Retry once with
                         // a real map — but only when the nested target is readable. Substituting a
@@ -1413,6 +1415,7 @@ public final class AgentRunner {
                             resultSuccess = retry.success
                             resultOutput = retry.success ? retry.output : "Error: \(retry.error ?? "unknown error")"
                             resultError = retry.error
+                            producedImages = retry.producedImages
                         }
                     }
                 }
@@ -1502,7 +1505,17 @@ public final class AgentRunner {
                     id: callId,
                     sessionId: session.id,
                     role: .tool,
-                    content: bounded.text
+                    content: bounded.text,
+                    // Images the tool produced ride along on the message, so the provider can
+                    // hand them to the model rather than the model reading a path it cannot open.
+                    attachments: producedImages.map { path in
+                        MessageAttachment(
+                            name: (path as NSString).lastPathComponent,
+                            path: path,
+                            sizeBytes: Int64((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0 ?? 0),
+                            mimeType: "image/png"
+                        )
+                    }
                 )
                 workingMessages.append(toolMsg)
             }

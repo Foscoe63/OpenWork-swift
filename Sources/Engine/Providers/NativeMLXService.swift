@@ -166,11 +166,19 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         }
         let sanitizedInstructions = sanitizeForHFChatTemplate(systemPrompt)
         let preparedMessages = mergeToolMessagesIntoFollowingUser(messages)
+        // A VLM checkpoint takes images by URL, so nothing is re-encoded on this path. Whether
+        // the loaded model can actually see is `isVLM`, detected from its own `config.json` at
+        // discovery — a text-only model handed images would fail inside the chat template
+        // rather than politely ignore them.
+        let modelSeesImages = model.supportsVision
         var mlxMessages: [Chat.Message] = preparedMessages.map { m in
             let cleanContent = sanitizeForHFChatTemplate(m.content)
+            let imageURLs: [UserInput.Image] = modelSeesImages
+                ? ImageTransport.imageAttachments(in: m).map { .url(URL(fileURLWithPath: $0.path)) }
+                : []
             switch m.role {
             case .user:
-                return Chat.Message(role: .user, content: cleanContent)
+                return Chat.Message(role: .user, content: cleanContent, images: imageURLs)
             case .assistant:
                 return Chat.Message(role: .assistant, content: cleanContent)
             case .system:
@@ -180,7 +188,8 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                 // .tool message that never went through it.
                 return Chat.Message(
                     role: .user,
-                    content: cleanContent.hasPrefix("[Tool output]") ? cleanContent : "[Tool output]\n" + cleanContent
+                    content: cleanContent.hasPrefix("[Tool output]") ? cleanContent : "[Tool output]\n" + cleanContent,
+                    images: imageURLs
                 )
             }
         }
@@ -796,12 +805,21 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                 continue
             }
             var combined = ""
+            // Attachments have to be carried across the merge, or a screenshot a tool just took
+            // is discarded on the way to the model — the exact failure this transport exists to
+            // remove, reintroduced one function later.
+            var carriedAttachments: [MessageAttachment] = []
             while i < messages.endIndex, messages[i].role == .tool {
                 if !combined.isEmpty { combined += "\n\n" }
                 combined += messages[i].content
+                carriedAttachments.append(contentsOf: messages[i].attachments)
                 i = messages.index(after: i)
             }
-            out.append(ChatMessage(role: .user, content: "[Tool output]\n" + combined))
+            out.append(ChatMessage(
+                role: .user,
+                content: "[Tool output]\n" + combined,
+                attachments: carriedAttachments
+            ))
         }
         return out
     }
