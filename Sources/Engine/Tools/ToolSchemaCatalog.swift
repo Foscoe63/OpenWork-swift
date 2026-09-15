@@ -245,6 +245,8 @@ public enum ToolSchemaCatalog {
     }
 
     private static let schemas: [String: String] = [
+        "agent_spawn": #"{"type":"object","properties":{"target_agent_id":{"type":"string","description":"Which agent to delegate to - its id or name, from the configured agents."},"task_title":{"type":"string","description":"The objective, stated so it can be worked on without further questions. The sub-agent runs unattended and cannot ask you anything."},"task_description":{"type":"string","description":"Context the sub-agent needs: files, constraints, what done looks like."}},"required":["target_agent_id","task_title"]}"#,
+
         // Isolation. A worktree is where an agent may commit, because history added on a branch
         // of its own cannot rewrite anything you wrote.
         "worktree_create": #"{"type":"object","properties":{"name":{"type":"string","description":"Short name for the task being isolated, e.g. 'dark-mode-fix'. Becomes branch openwork/<name>."}},"required":["name"]}"#,
@@ -291,7 +293,6 @@ public enum ToolSchemaCatalog {
         "generate_image": #"{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]}"#,
         "mlx_vision_describe": #"{"type":"object","properties":{"path":{"type":"string"},"prompt":{"type":"string"}},"required":["path"]}"#,
         "image_analyze": #"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
-        "agent_spawn": #"{"type":"object","properties":{"task_title":{"type":"string"},"task_description":{"type":"string"},"subagent_id":{"type":"string"},"subagent_name":{"type":"string"}},"required":["task_title","task_description"]}"#,
         "agent_message": #"{"type":"object","properties":{"to_agent_id":{"type":"string"},"to_agent_name":{"type":"string"},"content":{"type":"string"},"message_type":{"type":"string"}},"required":["content"]}"#,
         "memory_store": #"{"type":"object","properties":{"key":{"type":"string"},"content":{"type":"string"},"category":{"type":"string"}},"required":["content"]}"#,
         "memory_recall": #"{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"#,

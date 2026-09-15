@@ -730,6 +730,12 @@ public final class AgentRunner {
             lastPrompt.lowercased().contains("refactor")
         )
 
+        // What the sub-agents found, for the parent model to actually read. Their reports used
+        // to reach the Sub-Agent Tree and the Agent Messages log and stop there — the parent LLM
+        // was never told, so it answered as though nothing had been delegated. Work was done,
+        // displayed, and then ignored by the only participant who could act on it.
+        var subAgentBriefing: [String] = []
+
         // 1. Spawning Multi-Agent Decomposition with real isolated LLM evaluation
         if isComplexGoal && !agent.subAgentIds.isEmpty {
             let planMsg = AgentMessage(
@@ -794,40 +800,37 @@ public final class AgentRunner {
             }
             onMessageUpdated(assistantMsg)
 
+            // Real sub-agents, concurrently.
+            //
+            // These used to be one `ProviderRouter.stream` each with `tools: []` and a 512-token
+            // ceiling: a paragraph of advice pasted back under a progress bar. They now run a
+            // full tool loop in an isolated worktree through `SubAgentExecutor`, which is why
+            // the budgets below are small — unattended work needs a hard stop, not a large one.
             let subAgentStartTime = CFAbsoluteTimeGetCurrent()
-            let replies: [(taskId: String, text: String)] = await withTaskGroup(
-                of: (String, String).self
+            let replies: [(taskId: String, outcome: SubAgentExecutor.Outcome)] = await withTaskGroup(
+                of: (String, SubAgentExecutor.Outcome).self
             ) { group in
                 for entry in delegated {
                     let subAgent = entry.agent
                     let taskId = entry.task.id
                     let title = entry.task.taskTitle
-                    group.addTask {
-                        let box = ConcurrentTextBox()
-                        let subSystemPrompt = "\(subAgent.systemPrompt)\n\nYou are operating as an autonomous specialized sub-agent supporting \(agent.name). Provide a concise, highly actionable technical assessment for the following goal."
-                        do {
-                            try await ProviderRouter.shared.stream(
-                                provider: provider,
-                                model: model,
-                                systemPrompt: subSystemPrompt,
-                                messages: [ChatMessage(sessionId: session.id, role: .user, content: "Sub-task Objective: \(title)\nContext: \(lastPrompt)")],
-                                temperature: subAgent.temperature,
-                                maxTokens: 512,
-                                reasoningEffort: .off,
-                                tools: []
-                            ) { chunk in
-                                if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
-                            }
-                        } catch {
-                            box.append("Sub-agent \(subAgent.name) completed evaluation with standard \(subAgent.role) heuristics.")
-                        }
-                        let text = box.text.isEmpty
-                            ? "Sub-agent \(subAgent.name) finalized analysis for \(title)."
-                            : box.text
-                        return (taskId, text)
+                    group.addTask { @MainActor in
+                        let outcome = await SubAgentExecutor.run(
+                            subAgent: subAgent,
+                            parentAgent: agent,
+                            objective: title,
+                            context: lastPrompt,
+                            workspace: workspace,
+                            provider: provider,
+                            model: model,
+                            depth: 1,
+                            maxIterations: 6,
+                            deadlineSeconds: 240
+                        )
+                        return (taskId, outcome)
                     }
                 }
-                var collected: [(String, String)] = []
+                var collected: [(String, SubAgentExecutor.Outcome)] = []
                 for await result in group { collected.append(result) }
                 return collected
             }
@@ -836,13 +839,15 @@ public final class AgentRunner {
             // finish, so the transcript does not reshuffle itself run to run.
             for entry in delegated {
                 guard let reply = replies.first(where: { $0.taskId == entry.task.id }) else { continue }
+                let outcome = reply.outcome
                 var subTask = entry.task
-                subTask.status = .completed
+                subTask.status = outcome.succeeded ? .completed : .failed
                 subTask.progress = 1.0
-                subTask.resultSummary = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                subTask.resultSummary = outcome.report
+                subTask.errorMessage = outcome.succeeded ? nil : outcome.stoppedBecause
                 subTask.completedAt = Date()
-                subTask.tokensUsed = max(180, reply.text.count / 4)
-                subTask.durationMs = (CFAbsoluteTimeGetCurrent() - subAgentStartTime) * 1000
+                subTask.tokensUsed = max(180, outcome.report.count / 4)
+                subTask.durationMs = outcome.durationMs
 
                 let replyMsg = AgentMessage(
                     fromAgentId: entry.agent.id,
@@ -853,6 +858,10 @@ public final class AgentRunner {
                     content: subTask.resultSummary
                 )
                 AgentCommunicationHub.shared.postMessage(replyMsg)
+                subAgentBriefing.append("""
+                ### \(entry.agent.name) (\(entry.agent.role))
+                \(outcome.report)
+                """)
                 if let idx = assistantMsg.subAgentTasks.firstIndex(where: { $0.id == subTask.id }) {
                     assistantMsg.subAgentTasks[idx] = subTask
                 }
@@ -1000,6 +1009,25 @@ public final class AgentRunner {
 
         var iteration = 0
         var workingMessages = session.messages
+
+        // Hand the sub-agents' work to the parent before it starts answering.
+        if !subAgentBriefing.isEmpty {
+            workingMessages.append(ChatMessage(
+                sessionId: session.id,
+                role: .user,
+                content: """
+                Your sub-agents have finished. They ran with real tools in isolated git \
+                worktrees, so any files they changed are on their own branches and not in the \
+                user's checkout.
+
+                \(subAgentBriefing.joined(separator: "\n\n"))
+
+                Use this. Do not repeat work they already did, and do not claim anything they \
+                refused or failed to finish was completed. If their changes need to reach the \
+                user's checkout, say which branch to merge.
+                """
+            ))
+        }
         var turnPromptTokens = 0
         var turnCompletionTokens = 0
         var identicalToolCounts: [String: Int] = [:]

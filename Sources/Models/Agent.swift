@@ -59,7 +59,12 @@ public struct Agent: Identifiable, Codable, Hashable, Sendable {
         reasoningEffort: ReasoningEffort = .medium,
         parentAgentId: String? = nil,
         subAgentIds: [String] = [],
-        allowedToolIds: [String] = ["file_read", "file_write", "terminal_command", "web_search", "calculator", "agent_spawn", "agent_message"],
+        // Empty means "every tool enabled in the workspace". This used to seed a fixed
+        // seven-item list written before most of the catalog existed, which nothing read — so
+        // the moment anything honoured it, agents would silently lose grep, edit_file,
+        // build_project, run_tests and every perception tool. See
+        // `PersistenceManager.isLegacySeededAllowlist`.
+        allowedToolIds: [String] = [],
         canSpawnSubAgents: Bool = true,
         maxSubAgentDepth: Int = 3,
         autoDelegate: Bool = true,

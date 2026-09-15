@@ -427,6 +427,21 @@ public final class PersistenceManager: @unchecked Sendable {
     }
 
     // MARK: - Agents
+    /// The allowlist every seeded agent shipped with, in the two shapes the seeds used.
+    ///
+    /// Matching exactly, rather than by subset, so an allowlist a user narrowed *to* these tools
+    /// on purpose is only cleared if it is identical to what was seeded — and a user who has
+    /// added or removed anything keeps their choice.
+    static func isLegacySeededAllowlist(_ ids: [String]) -> Bool {
+        let base: Set<String> = [
+            "file_read", "file_write", "terminal_command", "web_search",
+            "calculator", "agent_spawn", "agent_message"
+        ]
+        let withMemory = base.union(["memory_store", "memory_recall"])
+        let stored = Set(ids)
+        return stored == base || stored == withMemory
+    }
+
     public func loadAgents() -> [Agent] {
         var items: [Agent] = []
         if let loaded = storage.load([Agent].self, from: "agents.json"), !loaded.isEmpty {
@@ -437,8 +452,26 @@ public final class PersistenceManager: @unchecked Sendable {
             return items
         }
 
-        // Sanitize any invalid or obsolete SF symbols loaded from user's disk cache
         var modified = false
+
+        // Retire the legacy per-agent tool allowlist.
+        //
+        // `allowedToolIds` is shown in the Agents editor ("7 tools"), is editable there, and is
+        // stored on every agent — and until sub-agents became real, **nothing in any execution
+        // path read it**. The seeded value is a list from before most of the catalog existed: no
+        // grep, no edit_file, no build_project, no run_tests, none of the perception tools. So
+        // the first code to honour it would have handed every sub-agent five useful tools and
+        // called that the user's choice.
+        //
+        // Same reasoning as the voice toggles: a value stored by a control that did nothing is
+        // not a preference. Empty means "every tool enabled in the workspace", so clearing the
+        // untouched seed restores the intent while leaving a real, deliberate allowlist alone.
+        for i in items.indices where Self.isLegacySeededAllowlist(items[i].allowedToolIds) {
+            items[i].allowedToolIds = []
+            modified = true
+        }
+
+        // Sanitize any invalid or obsolete SF symbols loaded from user's disk cache
         for i in 0..<items.count {
             if items[i].avatar == "person.crop.circle.badge.sparkables" || items[i].avatar == "person.crop.circle.badge.sparkles" {
                 items[i].avatar = "person.crop.circle.badge.checkmark"

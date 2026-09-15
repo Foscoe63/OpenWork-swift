@@ -1063,25 +1063,71 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             }
 
         case "agent_spawn":
+            // This used to build a `SubAgentTask` record, return "Spawned sub-agent […] to
+            // execute task", and run nothing whatsoever. The task appeared in the Sub-Agent Tree
+            // with a progress bar, and no work was ever done. It now runs a real agent.
             let taskTitle = dict["task_title"] as? String ?? "Sub-task"
             let taskDesc = dict["task_description"] as? String ?? ""
             let targetAgentId = dict["target_agent_id"] as? String ?? "coder-agent"
-            let targetAgent = PersistenceManager.shared.loadAgents().first(where: { $0.id == targetAgentId })
-            
-            let task = SubAgentTask(
+            let agents = PersistenceManager.shared.loadAgents()
+            guard let targetAgent = agents.first(where: { $0.id == targetAgentId || $0.name == targetAgentId }) else {
+                let available = agents.map(\.id).joined(separator: ", ")
+                return Self.failure("No agent '\(targetAgentId)'. Available: \(available)", startTime)
+            }
+
+            let spawnSettings = PersistenceManager.shared.loadSettings()
+            guard await AgentRunner.subAgentSpawningAllowed(agent: currentAgent, settings: spawnSettings) else {
+                return Self.failure(
+                    "Sub-agent spawning is switched off (Settings › Advanced), or this agent's depth budget is exhausted. Do the work directly.",
+                    startTime
+                )
+            }
+
+            let providers = PersistenceManager.shared.loadProviders()
+            guard let resolution = ProviderSelection.resolve(
+                providers: providers,
+                selectedId: targetAgent.providerId.isEmpty ? spawnSettings.defaultProviderId : targetAgent.providerId
+            ), !resolution.mustRefuse else {
+                return Self.failure("No usable provider for the sub-agent.", startTime)
+            }
+            let subModelId = targetAgent.modelId.isEmpty ? spawnSettings.defaultModelId : targetAgent.modelId
+            let subModel = resolution.provider.models.first(where: { $0.id == subModelId })
+                ?? ModelInfo(id: subModelId, name: subModelId, providerId: resolution.provider.id)
+
+            var task = SubAgentTask(
                 parentAgentId: currentAgent.id,
                 parentAgentName: currentAgent.name,
-                subAgentId: targetAgentId,
-                subAgentName: targetAgent?.name ?? "Specialized Sub-Agent",
-                subAgentAvatar: targetAgent?.avatar ?? "person.circle",
+                subAgentId: targetAgent.id,
+                subAgentName: targetAgent.name,
+                subAgentAvatar: targetAgent.avatar,
                 taskTitle: taskTitle,
                 taskDescription: taskDesc,
                 status: .running,
                 depth: 1
             )
+
+            let outcome = await SubAgentExecutor.run(
+                subAgent: targetAgent,
+                parentAgent: currentAgent,
+                objective: taskTitle,
+                context: taskDesc,
+                workspace: workspace,
+                provider: resolution.provider,
+                model: subModel,
+                depth: 1
+            )
+
+            task.status = outcome.succeeded ? .completed : .failed
+            task.progress = 1.0
+            task.resultSummary = outcome.report
+            task.completedAt = Date()
+            task.durationMs = outcome.durationMs
+            if !outcome.succeeded { task.errorMessage = outcome.stoppedBecause }
+
             return ToolExecutionResult(
-                success: true,
-                output: "Spawned sub-agent [\(task.subAgentName)] to execute task: \(taskTitle)",
+                success: outcome.succeeded,
+                output: outcome.report,
+                error: outcome.succeeded ? nil : outcome.stoppedBecause,
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000,
                 createdSubAgentTask: task
             )
