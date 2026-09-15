@@ -307,11 +307,15 @@ public final class AppState: ObservableObject {
         agents.first(where: { $0.id == selectedAgentId }) ?? agents.first ?? Agent(id: "default", name: "Assistant")
     }
 
-    public var currentProvider: ModelProvider {
+    /// The provider resolution for this session, including whether the turn must be refused.
+    public var currentProviderResolution: ProviderSelection.Resolution? {
         // Matching on id alone would hand back a provider the user switched off — the exact
-        // state a stale `defaultProviderId` produces — and the enabled fallback below would
-        // never run.
-        ProviderSelection.resolve(providers: providers, selectedId: selectedProviderId)?.provider
+        // state a stale `defaultProviderId` produces — and the fallback below would never run.
+        ProviderSelection.resolve(providers: providers, selectedId: selectedProviderId)
+    }
+
+    public var currentProvider: ModelProvider {
+        currentProviderResolution?.provider
             ?? ModelProvider(name: "Default", type: .local, kind: .ollama)
     }
 
@@ -744,6 +748,27 @@ public final class AppState: ObservableObject {
         persistence.saveSessions(sessions)
 
         composerText = ""
+
+        // "Prefer local, never silently reach the network." A local provider that is switched off
+        // used to fall through to the first *enabled* provider in array order, which on a typical
+        // configuration is a cloud one sitting earlier in the list than the local engine — so a
+        // turn the user believed was local was answered over the network, with nothing said.
+        if let resolution = currentProviderResolution, resolution.mustRefuse,
+           let reason = resolution.refusalMessage {
+            let refusal = ChatMessage(
+                sessionId: session.id,
+                role: .assistant,
+                content: reason,
+                isError: true
+            )
+            session.messages.append(refusal)
+            if let idx = sessions.firstIndex(where: { $0.id == session.id }) {
+                sessions[idx] = session
+            }
+            persistence.saveSessions(sessions)
+            return
+        }
+
         isGenerating = true
 
         let agent = currentAgent

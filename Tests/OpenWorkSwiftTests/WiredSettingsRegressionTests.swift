@@ -313,3 +313,78 @@ final class VerboseLoggingGateTests: XCTestCase {
         XCTAssertEqual(AppLog.truncated("short", limit: 100), "short")
     }
 }
+
+/// "Prefer local, never silently reach the network."
+///
+/// `resolve` used to fall through to the first *enabled* provider in array order when the
+/// selection was off. In a typical configuration a cloud provider sits earlier in that array than
+/// the local engine, so disabling the local provider sent the next turn over the network with
+/// nothing said. Fixing `defaultProviderId` stopped it firing on a fresh install; it stayed one
+/// toggle away for anyone who switched the built-in engine off.
+final class LocalProviderIsNeverSubstitutedByCloudTests: XCTestCase {
+
+    private func provider(_ id: String, _ type: ProviderType, enabled: Bool) -> ModelProvider {
+        ModelProvider(id: id, name: id, type: type, kind: type == .local ? .ollama : .openai, isEnabled: enabled)
+    }
+
+    /// The exact shape found on this machine: a cloud provider enabled and earlier in the array.
+    func testADisabledLocalSelectionDoesNotFallThroughToCloud() {
+        let providers = [
+            provider("openrouter-cloud", .cloud, enabled: true),
+            provider("omlx-local", .local, enabled: false)
+        ]
+        let resolved = ProviderSelection.resolve(providers: providers, selectedId: "omlx-local")
+        XCTAssertEqual(resolved?.provider.type, .local, "must not hand the turn to a cloud provider")
+        XCTAssertTrue(resolved?.mustRefuse == true)
+        XCTAssertNotNil(resolved?.refusalMessage)
+        XCTAssertEqual(resolved?.outcome, .refusedToLeaveLocal(selected: "omlx-local"))
+    }
+
+    /// Another local provider is a fine substitute; only the network is off limits.
+    func testAnotherLocalProviderIsSubstitutedWithoutRefusing() {
+        let providers = [
+            provider("openrouter-cloud", .cloud, enabled: true),
+            provider("lmstudio-local", .local, enabled: true),
+            provider("omlx-local", .local, enabled: false)
+        ]
+        let resolved = ProviderSelection.resolve(providers: providers, selectedId: "omlx-local")
+        XCTAssertEqual(resolved?.provider.id, "lmstudio-local")
+        XCTAssertFalse(resolved?.mustRefuse == true)
+        XCTAssertEqual(resolved?.overrodeDisabled, "omlx-local")
+    }
+
+    /// A disabled *cloud* selection keeps the old behaviour — the rule is about not leaving
+    /// local, not about never substituting.
+    func testADisabledCloudSelectionStillFallsBack() {
+        let providers = [
+            provider("openai-cloud", .cloud, enabled: false),
+            provider("openrouter-cloud", .cloud, enabled: true)
+        ]
+        let resolved = ProviderSelection.resolve(providers: providers, selectedId: "openai-cloud")
+        XCTAssertEqual(resolved?.provider.id, "openrouter-cloud")
+        XCTAssertFalse(resolved?.mustRefuse == true)
+        XCTAssertEqual(resolved?.overrodeDisabled, "openai-cloud")
+    }
+
+    /// Startup correction follows the same rule, or it would move the selection to a cloud
+    /// provider before `resolve` ever got the chance to refuse.
+    func testStartupCorrectionDoesNotMoveALocalSelectionToCloud() {
+        let providers = [
+            provider("openrouter-cloud", .cloud, enabled: true),
+            provider("omlx-local", .local, enabled: false)
+        ]
+        XCTAssertEqual(
+            ProviderSelection.correctedSelectionId(providers: providers, selectedId: "omlx-local"),
+            "omlx-local",
+            "a stale local selection stays put rather than being corrected onto the network"
+        )
+    }
+
+    /// The refusal has to say which provider and what to do, or it is just a failed turn.
+    func testTheRefusalNamesTheProviderAndTheFix() {
+        let providers = [provider("omlx-local", .local, enabled: false)]
+        let message = ProviderSelection.resolve(providers: providers, selectedId: "omlx-local")?.refusalMessage ?? ""
+        XCTAssertTrue(message.contains("omlx-local"))
+        XCTAssertTrue(message.contains("Model Providers"))
+    }
+}

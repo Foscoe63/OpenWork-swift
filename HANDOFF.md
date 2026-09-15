@@ -1,15 +1,16 @@
 # Handoff
 
-Written 2026-09-14. Everything below is verified against the code, not remembered.
+Written 2026-09-14, extended 2026-09-15. Everything below is verified against the code and
+against this machine, not remembered.
 
 ## Where things stand
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` (`c7dc849`) | 374 |
+| OpenWork-Swift | yes, `main` (`935f50a`) | 402 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
-OpenWork went from 13 tests to 374 over this work. Released as 1.1.0.
+OpenWork went from 13 tests to 402 over this work. Released as 1.1.0.
 
 ---
 
@@ -106,9 +107,10 @@ download gone the watchdog saw one tick and then nothing, and would have called 
 looks alive rather than hung. Overrunning still costs only the one turn; the load keeps running
 and populates the cache.
 
-**One model resident at a time**, plus `MLX.Memory.cacheLimit` at half of physical memory, as
-GrizzyBot's generator does. Loading a second multi-gigabyte checkpoint beside the first is the
-fastest way to exhaust unified memory.
+**One model resident at a time**, plus a cap on `MLX.Memory.cacheLimit`, as GrizzyBot's generator
+does. Loading a second multi-gigabyte checkpoint beside the first is the fastest way to exhaust
+unified memory. That cap was half of physical memory and is now the user's own GPU budget ratio —
+see "The GPU budget slider moved a number nothing read" below.
 
 **Three tests were passing for the wrong reason.** `LocalModelResolutionTests` called the real
 engine with the real root list, so it only passed on a machine whose scanned roots held no models.
@@ -163,40 +165,195 @@ off. A turn that produced only reasoning also no longer renders as an empty bubb
 
 ---
 
+## What landed 2026-09-15
+
+A sweep of all 57 settings fields for a control, a reader, and agreement between the two. Three
+fixes, each verified live rather than by reading.
+
+**The GPU budget slider moved a number nothing read.** `mlxGpuMemoryBudgetRatio` had a slider on
+the MLX page, and its value rendered *in green* as "Safe GPU Memory Budget: 72.0 GB (75%)" there
+and again in `ProvidersView`. Nothing read it. `NativeMLXService` capped MLX's buffer cache at a
+hardcoded `cacheLimitFraction = 0.5`, and `assessCompatibility` judged which models fit against a
+separate hardcoded `0.75`. The setting's default is 0.75, so the compatibility verdict agreed with
+the readout exactly until someone moved the slider — which is why this survived the last sweep.
+Same shape as the provider-default fault: a confident number with nothing behind it.
+
+`applyMemoryPolicy(budgetRatio:)` and `assessCompatibility(requiredRAMGB:budgetRatio:)` now take
+the ratio. **This changes runtime behaviour at the default**: MLX's cache limit goes from 50% to
+75% of physical memory — 48GB to 72GB here — because 75% is what the UI has always claimed. Every
+verdict the user sees is re-judged in `scanInstalledModels`, which is the one place holding both
+the user's ratio and a list about to be displayed; `appState.localMLXModels` is fed only from
+there. The curated catalog is a `static` with no access to settings and still bakes a verdict at
+the shipped default, so **never display `curatedModels[i].compatibility` directly** — use
+`judged(atBudgetRatio:)`. The slider re-judges on commit, not per step, because a rescan walks
+every attached model volume.
+
+Verified: `MLX.Memory.cacheLimit` read back `77309411328` after a real turn — 96GB × 0.75 exactly.
+
+**The voice toggles gated nothing, and the feature they did not gate is real.** The previous
+handoff filed `voiceInputEnabled`, `voiceSynthesisEnabled` and `speechVoiceIdentifier` as surface
+for a planned feature. They are not: `ComposerView` draws a working mic button and
+`MessageBubbleView` a working speak button, both unconditional. `speechVoiceIdentifier` defaulted
+to Alex, had no control anywhere in the UI, and was never read — every utterance used
+`AVSpeechSynthesisVoice(language: "en-US")`.
+
+Both buttons now honour their toggles, `speak` resolves the stored identifier (falling back when
+it names a voice this Mac has not downloaded), and the Extensions page has a voice picker with a
+Preview button.
+
+**Wiring a switch that did nothing can amount to deleting a feature.** Both toggles shipped
+defaulting to `false`, so honouring a stored `false` literally would have removed the mic and
+speak buttons from every existing install. A stored value from a switch that was never wired is
+not a preference. Hence `AppSettings.settingsSchemaVersion` and
+`PersistenceManager.applyMigrations`: version 2 turns both on for any file written before the key
+existed, then stamps the version so a deliberate "off" sticks afterwards. **A migration must key
+on the stored version, never on the values** — re-deriving "this looks unset" each load means the
+user can never turn the setting off. There is a test for each direction.
+
+Note the decoder subtlety: `settingsSchemaVersion` falls back to **1** when absent, not to
+`def.settingsSchemaVersion`. Every other field in that initializer uses `def`; this one cannot, or
+no existing file would ever migrate.
+
+**Everything else on the sweep, in one pass.**
+
+- **Two cards, not one.** `defaultTemperature`, `defaultMaxTokens` and `defaultReasoningEffort`
+  seed the *new-agent sheet* — a turn reads `agent.temperature`, so dragging Temperature to 0.1
+  for "precise coding" changed nothing about the agent answering. They sat under "Sampling
+  parameters for autonomous LLM responses" beside Top-P and the penalties, which *are* read live
+  per request. Split into "Defaults for New Agents" and "Sampling", with an **Apply to All
+  Existing Agents** button so the values are reachable without creating an agent. The agent editor
+  gained a Reasoning Effort picker — it was the only one of the three with no per-agent control.
+- **Top-P reaches every provider.** It was read only by the in-process MLX path. Now sent by the
+  OpenAI-compatible, Ollama and Anthropic paths too, and only when moved off 1.0 — 1.0 is a no-op,
+  OpenAI advises against steering with temperature and top_p together, and Anthropic rejects
+  `top_p` alongside extended thinking (hence the non-thinking branch only).
+- **`contextCompactionThresholdTokens` got a control.** `AgentRunner` had always read it; the only
+  way to change it was to hand-edit settings.json.
+- **`useTranslucentBackground`** now puts an `NSVisualEffectView` behind the window, with the
+  sidebar and inspector thinning their fills via `ThemeColors.paneBg(for:translucent:)`. Vibrancy
+  needs both halves — an opaque pane over a material hides it completely, so wiring only the
+  material would have looked like the switch was still broken.
+- **`compactSidebar` and `showInterAgentCommunicationLogs`** had no control anywhere, not even a
+  switch that did nothing. Both now have one and both do something: tighter sidebar rows and no
+  workspace subtitle; the Agent Messages inspector tab hidden, with the selection moved off it so
+  the inspector cannot render a tab the user just switched off.
+- **`enableAgentCollaborationRoom`** gates the Multi-Agent Collaboration Room segment in AI
+  Agents. It never gated `AgentCommunicationHub` and should not: that is delegation plumbing, not
+  a room.
+- **`AgentCommunicationHub`'s log had no readers and no bound.** `allMessages()` and
+  `messages(for:)` are called from nowhere — the inspector reads `AppState.interAgentMessages`,
+  a different store — so four call sites appended to an array nothing drained for the life of the
+  process. Capped at 2000, oldest dropped.
+- **`developerMode`** gates the Live Runtime Telemetry card and a new MLX Diagnostics card
+  (resident models, the GPU budget in GB, and **every search root**). Those roots existed only
+  inside a not-downloaded error message, which was on the "worth building next" list.
+- **`verboseLogging`** had nothing to turn on: there was no verbose logging anywhere. `AppLog`
+  now exists, gated on the setting, logging raw SSE payloads and tool call/result payloads to the
+  unified log (`log stream --predicate 'subsystem == "ai.openwork"'`). `saveSettings` invalidates
+  its cached gate, so the switch works without a relaunch.
+- **`imageGenerationEnabled` reads the tools it writes.** It write-throughs to the `.mediaVision`
+  category, so enabling one of those tools from the Tools page left the switch reading "off" while
+  the tools were on — a switch reporting the opposite of the truth.
+- **The version is the version.** The About row hardcoded "1.0.0" against a 1.1.0 release, and
+  `project.yml` set no `MARKETING_VERSION`, so the bundle reported 1.0 as well. `MARKETING_VERSION`
+  is now set and the row reads `CFBundleShortVersionString`. Verified: the built bundle reports
+  1.1.0. **Bump it in `project.yml` on release.**
+- **`autoCheckForUpdates` stopped promising.** The toggle toasted "Auto-check for updates enabled"
+  beside a disabled button that correctly said checking is not implemented. Now disabled with a
+  subtitle that says why.
+- **Two hardcoded developer paths deleted.** `/Volumes/Storage/Models` was both the
+  `customMLXModelsDirectory` default *and* a block in `AppState.loadAll` that wrote it into the
+  user's settings whenever the path existed. The volume sweep is what finds the library; an empty
+  field is not a gap to fill. The Updates page also loaded its icon from
+  `/Volumes/Storage/Icons/…icns` with an `NSImage(named:)` fallback.
+
+Verified after all of it: 13 models discovered with `customMLXModelsDirectory` empty, **6
+compatibility verdicts change** between budget ratio 0.75 and 0.50, and a real turn answers while
+rewriting none of settings.json, mcp_servers.json, providers.json or agents.json.
+
+**Looking at the UI found a bug that compiling it could not.** Everything above was
+compiler-verified, test-verified and exercised headlessly before the app was ever launched. It was
+launched at the end, and the new voice picker rendered **completely blank**.
+
+`speechVoiceIdentifier` shipped defaulting to `com.apple.speech.synthesis.voice.Alex` — an
+*NSSpeechSynthesizer* identifier. Speech here goes through `AVSpeechSynthesizer`, whose
+identifiers look like `com.apple.voice.compact.en-US.Samantha`; the default matched none of the
+186 voices installed on this Mac. **A SwiftUI Picker whose selection matches no tag renders
+nothing at all** — no placeholder, no first item, blank. Nobody could have noticed while the field
+was unread, and the unit test for it passed: `preferredVoice()` correctly falls back, so speech
+worked the whole time.
+
+The default is now `""` (system default), the picker offers an explicit "System Default" row, and
+`VoiceSpeechEngine.resolvedVoiceIdentifier` maps an unresolvable stored id to `""` so a legacy
+value displays honestly. Normalised on read rather than migrated, because resolving a voice means
+touching AVFoundation and `loadSettings` runs per turn.
+
+**The lesson is the general one, not the voice one: a settings control verified only by the
+compiler has not been verified.** Launch the app and look at the page.
+
+**"Prefer local, never silently reach the network" is now the rule, and it was adopted
+deliberately.** The previous handoff left this open on purpose, because it is a product decision
+rather than a bug: `ProviderSelection.resolve` handed the turn to the first *enabled* provider in
+array order when the selection was off, and on a typical configuration a cloud provider sits
+earlier in that array than the local engine. Fixing `defaultProviderId` stopped it firing on a
+fresh install; it stayed one toggle away for anyone who switched the built-in engine off.
+
+A disabled **local** selection may now only be replaced by another **local** provider. When there
+is none, `Resolution.mustRefuse` is true and the turn stops with a message naming the provider and
+how to fix it, instead of answering over the network. A disabled *cloud* selection still falls
+back as before — the rule is about not leaving local, not about never substituting.
+`correctedSelectionId` follows the same rule at startup, or it would move the selection onto the
+network before `resolve` ever got the chance to refuse.
+
+Both turn entry points enforce it: `AppState.sendMessage` and `HeadlessAgentTurn.run`. The
+headless path matters more, not less — a Shortcut or a Siri phrase runs with nobody watching, so
+a silent substitution would never be noticed. `Resolution.overrodeDisabled` survives as a computed
+property over the new `Outcome`, so the existing callers and tests are untouched.
+
+**`loadSettings()` was a read that wrote.** Every branch ended in a write, including the
+steady-state one, so it rewrote `mcp_servers.json` on every call — a synchronous atomic write,
+under a lock, from the main thread among others — from 26 call sites including per turn, per tool
+call, and six times over in `MCPProtocol`. Writes are now conditional on something having actually
+changed; repairs and migrations still apply in memory on every load, so callers never see stale
+values.
+
+Proving it needed no instrumentation: `mcp_servers.json`'s mtime moved during a test that only
+read settings. `LoadSettingsDoesNotWriteTests` pins it, and a real MLX turn now leaves
+`settings.json`, `mcp_servers.json` and `providers.json` all untouched.
+
+---
+
 ## What is left
 
-### Settings still dead (verified by sweep, not memory)
+### Settings still dead
 
-`defaultReasoningEffort` is wired for *new* agents only. Still unread:
-`useTranslucentBackground`, `compactSidebar`, `showInterAgentCommunicationLogs`,
-`enableAgentCollaborationRoom`, `voiceInputEnabled`, `voiceSynthesisEnabled`,
-`speechVoiceIdentifier`, `imageGenerationEnabled`, `developerMode`, `verboseLogging`, and the
-cloud fields (`cloudSyncEnabled`, `cloudControlPlaneUrl`, `cloudAccountEmail`,
-`cloudOrganizationName`, `autoCheckForUpdates`).
+Four cloud fields — `cloudSyncEnabled`, `cloudControlPlaneUrl`, `cloudAccountEmail`,
+`cloudOrganizationName` — plus `autoCheckForUpdates`. Every other field in `AppSettings` now has
+both a control and a reader, pinned by tests.
 
-These are left deliberately rather than deleted: several look like surface for planned features
-(voice, image generation, the collaboration room), and the cloud fields are two whole settings
-pages. Deleting those is a product decision, not a cleanup — it needs your call, not mine.
+These five are **not** an oversight, they are an unanswered product question. The cloud fields are
+two whole settings pages for a feature that does not exist; `autoCheckForUpdates` is a switch for
+an update feed that does not exist. Deleting them is a decision, not a cleanup, so they are left
+with honest UI instead: the auto-check toggle is now disabled and says why, next to the Check
+button that already did. `RemovedSettingsTests` shows how to delete a stored field safely when
+the call is made.
+
+`startOnLogin` is vestigial by design: the toggle reads `SMAppService` directly, because macOS is
+the only authority on whether a login item is registered. The stored copy is written and never
+read, which is correct.
+
 
 ### Worth building next
 
-- **The stale-selection fallback still prefers array order over locality.** Fixing the default
-  means it no longer fires here, but `ProviderSelection.resolve` will still hand a turn to the
-  first *enabled* provider when the selected one is off — and that can be a cloud provider while
-  a local one sits later in the array. Left deliberately: the decision was that Local MLX should
-  be an ordinary provider rather than a special case, and "prefer local, never silently reach the
-  network" is a product rule that wants stating explicitly, not smuggled into a sort order. If it
-  is adopted, the honest version fails the turn when no local provider is available rather than
-  substituting a cloud one.
 - **Reasoning that never closes its tag.** Ornith sometimes emits its chain of thought with no
   `</think>` at all, and `AssistantContentSanitizer` — correctly — only strips what it can prove is
   reasoning, so that text reaches the user as the answer. Observed in a live run, not fixed:
   guessing where reasoning ends without a delimiter is how you truncate a real answer. The
   honest fix is probably to consume MLX's own reasoning channel where the model exposes one,
   rather than to parse harder.
-- **Local Models needs to surface the search roots.** The download UI now works, but a user whose
-  library sits somewhere unusual still has no way to see where the app looked — that list exists
-  only in the not-downloaded error. `knownMLXSearchRoots` is the data; it wants a panel.
+- **Local Models could still surface the search roots.** Settings › Debug now lists them, behind
+  `developerMode`. A user whose library sits somewhere unusual has to find that page; the Local
+  Models view itself is where they would look first.
 - **Symbol-aware *rename*** on top of `SymbolIndex` — the index now knows where things are
   declared; the next hop is finding references safely.
 - **Narrowed re-runs for more runners.** Only SwiftPM, `go test` and pytest can be narrowed.
@@ -256,8 +413,28 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 Permanent fix needs your password: `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
 
+**`swift test` can fail with a missing `metal` compiler after a reboot.**
+
+```
+error: unable to spawn process '/var/run/com.apple.security.cryptexd/mnt/
+com.apple.MobileAsset.MetalToolchain-v27.1.5194.15.EZDBV5/Metal.xctoolchain/usr/bin/metal'
+```
+
+The Metal toolchain is a cryptex whose mount point carries a random suffix that changes on
+reboot, and XCBuild pins the old absolute path in its cached build description. `xcrun -f metal`
+resolving fine while the build cannot spawn it is the tell. Clearing intermediates, `.build/out`
+or the SwiftPM database does not help — the path lives here:
+
+```bash
+rm -rf .build/out/Intermediates.noindex/XCBuildData
+```
+
 **The project needs Xcode 26.6+ (Swift 6.3)** — `mlx-swift` declares
 `swift-tools-version: 6.3;(experimentalCGen)`.
+
+**A new source file needs `xcodegen generate`.** `Sources/Utils/AppLog.swift` was added this
+pass; the `.xcodeproj` is tracked, so it must be regenerated and committed or the app target will
+not compile the file even though `swift build` does.
 
 **App Intents are validated at build time by the real app target, not by `swift build`.** A phrase
 interpolating a `String` parameter is a halting error there and invisible to SwiftPM. After
@@ -285,6 +462,10 @@ actually empty, which is half of why local MLX appeared broken.
 | `customMLXModelsDirectory` | `""` | Not load-bearing: `/Volumes/Models/Models` is found by the volume sweep. Set it only for a library somewhere else. |
 | `customHFCachePath` | `""` | |
 | `sandboxAgentFileSystem` | `false` | |
+| `settingsSchemaVersion` | `2` | Stamped by the voice migration on 2026-09-15. Absent means 1. |
+| `voiceInputEnabled` | `true` | Migrated from a stored `false` that no switch had ever controlled. |
+| `voiceSynthesisEnabled` | `true` | As above. |
+| `mlxGpuMemoryBudgetRatio` | `0.75` | Now load-bearing: it sets `MLX.Memory.cacheLimit` (72GB of 96GB here) and decides which models are badged as fitting. |
 
 `providers.json`: two providers are enabled — `omlx-local` and `openrouter-cloud`. That pairing is
 what made the default bug dangerous rather than merely wrong, because `openrouter-cloud` sits

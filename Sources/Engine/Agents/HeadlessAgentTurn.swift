@@ -49,6 +49,14 @@ public enum HeadlessAgentTurn {
         let model = appState.currentModel
         let workspace = appState.currentWorkspace
 
+        // Same rule as an on-screen turn: a switched-off local provider must not be replaced by
+        // a cloud one. This path matters more, not less — a Shortcut or a Siri phrase runs with
+        // nobody watching, so a silent substitution would never be noticed.
+        if let resolution = appState.currentProviderResolution, resolution.mustRefuse,
+           let reason = resolution.refusalMessage {
+            return Result(reply: reason, skipped: [], sessionId: "")
+        }
+
         var session = Session(
             workspaceId: workspace.id,
             title: title,
