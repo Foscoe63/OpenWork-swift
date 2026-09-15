@@ -500,6 +500,30 @@ pipe is buffered and never flushed, so write benchmark results to a file, not st
 
 ## Environment gotchas
 
+**A "dead" region of our UI may be another app's window, not our bug.** A user reported the Agent
+Messages inspector tab did nothing while every other tab worked. Hours went into SwiftUI
+hit-testing theories — `.contentShape`, `.buttonStyle(.plain)`, tooltip tracking views, glyph
+widths — all wrong. The tab was fine. GrizzyBot had a 135x176 always-on-top floating window
+(`layer=101`) parked over that strip of the inspector tab bar, eating the clicks.
+
+Two tells that should have redirected the search immediately, and did not:
+
+- The failure was **positional, not per-tab**: moving `comms` to the end fixed it, and whatever
+  tab landed in slot 2 then died instead.
+- **AXPress worked while a synthetic click did not.** AXPress goes to the app; a click goes to the
+  window server, which routes it to the frontmost window at that point. That divergence *is* the
+  signature of an occluding window and means the control itself is healthy.
+
+Check the window list before rewriting any view. Four lines:
+
+```bash
+python3 -c "import Quartz;[print(f\"layer={w.get('kCGWindowLayer')} {w.get('kCGWindowOwnerName')} {w.get('kCGWindowBounds')}\") for w in Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly,0)]"
+```
+
+Anything with `layer > 0` overlapping our frame is a suspect. The general rule: when a UI symptom
+is positional, suspect the environment before the code.
+
+
 **`swift build` crashes in the manifest compile** unless the Xcode toolchain is selected:
 
 ```bash
