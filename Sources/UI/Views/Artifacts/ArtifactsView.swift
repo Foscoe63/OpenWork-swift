@@ -6,9 +6,14 @@ public struct ArtifactsView: View {
     @State private var files: [String] = []
     @State private var selectedFileName: String? = nil
     @State private var fileContent: String = ""
-    @State private var isSaving: Bool = false
+    /// What the selected file actually is. Anything other than `.text` means the editor is
+    /// showing a placeholder, and saving must be refused.
+    @State private var selectedContent: WorkspaceFileScanner.Content = .text("")
     @State private var newFileName: String = ""
     @State private var showingNewFileSheet: Bool = false
+
+    /// How often the workspace is rescanned while this view is on screen.
+    private static let rescanInterval: Duration = .seconds(2.5)
 
     public init(appState: AppState) {
         self.appState = appState
@@ -37,7 +42,7 @@ public struct ArtifactsView: View {
                             .font(.system(size: 11))
                             .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .help("Create New File")
 
                     Button {
@@ -47,7 +52,7 @@ public struct ArtifactsView: View {
                             .font(.system(size: 11))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .help("Refresh")
                 }
                 .padding(12)
@@ -82,7 +87,7 @@ public struct ArtifactsView: View {
                                 .background(Color.orange.opacity(0.12))
                                 .cornerRadius(5)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.hitTestable)
                             .help("Drop raw invoices, receipts, and source drafts here")
 
                             Button {
@@ -102,7 +107,7 @@ public struct ArtifactsView: View {
                                 .background(Color.green.opacity(0.12))
                                 .cornerRadius(5)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.hitTestable)
                             .help("Transformed PDFs, summaries, and generated reports appear here")
                         }
                         .padding(.horizontal, 8)
@@ -116,7 +121,7 @@ public struct ArtifactsView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         if files.isEmpty {
                             VStack(spacing: 6) {
-                                Text("No files found in workspace directory.")
+                                Text("No files in this workspace folder.")
                                     .font(.system(size: 11))
                                     .foregroundColor(.secondary)
                             }
@@ -131,10 +136,14 @@ public struct ArtifactsView: View {
                                         Image(systemName: fileIcon(for: file))
                                             .font(.system(size: 11))
                                             .foregroundColor(isSelected ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.textSecondary(for: appState.settings.theme))
+                                        // Entries are workspace-relative paths now, so truncate
+                                        // the directory rather than the filename.
                                         Text(file)
                                             .font(.system(size: 11.5))
                                             .foregroundColor(isSelected ? ThemeColors.textPrimary(for: appState.settings.theme) : ThemeColors.textSecondary(for: appState.settings.theme))
                                             .lineLimit(1)
+                                            .truncationMode(.head)
+                                            .help(file)
                                         Spacer()
                                     }
                                     .padding(.horizontal, 8)
@@ -142,7 +151,7 @@ public struct ArtifactsView: View {
                                     .background(isSelected ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
                                     .cornerRadius(6)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.hitTestable)
                             }
                         }
                     }
@@ -185,6 +194,10 @@ public struct ArtifactsView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
+                        .disabled(!selectedContent.isEditable)
+                        .help(selectedContent.isEditable
+                              ? "Write the editor contents back to disk"
+                              : "This file is not editable text")
                     }
                 }
                 .padding(12)
@@ -193,21 +206,25 @@ public struct ArtifactsView: View {
                 Divider()
 
                 if let sel = selectedFileName {
-                    TabView {
-                        // Tab 1: Live Interactive Canvas
-                        LiveArtifactWorkbenchView(appState: appState, fileName: sel, content: fileContent)
-                            .tabItem {
-                                Label("Live Canvas", systemImage: "sparkles.tv")
-                            }
+                    if selectedContent.isEditable {
+                        TabView {
+                            // Tab 1: Live Interactive Canvas
+                            LiveArtifactWorkbenchView(appState: appState, fileName: sel, content: fileContent)
+                                .tabItem {
+                                    Label("Live Canvas", systemImage: "sparkles.tv")
+                                }
 
-                        // Tab 2: Raw Code Editor
-                        TextEditor(text: $fileContent)
-                            .font(.system(size: 12, design: .monospaced))
-                            .padding(12)
-                            .background(ThemeColors.bg(for: appState.settings.theme))
-                            .tabItem {
-                                Label("Source Editor", systemImage: "doc.text")
-                            }
+                            // Tab 2: Raw Code Editor
+                            TextEditor(text: $fileContent)
+                                .font(.system(size: 12, design: .monospaced))
+                                .padding(12)
+                                .background(ThemeColors.bg(for: appState.settings.theme))
+                                .tabItem {
+                                    Label("Source Editor", systemImage: "doc.text")
+                                }
+                        }
+                    } else {
+                        unopenableFileNotice(selectedContent)
                     }
                 } else {
                     VStack(spacing: 10) {
@@ -225,6 +242,9 @@ public struct ArtifactsView: View {
         .background(ThemeColors.bg(for: appState.settings.theme))
         .onAppear {
             loadFiles()
+        }
+        .task {
+            await rescanUntilCancelled()
         }
         .sheet(isPresented: $showingNewFileSheet) {
             VStack(spacing: 14) {
@@ -247,39 +267,124 @@ public struct ArtifactsView: View {
     }
 
     private func loadFiles() {
-        let path = appState.currentWorkspace.folderPath
-        let items = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-        files = items.filter { !$0.hasPrefix(".") }.sorted()
+        files = WorkspaceFileScanner.listFiles(at: appState.currentWorkspace.folderPath)
         if selectedFileName == nil, let first = files.first {
             selectFile(first)
+        }
+    }
+
+    /// Agents write into the workspace while this view is open, so the list has to keep up
+    /// without the user thinking to press refresh.
+    ///
+    /// Driven from `.task`, which starts when the view appears and is cancelled when it goes
+    /// away. A `Timer.publish` stored on the struct would be rebuilt on every re-render — and
+    /// `appState` publishes often enough that the interval could keep resetting before it fired.
+    private func rescanUntilCancelled() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: Self.rescanInterval)
+            guard !Task.isCancelled else { return }
+
+            let root = appState.currentWorkspace.folderPath
+            // Off the main actor: walking a large tree should not stutter the UI.
+            let found = await Task.detached(priority: .utility) {
+                WorkspaceFileScanner.listFiles(at: root)
+            }.value
+
+            // A no-op unless the listing actually changed, so the open file and the current
+            // selection survive the rescan.
+            guard root == appState.currentWorkspace.folderPath, found != files else { continue }
+            files = found
+            if let selected = selectedFileName, !files.contains(selected) {
+                // The selected file was deleted or moved underneath us.
+                selectedFileName = nil
+                fileContent = ""
+                selectedContent = .text("")
+            }
+            if selectedFileName == nil, let first = files.first {
+                selectFile(first)
+            }
         }
     }
 
     private func selectFile(_ name: String) {
         selectedFileName = name
         let fullPath = (appState.currentWorkspace.folderPath as NSString).appendingPathComponent(name)
-        if let data = try? String(contentsOfFile: fullPath, encoding: .utf8) {
-            fileContent = data
+        let content = WorkspaceFileScanner.read(path: fullPath)
+        selectedContent = content
+        // The editor is only ever handed real text. It used to be handed the error message,
+        // which Save Changes then wrote over the file.
+        if case .text(let body) = content {
+            fileContent = body
         } else {
-            fileContent = "Binary or unreadable file format."
+            fileContent = ""
         }
     }
 
     private func saveCurrentFile() {
         guard let name = selectedFileName else { return }
+        guard selectedContent.isEditable else {
+            appState.showToast("\(name) is not a text file — not saved")
+            return
+        }
         let fullPath = (appState.currentWorkspace.folderPath as NSString).appendingPathComponent(name)
         do {
             try fileContent.write(toFile: fullPath, atomically: true, encoding: .utf8)
+            selectedContent = .text(fileContent)
             appState.showToast("Saved \(name)")
         } catch {
             appState.showToast("Error saving: \(error.localizedDescription)")
         }
     }
 
+    /// Shown in place of the editor for anything that must not be edited.
+    @ViewBuilder
+    private func unopenableFileNotice(_ content: WorkspaceFileScanner.Content) -> some View {
+        let (symbol, headline, detail): (String, String, String) = {
+            switch content {
+            case .binary(let bytes):
+                return ("doc.badge.gearshape",
+                        "Binary file",
+                        "\(WorkspaceFileScanner.humanReadableSize(bytes)) — not UTF-8 text. Editing is disabled so saving cannot overwrite it.")
+            case .tooLarge(let bytes):
+                return ("doc.badge.ellipsis",
+                        "File too large to edit",
+                        "\(WorkspaceFileScanner.humanReadableSize(bytes)) exceeds the \(WorkspaceFileScanner.humanReadableSize(WorkspaceFileScanner.maxEditableBytes)) editor limit. Open it in Finder instead.")
+            case .unreadable(let reason):
+                return ("exclamationmark.triangle", "Cannot read this file", reason)
+            case .text:
+                return ("doc.text", "", "")
+            }
+        }()
+
+        VStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 34))
+                .foregroundColor(.secondary)
+            Text(headline)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+            Text(detail)
+                .font(.system(size: 11.5))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 380)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ThemeColors.bg(for: appState.settings.theme))
+    }
+
     private func createNewFile() {
         guard !newFileName.isEmpty else { return }
         let fullPath = (appState.currentWorkspace.folderPath as NSString).appendingPathComponent(newFileName)
         do {
+            // The listing is recursive, so "notes/todo.md" is a reasonable thing to type here.
+            let parent = (fullPath as NSString).deletingLastPathComponent
+            try FileManager.default.createDirectory(
+                atPath: parent, withIntermediateDirectories: true)
+            guard !FileManager.default.fileExists(atPath: fullPath) else {
+                appState.showToast("\(newFileName) already exists")
+                return
+            }
             try "".write(toFile: fullPath, atomically: true, encoding: .utf8)
             showingNewFileSheet = false
             let created = newFileName

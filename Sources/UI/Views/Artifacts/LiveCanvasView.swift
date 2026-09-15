@@ -145,7 +145,18 @@ public struct LiveArtifactWorkbenchView: View {
                 }
                 .background(ThemeColors.bg(for: appState.settings.theme))
             case .codeEditor, .auto:
-                Text("Render mode selected")
+                // `.auto` is resolved by `effectiveMode` and never reaches here; it is listed
+                // only to keep the switch exhaustive. This arm used to render the literal
+                // string "Render mode selected", so picking Raw Source showed nothing useful.
+                ScrollView([.vertical, .horizontal]) {
+                    Text(content.isEmpty ? "(empty file)" : content)
+                        .font(.system(size: 12, design: .monospaced))
+                        .textSelection(.enabled)
+                        .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .background(ThemeColors.bg(for: appState.settings.theme))
             }
         }
     }

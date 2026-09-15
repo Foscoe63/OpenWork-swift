@@ -30,7 +30,7 @@ public struct ArtifactsPanelView: View {
                             .font(.system(size: 11))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .help("Refresh File Tree")
                 }
                 .padding(.horizontal, 12)
@@ -41,7 +41,7 @@ public struct ArtifactsPanelView: View {
                         Image(systemName: "folder")
                             .font(.system(size: 24))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.5))
-                        Text("Click refresh to load workspace files.")
+                        Text("No files in this workspace folder.")
                             .font(.system(size: 11))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                     }
@@ -50,20 +50,29 @@ public struct ArtifactsPanelView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(files, id: \.self) { file in
-                            HStack(spacing: 6) {
-                                Image(systemName: fileIcon(for: file))
-                                    .font(.system(size: 11))
-                                    .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
-                                Text(file)
-                                    .font(.system(size: 11.5))
-                                    .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
-                                    .lineLimit(1)
-                                Spacer()
+                            Button {
+                                // The glance list was inert; the only thing a user can want
+                                // from a filename here is to go and open it.
+                                appState.navigationDestination = .artifacts
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: fileIcon(for: file))
+                                        .font(.system(size: 11))
+                                        .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                                    Text(file)
+                                        .font(.system(size: 11.5))
+                                        .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                                        .lineLimit(1)
+                                        .truncationMode(.head)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(ThemeColors.cardBg(for: appState.settings.theme))
+                                .cornerRadius(6)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(ThemeColors.cardBg(for: appState.settings.theme))
-                            .cornerRadius(6)
+                            .buttonStyle(.hitTestable)
+                            .help(file)
                         }
                     }
                     .padding(.horizontal, 12)
@@ -77,9 +86,8 @@ public struct ArtifactsPanelView: View {
     }
 
     private func refreshFiles() {
-        let path = appState.currentWorkspace.folderPath
-        let items = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-        files = items.filter { !$0.hasPrefix(".") }
+        // Same scanner as the full Artifacts page, so the two lists cannot disagree.
+        files = WorkspaceFileScanner.listFiles(at: appState.currentWorkspace.folderPath)
     }
 
     private func fileIcon(for file: String) -> String {
