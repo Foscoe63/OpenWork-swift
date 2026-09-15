@@ -28,14 +28,22 @@ public enum ScreenPerception {
             switch self {
             case .screenRecordingDenied:
                 return """
-                Screen Recording permission is not granted, so no window can be captured.
-                Grant it in System Settings › Privacy & Security › Screen & System Audio Recording, \
-                then relaunch OpenWork — macOS only re-reads this permission at launch.
+                Screen Recording permission is not granted, so no window can be captured. macOS \
+                prompts for this the first time it is asked, so a dialog may be on screen now.
+
+                Grant it in System Settings › Privacy & Security › Screen & System Audio \
+                Recording, then **relaunch** OpenWork — this permission is only re-read at launch. \
+                If OpenWork already appears there and this still fails, the entry is stale: this \
+                build is ad-hoc signed, so every rebuild invalidates the grant while leaving the \
+                tick in place. Remove it and add back:
+                \(Bundle.main.bundleURL.path)
                 """
             case .accessibilityDenied:
                 return """
-                Accessibility permission is not granted, so the accessibility tree cannot be read.
-                Grant it in System Settings › Privacy & Security › Accessibility, then try again.
+                Accessibility permission is not granted, so the accessibility tree cannot be read.                 macOS has been asked for it, so a permission dialog may be on screen now — approve                 it and call this again.
+
+                If OpenWork already appears ticked under System Settings › Privacy & Security ›                 Accessibility and this still fails, the entry is stale: this build is ad-hoc signed                 (no Developer ID on this machine), so macOS identifies it by the binary's content                 hash and **every rebuild invalidates the grant while leaving the tick in place**.                 Remove OpenWork from the list with the minus button and add the running build back:
+                \(Bundle.main.bundleURL.path)
                 """
             case .appNotRunning(let app):
                 return "No running application matches '\(app)'. Launch it first, or use run_app."
@@ -145,7 +153,15 @@ public enum ScreenPerception {
         maxDepth: Int = 14,
         maxNodes: Int = 400
     ) throws -> String {
-        guard hasAccessibilityPermission else { throw PerceptionError.accessibilityDenied }
+        guard hasAccessibilityPermission else {
+            // Ask, rather than only complaining. The screen-recording path gets its prompt for
+            // free the first time `SCShareableContent` is touched; Accessibility never prompts
+            // unless something explicitly requests it, so a tool that merely reported the denial
+            // left the user to find the pane themselves and the agent repeating a call that
+            // could never start working.
+            requestAccessibilityPermission()
+            throw PerceptionError.accessibilityDenied
+        }
         guard let app = runningApplication(matching: appQuery) else {
             throw PerceptionError.appNotRunning(appQuery)
         }

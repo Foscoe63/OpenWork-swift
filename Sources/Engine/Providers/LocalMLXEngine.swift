@@ -67,6 +67,29 @@ public final class LocalMLXEngine: @unchecked Sendable {
     /// The default here exists so `curatedModels` — a `static` with no access to settings, read
     /// from SwiftUI bodies where a disk read would be wrong — can still be built. Every verdict
     /// actually shown to the user is re-judged against the stored ratio in `scanInstalledModels`.
+    /// Whether a model's own `config.json` describes an image pathway.
+    ///
+    /// Structural, not nominal: a vision tower, an image token, or a nested text config (which
+    /// is how multimodal checkpoints separate the language half) all mean the checkpoint can
+    /// take pixels, whatever its `model_type` happens to be called.
+    public static func declaresVisionSupport(config: [String: Any]) -> Bool {
+        if config["vision_config"] != nil { return true }
+        if config["image_token_id"] != nil { return true }
+        if config["image_token_index"] != nil { return true }
+        // Names remain a fallback for checkpoints that declare nothing structural. One list for
+        // both `architectures` and `model_type`, so the two cannot drift apart — which is how
+        // `LlavaForConditionalGeneration` slipped past an architecture check that looked only
+        // for "vision" and "vl".
+        let nameMarkers = ["vl", "vision", "pixtral", "mllama", "llava", "idefics", "imagetext", "gemma4"]
+        var names: [String] = []
+        if let architectures = config["architectures"] as? [String] { names += architectures }
+        if let mt = config["model_type"] as? String { names.append(mt) }
+        for name in names.map({ $0.lowercased() }) {
+            if nameMarkers.contains(where: { name.contains($0) }) { return true }
+        }
+        return false
+    }
+
     public static func assessCompatibility(
         requiredRAMGB: Double,
         budgetRatio: Double = AppSettings.default.mlxGpuMemoryBudgetRatio
@@ -654,11 +677,16 @@ public final class LocalMLXEngine: @unchecked Sendable {
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let mt = json["model_type"] as? String {
                 modelType = mt
-                let lower = mt.lowercased()
-                if lower.contains("vl") || lower.contains("vision") || lower.contains("pixtral") || lower.contains("mllama") || lower.contains("gemma4") {
-                    isVLM = true
-                }
             }
+            // Ask the config what it *has*, not what it is called.
+            //
+            // This used to match `model_type` against "vl", "vision", "pixtral", "mllama",
+            // "gemma4" — a list of names, which fails the moment an architecture arrives that is
+            // multimodal without saying so. Ornith reports `qwen3_5_moe` and carries a
+            // `vision_config`, an `image_token_id` and a `text_config`: a vision model this
+            // check called blind, so every screenshot sent to it would have been refused as
+            // unviewable by the model that could actually have read it.
+            isVLM = Self.declaresVisionSupport(config: json)
             if let maxPos = json["max_position_embeddings"] as? Int {
                 contextWindow = maxPos
             } else if let maxSeq = json["max_seq_len"] as? Int {
