@@ -61,6 +61,13 @@ public struct SideInspectorView: View {
                     VStack(spacing: 4) {
                         Image(systemName: tab.icon)
                             .font(.system(size: 13))
+                            // A fixed box, because these glyphs are not the same shape.
+                            // `bubble.left.and.exclamationmark.bubble.right.fill` is 23pt wide
+                            // against 15-19 for the others, so the Agent Messages tab rendered
+                            // with almost no clear margin and read as something you had to hit
+                            // precisely — the one tab still reported as awkward after the hit
+                            // area was fixed.
+                            .frame(width: 20, height: 16)
                         Text(tab.title)
                             .font(.system(size: 9.5, weight: isSelected ? .bold : .regular))
                             .lineLimit(1)

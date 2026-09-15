@@ -63,7 +63,9 @@ public enum InspectorTab: String, CaseIterable, Identifiable {
     public var title: String {
         switch self {
         case .subagents: return "Sub-Agent Tree"
-        case .comms: return "Agent Messages"
+        // "Agent Messages" was the only title wide enough to need shrinking in the tab bar,
+        // which made it the smallest text in a row of equal-width tabs.
+        case .comms: return "Messages"
         case .artifacts: return "Artifacts"
         case .tools: return "Tools"
         case .terminal: return "Terminal"
