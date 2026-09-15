@@ -77,13 +77,7 @@ public struct SideInspectorView: View {
                     .background(isSelected ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
                     .cornerRadius(6)
                 }
-                .buttonStyle(.plain)
-                // A `.plain` button is hit-tested against what it *draws*. An unselected tab has
-                // a `Color.clear` background, so without this only the glyph strokes and the
-                // letters are clickable — the padding, and the gap between icon and label, are
-                // dead. Declared on the Button rather than inside the label so it covers the
-                // whole control.
-                .contentShape(Rectangle())
+                .buttonStyle(.hitTestable)
                 .help(tab.title)
             }
         }

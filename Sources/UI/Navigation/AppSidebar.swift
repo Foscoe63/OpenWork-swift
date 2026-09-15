@@ -25,7 +25,11 @@ public struct AppSidebar: View {
                     navButton(for: .providers, count: appState.providers.filter { $0.isEnabled }.count)
                     navButton(for: .automations, count: appState.automations.filter { $0.isEnabled }.count)
                     navButton(for: .watchFolders, count: appState.watchItems.filter { $0.isEnabled }.count)
-                    navButton(for: .artifacts, count: appState.artifacts.count)
+                    // No badge: this row opens a browser over the workspace folder, but
+                    // `appState.artifacts` holds `AutomationArtifact` records, which are shown
+                    // under Watch Folders. The badge read 0 on a workspace full of files, and
+                    // read 3 for three records this page will never display.
+                    navButton(for: .artifacts, count: nil)
                     navButton(for: .memory, count: appState.memories.count)
                     navButton(for: .tools, count: appState.tools.filter { $0.isEnabled }.count)
                     navButton(for: .dashboard, count: nil)
@@ -128,7 +132,10 @@ public struct AppSidebar: View {
             .background(isSelected ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
             .cornerRadius(8)
         }
-        .buttonStyle(.plain)
+        // An unselected row draws `Color.clear` behind a `Spacer()`, so under `.plain` the only
+        // clickable pixels were the letters and the icon's strokes. Clicking the icon usually
+        // landed between the strokes and did nothing.
+        .buttonStyle(.hitTestable)
     }
 
     // MARK: - Sessions List in Sidebar
@@ -154,7 +161,7 @@ public struct AppSidebar: View {
                         .font(.system(size: 11))
                         .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
                 .help(showAllWorkspaceSessions ? "Show Active Workspace Only" : "Show All Workspaces")
 
                 Button {
@@ -164,7 +171,7 @@ public struct AppSidebar: View {
                         .font(.system(size: 14))
                         .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
                 .help("New Session (Cmd+N)")
             }
 
@@ -254,7 +261,7 @@ public struct AppSidebar: View {
                 .background(appState.navigationDestination == .settings ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
                 .cornerRadius(6)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hitTestable)
 
             Spacer()
 

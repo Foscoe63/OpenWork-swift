@@ -498,6 +498,30 @@ pipe is buffered and never flushed, so write benchmark results to a file, not st
 
 ---
 
+## Clicking things: use `.buttonStyle(.hitTestable)`, not `.plain`
+
+`.plain` hit-tests a button against what it **draws**. Two shapes in this app draw almost
+nothing:
+
+- a nav row with a `Color.clear` background and a `Spacer()` — only the letters respond, the
+  padding and the whole empty middle are dead;
+- a bare `Image(systemName:)` — the target is the glyph's strokes, so a click landing between
+  the strokes of a thin symbol does nothing, which the user reads as "the icon is broken".
+
+`Sources/UI/Components/HitTestablePlainButtonStyle.swift` behaves like `.plain` but hit-tests the
+button's full declared frame. Use it for any borderless control; keep `.plain` only where the
+label genuinely fills its frame.
+
+This was reported twice as separate bugs — the inspector tabs, then every icon in the left
+sidebar — before it was recognised as one rule. 79 call sites still use bare `.plain` with no
+`contentShape` nearby; they have not been swept, because a blanket change would enlarge some
+icon buttons that sit inside oversized frames and could start eating their neighbours' clicks.
+Find them with:
+
+```bash
+grep -rn 'buttonStyle(.plain)' Sources/
+```
+
 ## Environment gotchas
 
 **A "dead" region of our UI may be another app's window, not our bug.** A user reported the Agent
