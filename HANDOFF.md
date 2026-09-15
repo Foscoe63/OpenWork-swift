@@ -509,7 +509,16 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 Permanent fix needs your password: `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
 
-**Grep build output for `warning:`, not just `error:`.** Two redundant `?? 0 ?? 0` warnings
+**Grep build output for `warning:`, not just `error:` — and do it after *every* change, not once.**
+This was recorded after two `?? 0 ?? 0` warnings shipped, and then an unused `subAgentStartTime`
+shipped anyway, because the sweep was treated as a one-off rather than a habit. The command that
+keeps it honest, filtered to this project's own code:
+
+```bash
+$SWIFT build --build-tests 2>&1 | grep 'warning:' \
+  | grep -vE 'swift-jinja|missing creator|mlx-swift'
+```
+ Two redundant `?? 0 ?? 0` warnings
 shipped in the perception work because every build check in that session filtered for `error:`
 alone. `attributesOfItem` throws *and* its subscript returns `Any?`, so the obvious inline
 spelling is a `try?` around an `as?`, which yields a doubly-optional and invites exactly that

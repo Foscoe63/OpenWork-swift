@@ -822,7 +822,6 @@ public final class AgentRunner {
             // ceiling: a paragraph of advice pasted back under a progress bar. They now run a
             // full tool loop in an isolated worktree through `SubAgentExecutor`, which is why
             // the budgets below are small — unattended work needs a hard stop, not a large one.
-            let subAgentStartTime = CFAbsoluteTimeGetCurrent()
             let replies: [(taskId: String, outcome: SubAgentExecutor.Outcome)] = await withTaskGroup(
                 of: (String, SubAgentExecutor.Outcome).self
             ) { group in
