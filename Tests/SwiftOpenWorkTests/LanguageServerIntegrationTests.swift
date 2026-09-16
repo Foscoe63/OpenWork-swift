@@ -248,6 +248,56 @@ final class LanguageServerIntegrationTests: XCTestCase {
         XCTAssertTrue(diagnostics.contains("pkg/use.py:4:15: error:"), diagnostics)
     }
 
+    /// Runs when rust-analyzer and cargo are installed.
+    func testRustAnalyzerAnswersThroughTheGenericPath() async throws {
+        try write("Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n")
+        try write("src/math.rs", "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n")
+        try write("src/main.rs", """
+        mod math;
+
+        fn main() {
+            let three = math::add(1, 2);
+            let broken: i32 = "oops";
+            println!("{three} {broken}");
+        }
+        """)
+        guard resolvable("src/main.rs") else { throw XCTSkip("rust-analyzer is not installed") }
+
+        let definition = try await CodeIntelligence.definition(target("src/main.rs", 4, "add"), workspaceRoot: root, pool: pool)
+        XCTAssertTrue(definition.hasPrefix("[rust-analyzer]"), definition)
+        XCTAssertTrue(definition.contains("src/math.rs:1:8:"), definition)
+        let references = try await CodeIntelligence.references(target("src/math.rs", 1, "add"), workspaceRoot: root, pool: pool)
+        XCTAssertTrue(references.contains("src/main.rs:4:23:"), references)
+        let diagnostics = try await CodeIntelligence.diagnostics(path: "src/main.rs", workspaceRoot: root, pool: pool)
+        XCTAssertTrue(diagnostics.contains("src/main.rs:5:23: error:"), diagnostics)
+    }
+
+    /// Runs when gopls and go are installed.
+    func testGoplsAnswersThroughTheGenericPath() async throws {
+        try write("go.mod", "module example.com/demo\n\ngo 1.21\n")
+        try write("math.go", "package main\n\nfunc add(a, b int) int {\n\treturn a + b\n}\n")
+        try write("main.go", """
+        package main
+
+        import "fmt"
+
+        func main() {
+        \tthree := add(1, 2)
+        \tvar broken int = "oops"
+        \tfmt.Println(three, broken)
+        }
+        """)
+        guard resolvable("main.go") else { throw XCTSkip("gopls is not installed") }
+
+        let definition = try await CodeIntelligence.definition(target("main.go", 6, "add"), workspaceRoot: root, pool: pool)
+        XCTAssertTrue(definition.hasPrefix("[gopls]"), definition)
+        XCTAssertTrue(definition.contains("math.go:3:6:"), definition)
+        let references = try await CodeIntelligence.references(target("math.go", 3, "add"), workspaceRoot: root, pool: pool)
+        XCTAssertTrue(references.contains("main.go:6:11:"), references)
+        let diagnostics = try await CodeIntelligence.diagnostics(path: "main.go", workspaceRoot: root, pool: pool)
+        XCTAssertTrue(diagnostics.contains("main.go:7:19: error:"), diagnostics)
+    }
+
     // MARK: - A second server
 
     /// clangd has no `workspace/synchronize` and no pull diagnostics, so this is the generic path:

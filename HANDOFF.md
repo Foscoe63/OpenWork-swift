@@ -10,7 +10,7 @@ against this machine, not remembered.
 | SwiftOpenWork | yes, `74553ec`; `fee26d7` (fourth to sixth passes, rename, language servers) passed CI | 703 |
 | GrizzyBot | yes, `ecce520` | 538 |
 
-SwiftOpenWork went from 13 tests to 703 over this work. Released as 1.1.0, under its old name, OpenWork.
+SwiftOpenWork went from 13 tests to 707 over this work. Released as 1.1.0, under its old name, OpenWork.
 
 > **The app was renamed SwiftOpenWork on 2026-09-16** (bundle ID `io.github.foscoe63.SwiftOpenWork`,
 > was `ai.openwork.OpenWorkSwift`). Sections written before that say "OpenWork" and use the old
@@ -960,7 +960,7 @@ on every run. TypeScript 7 (`tsc --lsp`) and pyright were installed temporarily 
 two tests skip unless a server is on the search path; run them with, for example,
 `PATH=<dir>/node_modules/.bin:$PATH`. typescript-language-server with TypeScript 5 was checked by
 hand against the protocol only. rust-analyzer and gopls have never been run: no Rust or Go
-toolchain is installed here. clangd has neither `synchronize` nor pull diagnostics, so it tests the
+toolchain was installed then; both have since been installed and tested (see *1.2.0 released*). clangd has neither `synchronize` nor pull diagnostics, so it tests the
 fallbacks. A test gotcha: in `add(1, 2) + missing` clang drops the whole expression, so `add` has
 no definition there. Keep errors on their own line in fixtures.
 
@@ -1035,6 +1035,42 @@ setup; setup and build; references for `Alpha.value` only; a file added afterwar
 changed, with rename refused and nothing written; a rebuild through the tool, after which
 references include the new file. It removes its own `XToy-*` folder from DerivedData.
 
+## 1.2.0 released, and the MLX exit crash fixed (2026-09-16)
+
+**Release.** `MARKETING_VERSION` 1.2.0, build 2, tag `1.2.0`, published as the latest GitHub
+release with `SwiftOpenWork.zip` (sha256 `066e0ed5…df73aa`). Built Release with
+`SIGN_ONLY=1 DEVELOPER_ID_APP="Developer ID Application: Edward Griswold (5XKHL47YG3)"
+Scripts/notarize-release.sh`, zipped with `ditto`, and checked by unzipping and
+`codesign --verify --deep --strict`. **Not notarised:** the issuer ID was not on this machine, so
+Gatekeeper reports "Unnotarized Developer ID", and the release notes say how to open it. A Release
+launch was smoke-tested with `XCTestBundlePath=/dev/null` (isolated data, no startup automations).
+The GitHub `releases/latest` API that `UpdateChecker` reads returns 1.2.0.
+
+**MLX exit crash: a real bug, not a test quirk.** macOS kept eight crash reports from runs that
+passed and then died at exit. In the five read closely, the main thread was inside `exit` →
+`__cxa_finalize` destroying MLX's `Scheduler`, `ThreadPool` or `CompilerCache`, while a Swift
+concurrency thread was still in `mlx_async_eval` or `CompilerCache::find`. Stopping to read a
+generation stream only *asks* mlx-swift-lm's session task to stop, and `streamInProcess` returned
+at once while the GPU work carried on. A user quitting mid-reply would hit the same crash.
+Reproduced by cancelling a real Ornith generation after five tokens and letting the test exit:
+exit 139 once and 134 twice in three runs.
+
+Fixed in `NativeMLXService`:
+- The stream is read in a task the service owns, and `streamChat` does not return until
+  `ChatSession.synchronize()` has waited out the KV-cache lock the generation holds (capped at
+  15s; a long prefill does not check cancellation).
+- Running generations are registered, and `prepareForExit` (called from
+  `applicationWillTerminate`) cancels them and waits up to 3s.
+
+After the fix: five runs of the same repro, all exit 0. `MLXGenerationShutdownTests` checks the
+invariant: no active generation and no further tokens once the call returns, and that preparing
+for exit stops a running generation. It needs the Ornith model and skips without it, as on CI.
+
+**rust-analyzer and gopls tested.** Installed with Homebrew (`rust`, `rust-analyzer`, `go`,
+`gopls`). `testRustAnalyzerAnswersThroughTheGenericPath` and `testGoplsAnswersThroughTheGenericPath`
+cover definition, references and diagnostics, and passed four runs in a row. Every server in the
+catalog has now been run through the app's own code.
+
 ## What is left
 
 ### Settings still dead
@@ -1045,21 +1081,19 @@ macOS is the only authority on whether a login item is registered.
 ### Needs you
 
 - **Re-grant Accessibility and Screen Recording** to SwiftOpenWork, and remove the old OpenWork
-  entries.
-- **Release 1.2.0 under the new name:** bump `MARKETING_VERSION`, run the notarise script, and
-  publish `SwiftOpenWork.zip`.
-
-- **Notarisation works; publish nothing built before the rename.** On 2026-09-16 the Developer ID
-  certificate (`Developer ID Application: Edward Griswold (5XKHL47YG3)`, login keychain) and an
-  App Store Connect key (ID `J9TT53PZQ4`, file `~/.appstoreconnect/AuthKey_J9TT53PZQ4.p8`) were set
-  up, and a build was notarised and stapled. That build was still `OpenWork.app`, so its zip was
-  deleted. The issuer ID is on the App Store Connect Integrations page. Run:
-  `DEVELOPER_ID_APP="Developer ID Application: Edward Griswold (5XKHL47YG3)" APPLE_API_KEY_ID=J9TT53PZQ4 APPLE_API_ISSUER=<issuer> APPLE_API_KEY_PATH=~/.appstoreconnect/AuthKey_J9TT53PZQ4.p8 Scripts/notarize-release.sh`
+  entries (System Settings → Privacy & Security). An app cannot do this itself. 1.2.0, signed with
+  the Developer ID, is installed in `/Applications`; the ad-hoc-signed 1.1.0 copy that was there
+  is in the Trash. Grant the installed copy: grants follow the code signature, so a grant given to
+  the old copy would not have carried over.
+- **Notarise future releases.** 1.2.0 shipped signed but not notarised because the App Store
+  Connect issuer ID was not available. Once you have it (App Store Connect → Users and Access →
+  Integrations → App Store Connect API), either run the full `Scripts/notarize-release.sh`, or
+  store credentials once with `xcrun notarytool store-credentials` so the next release can use a
+  keychain profile.
 
 ### Worth building next
 
-- **rust-analyzer and gopls have never been run.** Install a toolchain and add an integration
-  test like the TypeScript and pyright ones.
+- Nothing queued.
 
 ### Explicitly decided against — with reasons, so they are not re-proposed
 
@@ -1093,14 +1127,16 @@ all.
 
 ## Known issues not fixed
 
-**GrizzyBot's four `GrizzyBotUITests` fail environmentally, not from code.** A bare
+**GrizzyBot's four `GrizzyBotUITests` are not simply environmental (corrected 2026-09-16).** Run
+locally from SwiftOpenWork's session, one test passed alone, then two of four and zero of four
+passed on consecutive full runs, all failing with "Missing <id>-overlay" rather than a runner
+connection error. Flaky locally suggests a timing or launch-state bug in GrizzyBot, not only the
+environment. It was not investigated further; the original note follows.
+**Previously recorded: they fail environmentally, not from code.** A bare
 `WindowGroup { Text("…") }` with none of GrizzyBot's code fails identically under XCUITest, while
 the same binary shows its window fine via LaunchServices. CI passes `CODE_SIGNING_ALLOWED=NO`,
 which kills the runner before it connects; locally it looks like missing Accessibility permission
 for the test runner.
-
-**MLX container teardown segfaults at process exit** (signal 11) after tests pass. `print` to a
-pipe is buffered and never flushed, so write benchmark results to a file, not stdout.
 
 ---
 
@@ -1352,7 +1388,7 @@ The model library on this machine is `/Volumes/Models/Models` (13 loadable bundl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 703 tests; TypeScript, pyright and the bundle-identity test skip where they cannot run
+$SWIFT test                    # 707 tests; tests needing an uninstalled server or model, and the bundle-identity test, skip
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project SwiftOpenWork.xcodeproj -scheme SwiftOpenWork build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list

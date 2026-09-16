@@ -93,7 +93,7 @@ The code-intelligence tools run real language servers, started on first use and 
 | C / C++ | `clangd` | `compile_commands.json`, `compile_flags.txt` or `.clangd` |
 | TypeScript / JavaScript | `tsc --lsp` (TypeScript 7+) or `typescript-language-server` (TypeScript 5–6) | `tsconfig.json`, `jsconfig.json` or `package.json` |
 | Python | `basedpyright` or `pyright` | `pyproject.toml`, `setup.py`, `requirements.txt`, … |
-| Rust / Go | `rust-analyzer` / `gopls` (not yet exercised by tests) | `Cargo.toml` / `go.mod` |
+| Rust / Go | `rust-analyzer` / `gopls` | `Cargo.toml` / `go.mod` |
 
 - **No root, no answer.** Without a project root a server answers from the open file alone, which looks complete. The tools refuse instead, and say what is missing or how to install the server
 - **Never a partial index.** Index-backed answers wait for indexing to finish (`workspace/synchronize` for sourcekit-lsp); a timeout is an error, not a short list. The tool card shows indexing progress while it waits
@@ -289,13 +289,13 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 swift build
 swift run SwiftOpenWork
-swift test                      # 703 tests
+swift test                      # 707 tests
 ```
 
 Tests never touch your real data: under XCTest the app stores settings and sessions in a
 temporary folder per test process (set `SWIFTOPENWORK_DATA_DIRECTORY` to point a deliberate run
 at real data). The language-server integration tests use whichever servers are installed and
-skip the rest — the TypeScript and pyright ones run only when those servers are on `PATH`.
+skip the rest: the TypeScript, pyright, rust-analyzer and gopls tests run only when those servers are on `PATH`, and the in-process MLX shutdown tests only where their model is installed.
 
 `DEVELOPER_DIR` alone is not always enough. If `swift` on your `PATH` is a standalone toolchain —
 swiftly puts one in `~/.swiftly/bin`, and `swift --version` will say `swift-6.3-RELEASE` rather

@@ -30,6 +30,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             WindowLayoutStore.saveWindowFrame(from: window)
         }
         UserDefaults.standard.synchronize()
+        // A reply still generating on the GPU would crash the process as `exit` tears MLX down.
+        NativeMLXService.shared.prepareForExit()
         // Language servers would exit on their own when stdin closes; this makes it certain.
         LiveConnections.terminateAll()
     }
