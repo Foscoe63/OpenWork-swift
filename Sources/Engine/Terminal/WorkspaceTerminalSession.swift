@@ -25,7 +25,7 @@ public final class WorkspaceTerminalSession: ObservableObject {
         let shell = (settings.terminalShell as NSString).lastPathComponent
         self.activeShellName = shell.isEmpty ? "zsh" : shell
         
-        appendLine("OpenWork-Swift Interactive Terminal (\(activeShellName))", isError: false)
+        appendLine("SwiftOpenWork Interactive Terminal (\(activeShellName))", isError: false)
         appendLine("Type any command (e.g. ls -la, git status, cargo, swift build, python3)", isError: false)
         appendLine("----------------------------------------------------------------------", isError: false)
     }
@@ -112,6 +112,28 @@ public final class WorkspaceTerminalSession: ObservableObject {
 
     public func clear() {
         lines.removeAll()
+    }
+
+    // MARK: - Agent commands
+
+    /// Mirror of what the agent runs, so the panel is one place to watch rather than two.
+    ///
+    /// Agent commands go through `ToolExecutionEngine`, not through `execute` above, so `isRunning`
+    /// and `activeProcess` are deliberately left alone — Stop in this panel must keep meaning "stop
+    /// the command I typed", not "kill the agent's build".
+    public func announceAgentCommand(_ command: String) {
+        appendLine("[agent] $ \(command)", isError: false)
+    }
+
+    public func appendAgentOutput(_ chunk: String) {
+        for line in chunk.components(separatedBy: .newlines) where !line.isEmpty {
+            appendLine(line, isError: false)
+        }
+    }
+
+    public func concludeAgentCommand(exitCode: Int32) {
+        guard exitCode != 0 else { return }
+        appendLine("[agent] exited with code \(exitCode)", isError: true)
     }
 
     public func appendLine(_ text: String, isError: Bool) {

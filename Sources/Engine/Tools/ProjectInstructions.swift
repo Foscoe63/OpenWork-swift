@@ -9,13 +9,27 @@ public enum ProjectInstructions {
 
     /// Recognised filenames, most specific first. The first one found wins, so a repo can carry
     /// files for several tools without them being concatenated.
+    ///
+    /// `OPENWORK.md` and `.openwork.md` are the names from before the app was renamed
+    /// SwiftOpenWork; repos that already carry them keep working.
     public static let candidateNames = [
+        AppIdentity.rulesFileName,
         "OPENWORK.md",
         "AGENTS.md",
         "CLAUDE.md",
+        ".swiftopenwork.md",
         ".openwork.md",
         ".cursorrules",
     ]
+
+    /// The file Save should write: an existing file of this app's own (so a 1.1 `OPENWORK.md`
+    /// is edited in place rather than shadowed by a new copy), otherwise `SWIFTOPENWORK.md`.
+    /// Files owned by other tools — AGENTS.md, CLAUDE.md, .cursorrules — are never written.
+    public static func saveTarget(loadedName: String?) -> String {
+        let ours = [AppIdentity.rulesFileName, ".swiftopenwork.md"] + AppIdentity.legacyRulesFileNames
+        if let loadedName, ours.contains(loadedName) { return loadedName }
+        return AppIdentity.rulesFileName
+    }
 
     /// Instructions past this are clipped — a runaway file must not crowd out the conversation.
     public static let maxCharacters = 16_000

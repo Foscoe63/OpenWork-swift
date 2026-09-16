@@ -215,6 +215,11 @@ public enum BuildDiagnostics {
     private static let goFailPattern = try? NSRegularExpression(
         pattern: #"^\s*--- FAIL: ([A-Za-z_][A-Za-z_0-9/]*)"#
     )
+    /// libtest's own result line, `test module::name ... FAILED`. Doc-tests print a file path and
+    /// a line number in that slot, which is not something `--exact` can select, so they are skipped.
+    private static let cargoFailPattern = try? NSRegularExpression(
+        pattern: #"^test ([A-Za-z_][A-Za-z_0-9:]*) \.\.\. FAILED\s*$"#
+    )
     private static let pytestFailPattern = try? NSRegularExpression(
         pattern: #"^FAILED ([^\s:]+::[^\s]+)"#
     )
@@ -248,6 +253,11 @@ public enum BuildDiagnostics {
                 add(FailedTest(name: name))
                 continue
             }
+            if let regex = cargoFailPattern, let m = regex.firstMatch(in: line, range: range),
+               let name = group(m, 1, in: line) {
+                add(FailedTest(name: name))
+                continue
+            }
             if let regex = pytestFailPattern, let m = regex.firstMatch(in: line, range: range),
                let name = group(m, 1, in: line) {
                 add(FailedTest(name: name))
@@ -265,7 +275,19 @@ public enum BuildDiagnostics {
         guard !failures.isEmpty else { return nil }
         let base = baseCommand.trimmingCharacters(in: .whitespaces)
         // Already narrowed by the caller; stacking filters changes the meaning unpredictably.
-        guard !base.contains("--filter"), !base.contains("-run "), !base.contains("::") else { return nil }
+        guard !base.contains("--filter"), !base.contains("-run "), !base.contains("::"),
+              !base.contains("-only-testing") else { return nil }
+
+        if base.hasPrefix("xcodebuild") {
+            // -only-testing takes Target/Class/method. XCTest reports the class as Module.Class,
+            // and without a suite there is no target to scope to, so refuse rather than widen.
+            var identifiers: [String] = []
+            for failure in failures {
+                guard let suite = failure.suite, suite.contains(".") else { return nil }
+                identifiers.append("\(suite.replacingOccurrences(of: ".", with: "/"))/\(failure.name)")
+            }
+            return ([base] + identifiers.map { "-only-testing:\($0)" }).joined(separator: " ")
+        }
 
         if base.hasPrefix("swift test") {
             // SwiftPM takes --filter repeatedly and unions the matches. The identity is a regex, so
@@ -277,6 +299,17 @@ public enum BuildDiagnostics {
             let names = failures.map { escapeForRegex($0.name) }.joined(separator: "|")
             return "\(base) -run '^(\(names))$'"
         }
+        if base.hasPrefix("cargo test") {
+            // Filters go to libtest after `--`, and `--exact` stops `add` also selecting
+            // `add_overflow`. A base that already passes libtest arguments is left alone, because
+            // appending to someone else's `--` section can change what their flags mean.
+            guard !base.contains(" -- "), !base.hasSuffix(" --") else { return nil }
+            guard failures.allSatisfy({ $0.suite == nil && !$0.name.contains(" ") }) else { return nil }
+            return "\(base) -- --exact " + failures.map { "'\($0.name)'" }.joined(separator: " ")
+        }
+        // `npm test` runs whatever the package's script says — Jest, Vitest, Mocha, a shell
+        // script. A filter flag one of them honours another ignores, and the whole suite would
+        // run under a message claiming it ran three tests. So npm stays whole-suite.
         if base.contains("pytest") {
             // pytest identities are file::test paths, already exact.
             return ([base] + failures.map { "'\($0.name)'" }).joined(separator: " ")
@@ -301,7 +334,14 @@ public enum BuildDiagnostics {
     ///
     /// Returns nil rather than guessing when the project type is unknown — a wrong build command
     /// produces a confusing failure that looks like a code problem.
-    public static func command(forProjectKinds kinds: [String], action: Action) -> String? {
+    ///
+    /// `root` is only needed for Xcode projects, whose command depends on the container and scheme
+    /// names on disk. Without it an Xcode-only workspace falls through to nil, as before.
+    public static func command(
+        forProjectKinds kinds: [String],
+        action: Action,
+        at root: String? = nil
+    ) -> String? {
         func has(_ needle: String) -> Bool { kinds.contains { $0.localizedCaseInsensitiveContains(needle) } }
 
         if has("Swift package") {
@@ -328,6 +368,89 @@ public enum BuildDiagnostics {
         if has("Make") {
             return action == .build ? "make" : "make test"
         }
+        // Last, so a package that also ships a generated .xcodeproj keeps using SwiftPM.
+        if has("Xcode"), let root {
+            return xcodebuildCommand(at: root, action: action)
+        }
         return nil
+    }
+
+    // MARK: - Xcode
+
+    /// The `xcodebuild` invocation for the Xcode container in `root`, or nil when there is none.
+    ///
+    /// A scheme is always passed: bare `xcodebuild` builds the first target alphabetically, so a
+    /// green result would not mean what the agent reports it means. Shared schemes are read from
+    /// disk; when a project shares none, the container's own name is used, because xcodebuild
+    /// answers a wrong scheme by listing the real ones — a self-correcting error, not a silent one.
+    public static func xcodebuildCommand(
+        at root: String,
+        action: Action,
+        fileManager: FileManager = .default
+    ) -> String? {
+        guard let container = xcodeContainer(at: root, fileManager: fileManager) else { return nil }
+
+        var parts = ["xcodebuild", container.flag, quoted(container.name), "-scheme", quoted(container.scheme)]
+        switch action {
+        case .build:
+            // -quiet drops the per-file compile chatter but keeps warnings, errors and the verdict,
+            // which is the difference between fitting in the output budget and being truncated.
+            parts.append(contentsOf: ["-quiet", "build"])
+        case .test:
+            parts.append("test")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// The Xcode workspace or project directly in `root`, and the scheme to build it with.
+    public static func xcodeContainer(
+        at root: String,
+        fileManager: FileManager = .default
+    ) -> (flag: String, name: String, scheme: String)? {
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: root) else { return nil }
+
+        let container: (flag: String, name: String)
+        if let workspace = entries.first(where: { $0.hasSuffix(".xcworkspace") }) {
+            container = ("-workspace", workspace)
+        } else if let project = entries.first(where: { $0.hasSuffix(".xcodeproj") }) {
+            container = ("-project", project)
+        } else {
+            return nil
+        }
+        let base = (container.name as NSString).deletingPathExtension
+        let scheme = sharedScheme(forContainer: container.name, in: root, fileManager: fileManager) ?? base
+        return (container.flag, container.name, scheme)
+    }
+
+    /// The first shared scheme of a container, preferring one named after the container itself.
+    private static func sharedScheme(
+        forContainer container: String,
+        in root: String,
+        fileManager: FileManager
+    ) -> String? {
+        // A workspace's schemes are often shared from the projects it wraps, not the workspace.
+        var searchRoots = [(root as NSString).appendingPathComponent(container)]
+        if container.hasSuffix(".xcworkspace"), let entries = try? fileManager.contentsOfDirectory(atPath: root) {
+            searchRoots += entries
+                .filter { $0.hasSuffix(".xcodeproj") }
+                .map { (root as NSString).appendingPathComponent($0) }
+        }
+
+        var found: [String] = []
+        for searchRoot in searchRoots {
+            let dir = (searchRoot as NSString).appendingPathComponent("xcshareddata/xcschemes")
+            let names = ((try? fileManager.contentsOfDirectory(atPath: dir)) ?? [])
+                .filter { $0.hasSuffix(".xcscheme") }
+                .map { ($0 as NSString).deletingPathExtension }
+            found.append(contentsOf: names)
+        }
+        guard !found.isEmpty else { return nil }
+
+        let containerBase = (container as NSString).deletingPathExtension
+        return found.first { $0 == containerBase } ?? found.sorted().first
+    }
+
+    static func quoted(_ value: String) -> String {
+        value.contains(where: { $0 == " " || $0 == "'" }) ? "'\(value.replacingOccurrences(of: "'", with: #"'\''"#))'" : value
     }
 }

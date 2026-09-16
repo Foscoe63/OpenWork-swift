@@ -168,6 +168,14 @@ public struct PromptCatalog {
 
         // --- SOFTWARE ENGINEERING ---
         PromptTemplate(
+            id: "plan-mode",
+            title: "Enter Plan Mode",
+            command: "/plan",
+            category: .engineering,
+            description: "Toggle read-only plan mode (also a slash command)",
+            prompt: "/plan"
+        ),
+        PromptTemplate(
             id: "code-review",
             title: "Rigorous Code & Architecture Review",
             command: "/review",

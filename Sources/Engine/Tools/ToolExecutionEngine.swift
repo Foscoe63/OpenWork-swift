@@ -12,6 +12,12 @@ public struct ToolExecutionResult: Sendable {
     /// model actually receives them. A tool that returns only a file path describes a picture
     /// the model cannot see.
     public var producedImages: [String]
+    /// When set, replace the session's sticky todo checklist (from `todo_write`).
+    public var sessionTodos: [SessionTodoItem]?
+    /// What this call did to the file it edited, for the card to show without opening anything.
+    public var fileDiff: InlineFileDiff?
+    /// The same for a call that edited several files, such as `rename_symbol`.
+    public var fileDiffs: [InlineFileDiff]?
 
     public init(
         success: Bool,
@@ -20,7 +26,10 @@ public struct ToolExecutionResult: Sendable {
         durationMs: Double = 0,
         createdSubAgentTask: SubAgentTask? = nil,
         createdAgentMessage: AgentMessage? = nil,
-        producedImages: [String] = []
+        producedImages: [String] = [],
+        sessionTodos: [SessionTodoItem]? = nil,
+        fileDiff: InlineFileDiff? = nil,
+        fileDiffs: [InlineFileDiff]? = nil
     ) {
         self.success = success
         self.output = output
@@ -29,6 +38,9 @@ public struct ToolExecutionResult: Sendable {
         self.createdSubAgentTask = createdSubAgentTask
         self.createdAgentMessage = createdAgentMessage
         self.producedImages = producedImages
+        self.sessionTodos = sessionTodos
+        self.fileDiff = fileDiff
+        self.fileDiffs = fileDiffs
     }
 }
 
@@ -82,7 +94,42 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     /// swept up by the same cleanup as anything else the agent writes.
     static func perceptionDirectory(for workspace: Workspace) -> URL {
         URL(fileURLWithPath: workspace.folderPath)
-            .appendingPathComponent(".openwork/screenshots", isDirectory: true)
+            .appendingPathComponent(".swiftopenwork/screenshots", isDirectory: true)
+    }
+
+    /// The media type for an image path, so an attachment built here looks like one built by the
+    /// composer. `ImageTransport.isImage` keys off this, and a wrong type makes the image vanish
+    /// silently on the way to the provider rather than fail loudly.
+    static func imageMimeType(forPath path: String) -> String {
+        switch (path as NSString).pathExtension.lowercased() {
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "heic": return "image/heic"
+        case "tiff", "tif": return "image/tiff"
+        case "webp": return "image/webp"
+        case "bmp": return "image/bmp"
+        default: return "image/png"
+        }
+    }
+
+    /// Collects streamed deltas from a non-isolated callback.
+    ///
+    /// `SubAgentAccumulator` is `@MainActor`, and `ProviderRouter.stream`'s `onChunk` is
+    /// `@Sendable` and nonisolated — hopping to the main actor per token to append a string would
+    /// put the UI behind the token rate.
+    final class StreamTextAccumulator: @unchecked Sendable {
+        private let lock = NSLock()
+        private var buffer = ""
+
+        func append(_ text: String) {
+            lock.lock(); buffer += text; lock.unlock()
+        }
+
+        var text: String {
+            lock.lock(); defer { lock.unlock() }
+            return buffer
+        }
     }
 
     static func failure(_ message: String, _ startTime: CFAbsoluteTime) -> ToolExecutionResult {
@@ -94,19 +141,42 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         )
     }
 
+    /// `callId` is the tool call this execution belongs to, when there is one. It only exists so a
+    /// long-running command can stream its output back to the card that is showing the spinner.
     public func execute(
         toolName: String,
         argumentsJson: String,
         workspace: Workspace,
-        currentAgent: Agent
+        currentAgent: Agent,
+        callId: String? = nil
     ) async -> ToolExecutionResult {
         AppLog.verbose(.tools, "call \(toolName) args=\(AppLog.truncated(argumentsJson))")
-        let result = await performExecute(
+        // Read the target before the call so the card can show what the call did, not merely that
+        // it succeeded. Taken here rather than inside each case so every edit tool gets it alike.
+        let diffTarget = Self.diffTarget(toolName: toolName, argumentsJson: argumentsJson, workspace: workspace)
+        let before = diffTarget.map { Self.readForDiff($0) } ?? nil
+        var result = await performExecute(
             toolName: toolName,
             argumentsJson: argumentsJson,
             workspace: workspace,
-            currentAgent: currentAgent
+            currentAgent: currentAgent,
+            callId: callId
         )
+        if result.success, let target = diffTarget {
+            result.fileDiff = InlineFileDiff.between(
+                before: before,
+                after: Self.readForDiff(target),
+                path: target
+            )
+        }
+        if result.success {
+            let changed = Self.changedPaths(toolName: toolName, argumentsJson: argumentsJson, workspace: workspace, result: result)
+            if !changed.paths.isEmpty {
+                // Running language servers would otherwise answer from the old text until the
+                // file-system event arrives, and an agent often edits and then queries at once.
+                await LanguageServerPool.shared.filesChanged(changed.paths, created: changed.created)
+            }
+        }
         AppLog.verbose(
             .tools,
             "result \(toolName) success=\(result.success) ms=\(Int(result.durationMs)) "
@@ -116,11 +186,185 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         return result
     }
 
+    /// Write `buildServer.json` for an Xcode project so sourcekit-lsp gets its build settings, and
+    /// build the scheme when there is no build to take settings and an index from.
+    private func setUpXcodeLanguageServer(
+        dict: [String: Any], workspace: Workspace, settings: AppSettings, startTime: Double, callId: String?
+    ) async -> ToolExecutionResult {
+        func failure(_ message: String) -> ToolExecutionResult {
+            ToolExecutionResult(success: false, output: "", error: message, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+        }
+        let raw = (dict["path"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? workspace.folderPath
+        let directory = raw.hasPrefix("/") ? raw : (workspace.folderPath as NSString).appendingPathComponent(raw)
+        if let denial = sandboxDenial(for: directory, workspace: workspace, settings: settings, startTime: startTime) {
+            return denial
+        }
+        guard let container = BuildDiagnostics.xcodeContainer(at: directory) else {
+            return failure("No .xcodeproj or .xcworkspace in \(raw). Pass `path`: the folder that contains it.")
+        }
+        if FileManager.default.fileExists(atPath: (directory as NSString).appendingPathComponent("Package.swift")) {
+            return failure("\(raw) has a Package.swift, which sourcekit-lsp reads directly. No setup is needed; ask the code-intelligence tools directly.")
+        }
+        let locator = ExecutableLocator()
+        guard let buildServer = locator.executable(named: "xcode-build-server") else {
+            return failure("xcode-build-server is not installed. \(XcodeBuildServer.installHint)")
+        }
+        let developerDirectory = locator.sourceKitInXcode()?.1
+        let scheme = (dict["scheme"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? container.scheme
+        let relative = CodeIntelligence.relativePath(directory, workspaceRoot: workspace.folderPath)
+        let configPath = (directory as NSString).appendingPathComponent("buildServer.json")
+        let before = Self.readForDiff(configPath)
+
+        let config = runProcess(
+            command: XcodeBuildServer.configCommand(executable: buildServer, developerDirectory: developerDirectory,
+                                                    flag: container.flag, container: container.name, scheme: scheme),
+            cwd: directory, timeoutSeconds: 180, callId: callId
+        )
+        guard config.exitCode == 0, let configuration = XcodeBuildServer.configuration(at: directory) else {
+            let tail = config.output.split(separator: "\n").suffix(12).joined(separator: "\n")
+            return failure("xcode-build-server could not configure scheme '\(scheme)' (exit \(config.exitCode)). Check the scheme name; xcodebuild -list shows the real ones.\n\(tail)")
+        }
+
+        let shownPath = LanguageServerCatalog.standardized(directory) == LanguageServerCatalog.standardized(workspace.folderPath)
+            ? "buildServer.json" : relative + "/buildServer.json"
+        var lines = ["Wrote \(shownPath) for scheme '\(scheme)' (\(container.name))."]
+        let hasBuild = configuration.buildRoot.flatMap { XcodeBuildServer.latestBuildLog(buildRoot: $0) } != nil
+        let requested = dict["build"] as? Bool
+        var buildFailed = false
+        if requested == true || (requested == nil && !hasBuild) {
+            let build = runProcess(
+                command: XcodeBuildServer.buildCommand(developerDirectory: developerDirectory, flag: container.flag,
+                                                       container: container.name, scheme: scheme),
+                cwd: directory, timeoutSeconds: 1800, callId: callId
+            )
+            if build.exitCode == 0 {
+                lines.append("Built '\(scheme)', so the index is current.")
+            } else {
+                buildFailed = true
+                let tail = build.output.split(separator: "\n").suffix(15).joined(separator: "\n")
+                lines.append("The build failed (exit \(build.exitCode)\(build.timedOut ? ", timed out" : "")). Files that did not compile have no settings or index entries until it succeeds:\n\(tail)")
+            }
+        } else if !hasBuild {
+            lines.append("Not built (build=false). There is no index until the scheme is built.")
+        } else {
+            lines.append("Used the existing build.")
+        }
+
+        // A server already running for this folder started without the build server.
+        await LanguageServerPool.shared.shutdown(under: directory)
+        lines.append(XcodeBuildServer.note(for: XcodeBuildServer.freshness(root: directory, configuration: configuration)))
+        lines.append("buildServer.json holds absolute paths for this machine. Add it to .gitignore rather than committing it.")
+
+        var result = ToolExecutionResult(
+            success: !buildFailed,
+            output: lines.joined(separator: "\n"),
+            error: buildFailed ? "Configured, but the build failed; see the output." : nil,
+            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        )
+        if let diff = InlineFileDiff.between(before: before, after: Self.readForDiff(configPath), path: configPath) {
+            result.fileDiffs = [diff]
+        }
+        return result
+    }
+
+    /// Indexing progress for a code-intelligence call, shown on its card while it waits.
+    static func languageServerProgress(callId: String?) -> CodeIntelligence.ProgressHandler? {
+        guard let callId else { return nil }
+        return { line in LiveToolOutput.note(line, callId: callId) }
+    }
+
+    struct ArgumentProblem: Error {
+        var text: String
+    }
+
+    /// Where a code-intelligence tool call points, or what is missing from its arguments.
+    static func codeTarget(from dict: [String: Any], toolName: String) -> Result<CodeIntelligence.Target, ArgumentProblem> {
+        guard let path = ((dict["path"] as? String) ?? (dict["file"] as? String)), !path.isEmpty else {
+            return .failure(ArgumentProblem(text: "\(toolName) requires `path`, `line` and `symbol` — the file, the 1-based line, and the name as written on that line."))
+        }
+        guard let line = intArgument(dict["line"]) else {
+            return .failure(ArgumentProblem(text: "\(toolName) requires `line`, the 1-based line where the symbol appears."))
+        }
+        let symbol = ((dict["symbol"] as? String) ?? (dict["name"] as? String))?.trimmingCharacters(in: .whitespaces)
+        let column = intArgument(dict["column"])
+        guard (symbol?.isEmpty == false) || column != nil else {
+            return .failure(ArgumentProblem(text: "\(toolName) requires `symbol`, the name as written on line \(line)."))
+        }
+        return .success(CodeIntelligence.Target(path: path, line: line, symbol: symbol?.isEmpty == true ? nil : symbol, column: column))
+    }
+
+    /// Local models send numbers as strings often enough to accept both.
+    static func intArgument(_ value: Any?) -> Int? {
+        if let int = value as? Int { return int }
+        if let string = value as? String { return Int(string.trimmingCharacters(in: .whitespaces)) }
+        return nil
+    }
+
+    /// Files a successful call may have written, for language servers to re-read, and which of
+    /// them are new.
+    static func changedPaths(toolName: String, argumentsJson: String, workspace: Workspace, result: ToolExecutionResult) -> (paths: [String], created: Set<String>) {
+        var paths: [String] = []
+        var created = Set<String>()
+        if let target = diffTarget(toolName: toolName, argumentsJson: argumentsJson, workspace: workspace) {
+            paths.append(target)
+            if result.fileDiff?.kind == .created { created.insert(target) }
+        }
+        if ["file_move", "move_file", "mv", "file_copy", "copy_file", "cp"].contains(toolName.lowercased()),
+           let data = argumentsJson.data(using: .utf8),
+           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            for key in ["source", "destination", "from", "to"] {
+                if let raw = dict[key] as? String, !raw.isEmpty {
+                    let path = raw.hasPrefix("/") ? raw : (workspace.folderPath as NSString).appendingPathComponent(raw)
+                    paths.append(path)
+                    if key == "destination" || key == "to" { created.insert(path) }
+                }
+            }
+        }
+        for diff in result.fileDiffs ?? [] {
+            paths.append(diff.path)
+            if diff.kind == .created { created.insert(diff.path) }
+        }
+        return (paths, created)
+    }
+
+    /// The one file a call is about to change, when a single-file diff makes sense for it.
+    ///
+    /// Tools that touch several files are left out on purpose: a card showing one of the eleven
+    /// files they changed would be worse than showing none. `rename_symbol` reports its whole set
+    /// through `fileDiffs` instead; `terminal_command` and `revert_changes` cannot know theirs up
+    /// front, and the turn review sheet covers them.
+    static func diffTarget(toolName: String, argumentsJson: String, workspace: Workspace) -> String? {
+        let singleFileTools: Set<String> = [
+            "file_write", "write_file", "create_file", "save_file",
+            "edit_file", "file_edit",
+            "multi_edit", "edit_file_multi",
+            "file_delete", "delete_file", "rm",
+        ]
+        guard singleFileTools.contains(toolName.lowercased()) else { return nil }
+        guard let data = argumentsJson.data(using: .utf8),
+              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        let keys = ["path", "filename", "filepath", "file"]
+        guard let raw = keys.compactMap({ dict[$0] as? String }).first(where: { !$0.isEmpty }) else {
+            return nil
+        }
+        return raw.hasPrefix("/") ? raw : (workspace.folderPath as NSString).appendingPathComponent(raw)
+    }
+
+    /// nil for a file that is absent, and also for one that is binary or unreadable — a diff that
+    /// treated an unreadable file as empty would claim the call deleted every line of it.
+    private static func readForDiff(_ path: String) -> String? {
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        return try? String(contentsOfFile: path, encoding: .utf8)
+    }
+
     private func performExecute(
         toolName: String,
         argumentsJson: String,
         workspace: Workspace,
-        currentAgent: Agent
+        currentAgent: Agent,
+        callId: String? = nil
     ) async -> ToolExecutionResult {
         let startTime = CFAbsoluteTimeGetCurrent()
         
@@ -207,7 +451,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             let explicit = (dict["command"] as? String)?.trimmingCharacters(in: .whitespaces)
             let kinds = WorkspaceContext.detectProjectKinds(at: root)
             guard let command = (explicit?.isEmpty == false ? explicit : nil)
-                ?? BuildDiagnostics.command(forProjectKinds: kinds, action: action) else {
+                ?? BuildDiagnostics.command(forProjectKinds: kinds, action: action, at: root) else {
                 let detected = kinds.isEmpty ? "none detected" : kinds.joined(separator: ", ")
                 return ToolExecutionResult(
                     success: false, output: "",
@@ -237,7 +481,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 }
             }
 
-            let run = runProcess(command: effectiveCommand, cwd: root, timeoutSeconds: 600)
+            let run = runProcess(command: effectiveCommand, cwd: root, timeoutSeconds: 600, callId: callId)
             var summary = BuildDiagnostics.summarize(
                 command: effectiveCommand,
                 exitCode: run.exitCode,
@@ -313,6 +557,106 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 error: outcome.failed.isEmpty ? nil : "Some files could not be reverted.",
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
+
+        case "rename_symbol":
+            let oldName = (dict["old_name"] as? String) ?? (dict["from"] as? String) ?? ""
+            let newName = (dict["new_name"] as? String) ?? (dict["to"] as? String) ?? ""
+            let pathHint = (dict["path"] as? String) ?? (dict["file"] as? String)
+            let dryRun = (dict["dry_run"] as? Bool) ?? false
+            let mode = (dict["mode"] as? String).flatMap(SymbolRename.Mode.init(rawValue:)) ?? .auto
+            let declarationLine = (dict["line"] as? Int) ?? (dict["line"] as? String).flatMap(Int.init)
+            defer { if let callId { LiveToolOutput.conclude(noteFor: callId) } }
+            do {
+                let outcome = try await SymbolRename.rename(
+                    oldName: oldName,
+                    newName: newName,
+                    root: workspace.folderPath,
+                    pathHint: pathHint,
+                    dryRun: dryRun,
+                    mode: mode,
+                    declarationLine: declarationLine,
+                    onProgress: Self.languageServerProgress(callId: callId)
+                )
+                return ToolExecutionResult(
+                    success: true,
+                    output: outcome.summary,
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000,
+                    fileDiffs: outcome.diffs.isEmpty ? nil : InlineFileDiff.boundedSet(outcome.diffs)
+                )
+            } catch {
+                return ToolExecutionResult(
+                    success: false,
+                    output: "",
+                    error: error.localizedDescription,
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+
+        case "go_to_definition", "find_references", "symbol_info", "call_hierarchy":
+            let target: CodeIntelligence.Target
+            switch Self.codeTarget(from: dict, toolName: toolName) {
+            case .success(let value): target = value
+            case .failure(let message):
+                return ToolExecutionResult(success: false, output: "", error: message.text,
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            }
+            let absolute = CodeIntelligence.absolutePath(target.path, workspaceRoot: workspace.folderPath)
+            if let denial = sandboxDenial(for: absolute, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
+            let limit = Self.intArgument(dict["limit"])
+            let progress = Self.languageServerProgress(callId: callId)
+            defer { if let callId { LiveToolOutput.conclude(noteFor: callId) } }
+            do {
+                let output: String
+                switch toolName {
+                case "go_to_definition":
+                    let kind = (dict["kind"] as? String).flatMap(CodeIntelligence.DefinitionKind.init(rawValue:)) ?? .definition
+                    output = try await CodeIntelligence.definition(target, kind: kind, workspaceRoot: workspace.folderPath, onProgress: progress)
+                case "find_references":
+                    output = try await CodeIntelligence.references(
+                        target, includeDeclaration: (dict["include_declaration"] as? Bool) ?? true,
+                        limit: min(limit ?? 200, 1000), workspaceRoot: workspace.folderPath, onProgress: progress
+                    )
+                case "symbol_info":
+                    output = try await CodeIntelligence.symbolInfo(target, workspaceRoot: workspace.folderPath, onProgress: progress)
+                default:
+                    let direction = (dict["direction"] as? String).flatMap(CodeIntelligence.CallDirection.init(rawValue:)) ?? .incoming
+                    output = try await CodeIntelligence.callHierarchy(
+                        target, direction: direction, limit: min(limit ?? 100, 1000), workspaceRoot: workspace.folderPath, onProgress: progress
+                    )
+                }
+                return ToolExecutionResult(success: true, output: output,
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            } catch {
+                return ToolExecutionResult(success: false, output: "", error: error.localizedDescription,
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            }
+
+        case "setup_xcode_language_server":
+            return await setUpXcodeLanguageServer(dict: dict, workspace: workspace, settings: settings, startTime: startTime, callId: callId)
+
+        case "code_diagnostics", "document_symbols":
+            guard let path = ((dict["path"] as? String) ?? (dict["file"] as? String)), !path.isEmpty else {
+                return ToolExecutionResult(success: false, output: "", error: "\(toolName) requires `path` — the file to examine.",
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            }
+            let absolute = CodeIntelligence.absolutePath(path, workspaceRoot: workspace.folderPath)
+            if let denial = sandboxDenial(for: absolute, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
+            let progress = Self.languageServerProgress(callId: callId)
+            defer { if let callId { LiveToolOutput.conclude(noteFor: callId) } }
+            do {
+                let output = toolName == "code_diagnostics"
+                    ? try await CodeIntelligence.diagnostics(path: absolute, workspaceRoot: workspace.folderPath, onProgress: progress)
+                    : try await CodeIntelligence.documentSymbols(path: absolute, workspaceRoot: workspace.folderPath)
+                return ToolExecutionResult(success: true, output: output,
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            } catch {
+                return ToolExecutionResult(success: false, output: "", error: error.localizedDescription,
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            }
 
         case "find_symbol", "symbol_search":
             let name = (dict["name"] as? String) ?? (dict["symbol"] as? String) ?? (dict["query"] as? String) ?? ""
@@ -552,7 +896,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
             }
-            return executeShell(command: command, cwd: cwd, startTime: startTime)
+            return executeShell(command: command, cwd: cwd, startTime: startTime, callId: callId)
 
         case "edit_file", "file_edit":
             let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? (dict["file"] as? String) ?? ""
@@ -728,17 +1072,17 @@ public final class ToolExecutionEngine: @unchecked Sendable {
 
         case "todo_write":
             let items = dict["items"] as? [[String: Any]] ?? []
-            let summary = items.prefix(20).enumerated().map { idx, item -> String in
-                let content = (item["content"] as? String) ?? (item["text"] as? String) ?? "item"
-                let status = (item["status"] as? String) ?? "pending"
-                return "\(idx + 1). [\(status)] \(content)"
+            let todos = SessionTodoItem.parse(from: items)
+            let summary = todos.prefix(20).enumerated().map { idx, item in
+                "\(idx + 1). [\(item.status.rawValue)] \(item.content)"
             }.joined(separator: "\n")
             return ToolExecutionResult(
                 success: true,
-                output: items.isEmpty
-                    ? "Todo list acknowledged (empty)."
-                    : "Todo list updated (\(items.count) items):\n\(summary)",
-                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                output: todos.isEmpty
+                    ? "Todo list cleared."
+                    : "Todo list updated (\(todos.count) items):\n\(summary)",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000,
+                sessionTodos: todos
             )
 
         case "calculator":
@@ -815,55 +1159,129 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             )
 
         case "generate_image":
-            let prompt = dict["prompt"] as? String ?? "Abstract architectural diagram"
-            let outputName = dict["filename"] as? String ?? "generated-media-\(Int(Date().timeIntervalSince1970)).svg"
-            let outputDir = (workspace.folderPath as NSString).appendingPathComponent("output")
-            try? fileManager.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
-            let outPath = (outputDir as NSString).appendingPathComponent(outputName)
-
-            // Generate structured SVG Canvas artifact
-            let svgContent = """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" width="100%" height="100%">
-              <defs>
-                <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" style="stop-color:#8B5CF6;stop-opacity:1" />
-                  <stop offset="100%" style="stop-color:#3B82F6;stop-opacity:1" />
-                </linearGradient>
-              </defs>
-              <rect width="800" height="500" rx="16" fill="#1E1E2E" />
-              <rect x="40" y="40" width="720" height="420" rx="12" fill="url(#grad)" opacity="0.15" />
-              <text x="400" y="160" font-family="-apple-system, system-ui, sans-serif" font-size="24" font-weight="bold" fill="#FFFFFF" text-anchor="middle">🎨 Generative Media Artifact</text>
-              <text x="400" y="210" font-family="-apple-system, system-ui, sans-serif" font-size="15" fill="#A6ADC8" text-anchor="middle">\(prompt.prefix(60))</text>
-              <circle cx="280" cy="310" r="45" fill="#8B5CF6" opacity="0.8" />
-              <rect x="360" y="265" width="90" height="90" rx="12" fill="#3B82F6" opacity="0.8" />
-              <polygon points="520,355 565,265 610,355" fill="#10B981" opacity="0.8" />
-              <text x="400" y="420" font-family="-apple-system, system-ui, monospace" font-size="11" fill="#6C7086" text-anchor="middle">OpenWork-Swift Generative Engine • Saved to output/\(outputName)</text>
-            </svg>
-            """
-            try? svgContent.write(toFile: outPath, atomically: true, encoding: .utf8)
+            // Removed, deliberately, rather than left working-looking.
+            //
+            // This used to write a fixed SVG — a gradient, a circle, a square, a triangle — with
+            // the prompt truncated to 60 characters stamped underneath as a caption, then return
+            // `success: true` and "Generative Media Created". Nothing about the output depended on
+            // the prompt beyond that caption. A model asked to draw a chart got the same circle
+            // every time, was told it had worked, and told the user it had worked.
+            //
+            // There is no local image generator in this app to route it to. The honest tool is the
+            // one the agent already has: write the SVG itself with `file_write`, where the output
+            // actually reflects what was asked for. The case is kept so that an agent carrying the
+            // old tool in its saved list is told where to go rather than getting "unknown tool".
             return ToolExecutionResult(
-                success: true,
-                output: "### 🎨 Generative Media Created:\n- **Prompt:** \"\(prompt)\"\n- **Saved To:** `output/\(outputName)`\n- **Canvas Preview:** Available in the Artifacts Live Canvas workbench.",
+                success: false,
+                output: "",
+                error: """
+                generate_image was removed — it never generated anything from the prompt. \
+                Write the image yourself instead: compose the SVG (or Markdown, or HTML) and save \
+                it with file_write.
+                """,
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
 
         case "mlx_vision_describe", "image_analyze":
+            // Two tools, two honest jobs.
+            //
+            // Both used to run the same Apple Vision OCR pass and return it under the heading
+            // "MLX Vision & Apple Neural Analysis", behind a tool described as analysing images
+            // "using local MLX vision models". No vision model was involved, the `prompt`
+            // parameter in the schema was never read, and an image with no text came back as
+            // "Image verified. No embedded text detected" — which a model reads as success.
+            //
+            // Now `mlx_vision_describe` actually describes, by sending the image to the loaded
+            // model down the same path a chat attachment takes, so it works exactly where vision
+            // works. `image_analyze` stays OCR, and says so in its name and description.
             let rawPath = dict["path"] as? String ?? ""
+            guard !rawPath.isEmpty else {
+                return Self.failure("\(toolName) needs a 'path' to an image file.", startTime)
+            }
             let fullPath = rawPath.hasPrefix("/") ? rawPath : (workspace.folderPath as NSString).appendingPathComponent(rawPath)
-            let (ocrText, ocrErr) = await DocumentExtractionEngine.shared.extractTextFromImage(at: fullPath)
-            
-            var descriptionText = "### 👁️ MLX Vision & Apple Neural Analysis for `\(rawPath)`:\n\n"
-            if let ocrErr = ocrErr {
-                descriptionText += "- **Status:** Analyzed image structure\n- **OCR Details:** \(ocrErr)\n"
-            } else if !ocrText.isEmpty {
-                descriptionText += "#### 📑 Recognized Text & Visual Layout:\n```\n\(ocrText)\n```\n"
-            } else {
-                descriptionText += "Image verified. No embedded text detected in image bitmap.\n"
+            guard fileManager.fileExists(atPath: fullPath) else {
+                return Self.failure("No file at \(rawPath).", startTime)
             }
 
+            let wantsDescription = toolName == "mlx_vision_describe"
+            let prompt = (dict["prompt"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            if wantsDescription {
+                let (provider, model) = await MainActor.run {
+                    (AppState.shared.currentProvider, AppState.shared.currentModel)
+                }
+                if model.supportsVision {
+                    let question = prompt.isEmpty
+                        ? "Describe this image. Say what it shows, its layout, and any text in it."
+                        : prompt
+                    let attachment = MessageAttachment(
+                        name: (fullPath as NSString).lastPathComponent,
+                        path: fullPath,
+                        sizeBytes: ImageTransport.fileSize(atPath: fullPath),
+                        mimeType: Self.imageMimeType(forPath: fullPath)
+                    )
+                    let accumulator = StreamTextAccumulator()
+                    do {
+                        try await ProviderRouter.shared.stream(
+                            provider: provider,
+                            model: model,
+                            systemPrompt: "You are looking at an image. Answer only about what you can see in it.",
+                            messages: [ChatMessage(
+                                sessionId: "vision-tool",
+                                role: .user,
+                                content: question,
+                                attachments: [attachment]
+                            )],
+                            temperature: 0.2,
+                            maxTokens: 1024,
+                            reasoningEffort: .off,
+                            tools: []
+                        ) { chunk in
+                            if !chunk.deltaText.isEmpty { accumulator.append(chunk.deltaText) }
+                        }
+                    } catch {
+                        // Do not quietly fall back to OCR and present it as a description. The
+                        // caller asked what the image shows; answering with something else under
+                        // the same heading is the fault this tool had in the first place.
+                        return Self.failure(
+                            "\(model.name) could not describe the image: \(error.localizedDescription). "
+                                + "Use image_analyze to read any text in it instead.",
+                            startTime
+                        )
+                    }
+                    let described = accumulator.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !described.isEmpty else {
+                        return Self.failure("\(model.name) returned nothing for this image.", startTime)
+                    }
+                    return ToolExecutionResult(
+                        success: true,
+                        output: "Description of `\(rawPath)` by \(model.name):\n\n\(described)",
+                        durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                    )
+                }
+            }
+
+            // OCR path: `image_analyze` always, and `mlx_vision_describe` when the loaded model
+            // cannot see. Labelled as text extraction, never as a description, and an image with
+            // no text is reported as "no text found" rather than as a successful analysis.
+            let (ocrText, ocrErr) = await DocumentExtractionEngine.shared.extractTextFromImage(at: fullPath)
+            if let ocrErr {
+                return Self.failure("Could not read text from \(rawPath): \(ocrErr)", startTime)
+            }
+            let blindNote = wantsDescription
+                ? "\n\nThis is OCR text, not a description — the loaded model cannot see images. "
+                    + "Load a vision model to have the image described."
+                : ""
+            guard !ocrText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return ToolExecutionResult(
+                    success: true,
+                    output: "No text found in `\(rawPath)`. Nothing is known about what it depicts.\(blindNote)",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
             return ToolExecutionResult(
                 success: true,
-                output: descriptionText,
+                output: "Text read from `\(rawPath)`:\n```\n\(ocrText)\n```\(blindNote)",
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
 
@@ -897,7 +1315,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 return Self.failure("worktree_create needs a 'name' for the task being isolated.", startTime)
             }
             do {
-                let info = try AgentWorktree.create(workspacePath: workspace.folderPath, name: name)
+                let info = try await AgentWorktree.create(workspacePath: workspace.folderPath, name: name)
                 return ToolExecutionResult(
                     success: true,
                     output: """
@@ -914,7 +1332,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
 
         case "worktree_list":
             do {
-                let trees = try AgentWorktree.list(workspacePath: workspace.folderPath)
+                let trees = try await AgentWorktree.list(workspacePath: workspace.folderPath)
                 guard !trees.isEmpty else {
                     return ToolExecutionResult(success: true, output: "No agent worktrees.", durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
                 }
@@ -931,7 +1349,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 return Self.failure("worktree_remove needs a 'name'.", startTime)
             }
             do {
-                let message = try AgentWorktree.remove(workspacePath: workspace.folderPath, name: name, force: force)
+                let message = try await AgentWorktree.remove(workspacePath: workspace.folderPath, name: name, force: force)
                 return ToolExecutionResult(success: true, output: message, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
             } catch {
                 return Self.failure(error.localizedDescription, startTime)
@@ -942,7 +1360,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             let message = dict["message"] as? String ?? ""
             let target = rawPath.isEmpty ? workspace.folderPath : rawPath
             do {
-                let result = try AgentWorktree.commit(worktreePath: target, message: message)
+                let result = try await AgentWorktree.commit(worktreePath: target, message: message)
                 return ToolExecutionResult(success: true, output: result, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
             } catch {
                 return Self.failure(error.localizedDescription, startTime)
@@ -1066,33 +1484,58 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             // This used to build a `SubAgentTask` record, return "Spawned sub-agent […] to
             // execute task", and run nothing whatsoever. The task appeared in the Sub-Agent Tree
             // with a progress bar, and no work was ever done. It now runs a real agent.
-            let taskTitle = dict["task_title"] as? String ?? "Sub-task"
+            let taskTitle = (dict["task_title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let taskDesc = dict["task_description"] as? String ?? ""
-            let targetAgentId = dict["target_agent_id"] as? String ?? "coder-agent"
             let agents = PersistenceManager.shared.loadAgents()
+            let teamList = agents.filter { $0.id != currentAgent.id }
+                .map { "\($0.id) (\($0.name), \($0.role))" }
+                .joined(separator: ", ")
+
+            // No default target. This defaulted to "coder-agent", so a call that forgot the field
+            // quietly sent research or review work to the Software Engineer.
+            guard let targetAgentId = (dict["target_agent_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !targetAgentId.isEmpty else {
+                return Self.failure("agent_spawn needs target_agent_id. Available: \(teamList)", startTime)
+            }
+            guard !taskTitle.isEmpty else {
+                return Self.failure("agent_spawn needs task_title: the objective, stated so it can be done without questions.", startTime)
+            }
             guard let targetAgent = agents.first(where: { $0.id == targetAgentId || $0.name == targetAgentId }) else {
-                let available = agents.map(\.id).joined(separator: ", ")
-                return Self.failure("No agent '\(targetAgentId)'. Available: \(available)", startTime)
+                return Self.failure("No agent '\(targetAgentId)'. Available: \(teamList)", startTime)
+            }
+            // An agent delegating to itself is a loop with extra steps.
+            guard targetAgent.id != currentAgent.id else {
+                return Self.failure("An agent cannot spawn itself. Do the work directly, or pick one of: \(teamList)", startTime)
             }
 
             let spawnSettings = PersistenceManager.shared.loadSettings()
             guard await AgentRunner.subAgentSpawningAllowed(agent: currentAgent, settings: spawnSettings) else {
                 return Self.failure(
-                    "Sub-agent spawning is switched off (Settings › Advanced), or this agent's depth budget is exhausted. Do the work directly.",
+                    "Sub-agent spawning is switched off for \(currentAgent.name) (Settings › Advanced, or the agent's own settings). Do the work directly.",
                     startTime
                 )
             }
 
-            let providers = PersistenceManager.shared.loadProviders()
-            guard let resolution = ProviderSelection.resolve(
-                providers: providers,
-                selectedId: targetAgent.providerId.isEmpty ? spawnSettings.defaultProviderId : targetAgent.providerId
-            ), !resolution.mustRefuse else {
+            // Depth comes from the run this call belongs to. Every spawn used to call itself
+            // depth 1, so sub-agents could spawn sub-agents without the budget ever applying.
+            let parentFrame = AgentRunContext.current
+            let depth = (parentFrame?.depth ?? 0) + 1
+            let limit = AgentRunContext.depthLimit(for: currentAgent, settings: spawnSettings)
+            guard depth <= limit else {
+                return Self.failure(
+                    "Delegation depth limit reached (\(limit)). Do this part directly instead of spawning another agent.",
+                    startTime
+                )
+            }
+
+            guard let choice = AgentRunContext.subAgentModel(
+                for: targetAgent,
+                parent: parentFrame,
+                providers: PersistenceManager.shared.loadProviders(),
+                settings: spawnSettings
+            ) else {
                 return Self.failure("No usable provider for the sub-agent.", startTime)
             }
-            let subModelId = targetAgent.modelId.isEmpty ? spawnSettings.defaultModelId : targetAgent.modelId
-            let subModel = resolution.provider.models.first(where: { $0.id == subModelId })
-                ?? ModelInfo(id: subModelId, name: subModelId, providerId: resolution.provider.id)
 
             var task = SubAgentTask(
                 parentAgentId: currentAgent.id,
@@ -1103,19 +1546,29 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 taskTitle: taskTitle,
                 taskDescription: taskDesc,
                 status: .running,
-                depth: 1
+                depth: depth
             )
 
+            // A sub-agent can take minutes. Its steps go to the tool card's live tail, which is
+            // otherwise a spinner with no way to tell progress from a hang.
+            if let callId { await LiveToolOutput.shared.begin(callId: callId) }
+            if let note = choice.note, let callId {
+                await LiveToolOutput.shared.append(callId: callId, chunk: note + "\n")
+            }
             let outcome = await SubAgentExecutor.run(
                 subAgent: targetAgent,
                 parentAgent: currentAgent,
                 objective: taskTitle,
                 context: taskDesc,
                 workspace: workspace,
-                provider: resolution.provider,
-                model: subModel,
-                depth: 1
+                provider: choice.provider,
+                model: choice.model,
+                depth: depth,
+                onProgress: { line in
+                    if let callId { LiveToolOutput.shared.append(callId: callId, chunk: line + "\n") }
+                }
             )
+            if let callId { await LiveToolOutput.shared.finish(callId: callId) }
 
             task.status = outcome.succeeded ? .completed : .failed
             task.progress = 1.0
@@ -1124,15 +1577,20 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             task.durationMs = outcome.durationMs
             if !outcome.succeeded { task.errorMessage = outcome.stoppedBecause }
 
+            let report = choice.note.map { "\($0)\n\n\(outcome.report)" } ?? outcome.report
             return ToolExecutionResult(
                 success: outcome.succeeded,
-                output: outcome.report,
+                output: report,
                 error: outcome.succeeded ? nil : outcome.stoppedBecause,
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000,
                 createdSubAgentTask: task
             )
 
         case "agent_message":
+            // "Can Communicate with Other Agents" was a toggle in the agent editor that nothing read.
+            guard currentAgent.canCommunicateWithOthers else {
+                return Self.failure("\(currentAgent.name) is not allowed to message other agents (agent settings).", startTime)
+            }
             let toAgentId = dict["to_agent_id"] as? String ?? "lead-assistant"
             let content = dict["content"] as? String ?? ""
             let targetAgent = PersistenceManager.shared.loadAgents().first(where: { $0.id == toAgentId })
@@ -1144,7 +1602,8 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 messageType: .consultation,
                 content: content
             )
-            AgentCommunicationHub.shared.postMessage(msg)
+            // Returned rather than posted: `AgentRunner` forwards `createdAgentMessage` to the
+            // Agent Messages inspector, which is the only store anything displays.
             return ToolExecutionResult(
                 success: true,
                 output: "Message sent from \(currentAgent.name) to \(msg.toAgentName): \(content)",
@@ -1630,7 +2089,12 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     /// Run a shell command, draining output as it arrives so a chatty build cannot deadlock on a
     /// full pipe buffer. Used by the build/test tools, which need a longer budget than the
     /// interactive shell tool.
-    func runProcess(command: String, cwd: String, timeoutSeconds: TimeInterval) -> ProcessRun {
+    func runProcess(
+        command: String,
+        cwd: String,
+        timeoutSeconds: TimeInterval,
+        callId: String? = nil
+    ) -> ProcessRun {
         let settings = PersistenceManager.shared.loadSettings()
         let shellPath = settings.terminalShell.isEmpty ? "/bin/zsh" : settings.terminalShell
         let process = Process()
@@ -1644,9 +2108,13 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         process.standardError = pipe
 
         let state = ShellOutputState(maxBytes: 1_000_000)
+        LiveToolOutput.announce(command: command, callId: callId)
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
-            if !chunk.isEmpty { state.append(chunk) }
+            guard !chunk.isEmpty else { return }
+            state.append(chunk)
+            // The same bytes the buffer gets, so a build can be watched instead of waited on.
+            LiveToolOutput.publish(chunk: String(decoding: chunk, as: UTF8.self), callId: callId)
         }
 
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
@@ -1670,7 +2138,11 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         timer.cancel()
         pipe.fileHandleForReading.readabilityHandler = nil
         let remainder = pipe.fileHandleForReading.readDataToEndOfFile()
-        if !remainder.isEmpty { state.append(remainder) }
+        if !remainder.isEmpty {
+            state.append(remainder)
+            LiveToolOutput.publish(chunk: String(decoding: remainder, as: UTF8.self), callId: callId)
+        }
+        LiveToolOutput.conclude(callId: callId, exitCode: process.terminationStatus)
 
         let (output, didTimeOut) = state.finalize()
         return ProcessRun(
@@ -1682,7 +2154,12 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         )
     }
 
-    private func executeShell(command: String, cwd: String, startTime: Double) -> ToolExecutionResult {
+    private func executeShell(
+        command: String,
+        cwd: String,
+        startTime: Double,
+        callId: String? = nil
+    ) -> ToolExecutionResult {
         let settings = PersistenceManager.shared.loadSettings()
         let shellPath = settings.terminalShell.isEmpty ? "/bin/zsh" : settings.terminalShell
         let process = Process()
@@ -1699,11 +2176,12 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         // command's combined stdout/stderr exceeds the kernel pipe buffer, an unread pipe makes
         // the child block on write() and never exit, which deadlocks waitUntilExit() forever.
         let state = ShellOutputState(maxBytes: 200_000)
+        LiveToolOutput.announce(command: command, callId: callId)
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
-            if !chunk.isEmpty {
-                state.append(chunk)
-            }
+            guard !chunk.isEmpty else { return }
+            state.append(chunk)
+            LiveToolOutput.publish(chunk: String(decoding: chunk, as: UTF8.self), callId: callId)
         }
 
         let maxRuntimeSeconds: TimeInterval = 120
@@ -1726,7 +2204,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             let remainder = pipe.fileHandleForReading.readDataToEndOfFile()
             if !remainder.isEmpty {
                 state.append(remainder)
+                LiveToolOutput.publish(chunk: String(decoding: remainder, as: UTF8.self), callId: callId)
             }
+            LiveToolOutput.conclude(callId: callId, exitCode: process.terminationStatus)
 
             let (output, didTimeOut) = state.finalize()
             if didTimeOut {

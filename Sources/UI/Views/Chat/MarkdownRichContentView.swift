@@ -121,7 +121,7 @@ public struct FormattedCodeBlockView: View {
                     .background(Color.secondary.opacity(0.12))
                     .cornerRadius(4)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)

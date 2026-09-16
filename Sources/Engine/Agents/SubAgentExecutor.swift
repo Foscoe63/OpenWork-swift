@@ -70,11 +70,12 @@ public enum SubAgentExecutor {
         all: [Tool]
     ) -> [Tool] {
         let canRecurse = AgentRunner.subAgentSpawningAllowed(agent: subAgent, settings: settings)
-            && depth < max(0, settings.maxGlobalSubAgentDepth)
+            && depth < AgentRunContext.depthLimit(for: subAgent, settings: settings)
         return all.filter { tool in
             guard tool.isEnabled else { return false }
             if neverAvailable.contains(tool.name) { return false }
             if tool.name == "agent_spawn" && !canRecurse { return false }
+            if tool.name == "agent_message" && !subAgent.canCommunicateWithOthers { return false }
             // An empty allowlist means "everything the workspace allows", which is how existing
             // agents are configured; a populated one is a real restriction.
             if !subAgent.allowedToolIds.isEmpty,
@@ -112,7 +113,7 @@ public enum SubAgentExecutor {
         var effectiveWorkspace = workspace
         if isolate {
             do {
-                let info = try AgentWorktree.create(
+                let info = try await AgentWorktree.create(
                     workspacePath: workspace.folderPath,
                     name: "sub-\(subAgent.role)-\(UUID().uuidString.prefix(4))"
                 )
@@ -205,12 +206,18 @@ public enum SubAgentExecutor {
                 for call in pending {
                     toolCallsMade.append(call.toolName)
                     onProgress("\(subAgent.name): \(call.toolName)")
-                    let result = await ToolExecutionEngine.shared.execute(
-                        toolName: call.toolName,
-                        argumentsJson: call.argumentsJson,
-                        workspace: effectiveWorkspace,
-                        currentAgent: subAgent
-                    )
+                    // The frame is what lets an `agent_spawn` from here know its depth and which
+                    // model is really running.
+                    let frame = AgentRunContext.Frame(provider: provider, model: model, depth: depth)
+                    let result = await AgentRunContext.$current.withValue(frame) {
+                        await ToolExecutionEngine.shared.execute(
+                            toolName: call.toolName,
+                            argumentsJson: call.argumentsJson,
+                            workspace: effectiveWorkspace,
+                            currentAgent: subAgent,
+                            callId: call.id
+                        )
+                    }
                     messages.append(ChatMessage(
                         id: call.id,
                         role: .tool,
@@ -237,7 +244,18 @@ public enum SubAgentExecutor {
         let refused = ToolApprovalManager.shared.refusedWhileUnattended.map {
             "\($0.toolName) — \($0.reason)"
         }
-        let changed = changedFiles(in: effectiveWorkspace.folderPath)
+        let changed = await changedFiles(in: effectiveWorkspace.folderPath)
+
+        // A worktree with nothing in it is clutter: every delegation used to leave a directory
+        // and an `…/sub-<role>-xxxx` branch behind, including read-only research. Remove it when
+        // the sub-agent neither changed a file nor committed. Anything with work in it stays, and
+        // the report says where.
+        if let info = worktree, changed.isEmpty {
+            let commits = await commitsAhead(of: info.head, in: info.path)
+            if commits == 0, await removeWorktree(info, workspacePath: workspace.folderPath) {
+                worktree = nil
+            }
+        }
 
         return Outcome(
             succeeded: succeeded,
@@ -253,9 +271,30 @@ public enum SubAgentExecutor {
         )
     }
 
+    /// Commits on the worktree's branch since it was created. nil when git cannot say, which is
+    /// treated as "keep it".
+    static func commitsAhead(of base: String, in path: String) async -> Int? {
+        guard !base.isEmpty,
+              let out = try? await AgentWorktree.git(["rev-list", "--count", "\(base)..HEAD"], in: URL(fileURLWithPath: path)) else {
+            return nil
+        }
+        return Int(out.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    static func removeWorktree(_ info: AgentWorktree.Info, workspacePath: String) async -> Bool {
+        let slug = URL(fileURLWithPath: info.path).lastPathComponent
+        guard (try? await AgentWorktree.remove(workspacePath: workspacePath, name: slug, force: false)) != nil else {
+            return false
+        }
+        if let root = try? await AgentWorktree.repositoryRoot(containing: workspacePath) {
+            _ = try? await AgentWorktree.git(["branch", "-D", info.branch], in: root)
+        }
+        return true
+    }
+
     /// What the sub-agent actually touched, from git rather than from its own account of itself.
-    static func changedFiles(in path: String) -> [String] {
-        guard let status = try? AgentWorktree.git(["status", "--porcelain"], in: URL(fileURLWithPath: path)) else {
+    static func changedFiles(in path: String) async -> [String] {
+        guard let status = try? await AgentWorktree.git(["status", "--porcelain"], in: URL(fileURLWithPath: path)) else {
             return []
         }
         return status

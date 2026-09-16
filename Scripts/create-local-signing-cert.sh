@@ -14,7 +14,7 @@
 # Run once. It will ask for your login password to trust the certificate.
 set -euo pipefail
 
-NAME="OpenWork Local Signing"
+NAME="SwiftOpenWork Local Signing"
 
 if security find-identity -v -p codesigning | grep -q "$NAME"; then
     echo "'$NAME' already exists. Nothing to do."
@@ -43,10 +43,10 @@ EOF
 openssl req -x509 -newkey rsa:2048 -keyout "$WORK/key.pem" -out "$WORK/cert.pem" \
     -days 7300 -nodes -config "$WORK/openssl.cnf"
 openssl pkcs12 -export -out "$WORK/bundle.p12" -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
-    -name "$NAME" -passout pass:openwork
+    -name "$NAME" -passout pass:swiftopenwork
 
 security import "$WORK/bundle.p12" -k ~/Library/Keychains/login.keychain-db \
-    -P openwork -T /usr/bin/codesign -T /usr/bin/security
+    -P swiftopenwork -T /usr/bin/codesign -T /usr/bin/security
 
 echo "Approve the password prompt to trust the certificate for code signing…"
 security add-trusted-cert -r trustRoot -p codeSign \
@@ -60,6 +60,6 @@ Done. Rebuild, then grant the app Accessibility and Screen Recording once:
   System Settings › Privacy & Security › Device Control and Data Access
   System Settings › Privacy & Security › Screen & System Audio Recording
 
-Remove any existing OpenWork entry first — it points at the old ad-hoc binary — and add the
+Remove any existing OpenWork or SwiftOpenWork entry first — it points at the old ad-hoc binary — and add the
 build you actually run. Those grants now survive rebuilds.
 EOF

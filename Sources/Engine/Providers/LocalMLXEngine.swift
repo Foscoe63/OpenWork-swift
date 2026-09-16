@@ -357,7 +357,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
         return result
     }
 
-    /// Shared roots where OpenWork looks for installed MLX weights.
+    /// Shared roots where SwiftOpenWork looks for installed MLX weights.
     public static func knownMLXSearchRoots(settings: AppSettings? = nil) -> [URL] {
         var roots: [URL] = []
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -372,7 +372,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
             }
         }
 
-        let appMlx = home.appendingPathComponent(".openwork/mlx_models", isDirectory: true)
+        let appMlx = AppIdentity.homeDataDirectory.appendingPathComponent("mlx_models", isDirectory: true)
         try? fm.createDirectory(at: appMlx, withIntermediateDirectories: true)
         roots.append(appMlx)
 
@@ -754,7 +754,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
     ///
     /// Previously this shelled out to `huggingface-cli` — a Python tool that is not installed on a
     /// stock Mac, so the Download button failed outright here — and wrote to
-    /// `~/.openwork/mlx_models/<org>--<repo>/`, a *different* directory from the one the chat
+    /// `~/.swiftopenwork/mlx_models/<org>--<repo>/`, a *different* directory from the one the chat
     /// loader's own download used. Two mechanisms, two destinations, one of them non-functional.
     /// There is now one: the in-process Hugging Face client, writing to the hub cache that
     /// `resolveLocalModelDirectory` already searches.

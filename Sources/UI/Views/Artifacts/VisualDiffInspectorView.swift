@@ -20,10 +20,18 @@ public struct VisualDiffInspectorView: View {
     let filePath: String
     let originalText: String
     let modifiedText: String
-    let onAccept: () -> Void
+    /// nil when there is nothing to apply, which is the case wherever the change is already on
+    /// disk. An always-present "Apply & Save" that saves nothing teaches people to distrust it.
+    let onAccept: (() -> Void)?
+    let acceptTitle: String
     let onReject: () -> Void
+    let rejectTitle: String
 
-    @State private var viewMode: DiffViewMode = .split
+    @AppStorage("diffViewMode") private var viewModeRaw: String = DiffViewMode.split.rawValue
+
+    private var viewMode: DiffViewMode {
+        DiffViewMode(rawValue: viewModeRaw) ?? .split
+    }
 
     public enum DiffViewMode: String, CaseIterable, Identifiable {
         case split = "Side-by-Side"
@@ -37,19 +45,60 @@ public struct VisualDiffInspectorView: View {
         filePath: String,
         originalText: String,
         modifiedText: String,
-        onAccept: @escaping () -> Void,
-        onReject: @escaping () -> Void
+        onAccept: (() -> Void)? = nil,
+        acceptTitle: String = "Apply & Save Changes",
+        onReject: @escaping () -> Void,
+        rejectTitle: String = "Reject Changes"
     ) {
         self.appState = appState
         self.filePath = filePath
         self.originalText = originalText
         self.modifiedText = modifiedText
         self.onAccept = onAccept
+        self.acceptTitle = acceptTitle
         self.onReject = onReject
+        self.rejectTitle = rejectTitle
     }
 
     private var diffLines: [DiffLine] {
         computeDiff(old: originalText, new: modifiedText)
+    }
+
+    /// Both sides padded to line up, so an insertion on one side leaves a gap on the other rather
+    /// than shunting every later line out of step with its counterpart.
+    private var alignedRows: [(id: Int, left: DiffLine?, right: DiffLine?)] {
+        var rows: [(Int, DiffLine?, DiffLine?)] = []
+        var index = 0
+        var pendingRemovals: [DiffLine] = []
+        var pendingAdditions: [DiffLine] = []
+
+        func flush() {
+            for offset in 0..<max(pendingRemovals.count, pendingAdditions.count) {
+                rows.append((
+                    index,
+                    offset < pendingRemovals.count ? pendingRemovals[offset] : nil,
+                    offset < pendingAdditions.count ? pendingAdditions[offset] : nil
+                ))
+                index += 1
+            }
+            pendingRemovals.removeAll()
+            pendingAdditions.removeAll()
+        }
+
+        for line in diffLines {
+            switch line.kind {
+            case .deleted:
+                pendingRemovals.append(line)
+            case .added:
+                pendingAdditions.append(line)
+            case .unchanged:
+                flush()
+                rows.append((index, line, line))
+                index += 1
+            }
+        }
+        flush()
+        return rows.map { (id: $0.0, left: $0.1, right: $0.2) }
     }
 
     private var additionsCount: Int {
@@ -87,27 +136,31 @@ public struct VisualDiffInspectorView: View {
 
                 Spacer()
 
-                // Split / Unified toggle
-                Picker("", selection: $viewMode) {
+                // Split / Unified toggle. This drove nothing for as long as it existed: the body
+                // always rendered unified, while the picker sat on "Side-by-Side" by default and
+                // said so.
+                Picker("", selection: $viewModeRaw) {
                     ForEach(DiffViewMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+                        Text(mode.rawValue).tag(mode.rawValue)
                     }
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 220)
 
                 // Action Buttons
-                Button("Reject Changes", role: .destructive) {
+                Button(rejectTitle, role: .destructive) {
                     onReject()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
-                Button("Apply & Save Changes") {
-                    onAccept()
+                if let onAccept {
+                    Button(acceptTitle) {
+                        onAccept()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
             }
             .padding(12)
             .background(ThemeColors.sidebarBg(for: appState.settings.theme))
@@ -116,15 +169,73 @@ public struct VisualDiffInspectorView: View {
 
             // Diff Scroll Area
             ScrollView([.horizontal, .vertical]) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(diffLines) { line in
-                        diffLineRow(line: line)
+                Group {
+                    if viewMode == .split {
+                        splitBody
+                    } else {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(diffLines) { line in
+                                diffLineRow(line: line)
+                            }
+                        }
                     }
                 }
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(Color(hex: "#11111B"))
+        }
+    }
+
+    private var splitBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(alignedRows, id: \.id) { row in
+                HStack(spacing: 0) {
+                    splitPane(row.left, isOriginal: true)
+                    Divider()
+                    splitPane(row.right, isOriginal: false)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func splitPane(_ line: DiffLine?, isOriginal: Bool) -> some View {
+        let number = isOriginal ? line?.oldLineNumber : line?.newLineNumber
+        HStack(spacing: 6) {
+            Text(number.map(String.init) ?? "")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.secondary.opacity(0.6))
+                .frame(width: 36, alignment: .trailing)
+            Text(line?.text.isEmpty == false ? line!.text : " ")
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundColor(splitTint(line))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 1.5)
+        .padding(.horizontal, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(splitBackground(line))
+    }
+
+    private func splitTint(_ line: DiffLine?) -> Color {
+        switch line?.kind {
+        case .added: return Color(hex: "#A6E3A1")
+        case .deleted: return Color(hex: "#F38BA8")
+        case .unchanged: return Color(hex: "#CDD6F4")
+        case nil: return .clear
+        }
+    }
+
+    /// A missing counterpart is shaded rather than left blank, so the eye can tell "nothing here"
+    /// from "an empty line here".
+    private func splitBackground(_ line: DiffLine?) -> Color {
+        switch line?.kind {
+        case .added: return Color.green.opacity(0.12)
+        case .deleted: return Color.red.opacity(0.12)
+        case .unchanged: return .clear
+        case nil: return Color.white.opacity(0.03)
         }
     }
 
@@ -164,61 +275,29 @@ public struct VisualDiffInspectorView: View {
         )
     }
 
+    /// Shares the tool cards' diff so the sheet and the card cannot disagree about a file.
+    ///
+    /// The version that lived here advanced both sides in lockstep whenever they differed, which
+    /// pairs every line after an insertion with the wrong counterpart and reports a one-line
+    /// addition as a rewrite of the rest of the file.
     private func computeDiff(old: String, new: String) -> [DiffLine] {
-        let oldLines = old.components(separatedBy: .newlines)
-        let newLines = new.components(separatedBy: .newlines)
-
-        var result: [DiffLine] = []
-        var oldIdx = 0
-        var newIdx = 0
-
-        while oldIdx < oldLines.count || newIdx < newLines.count {
-            if oldIdx < oldLines.count && newIdx < newLines.count {
-                if oldLines[oldIdx] == newLines[newIdx] {
-                    result.append(DiffLine(
-                        oldLineNumber: oldIdx + 1,
-                        newLineNumber: newIdx + 1,
-                        text: oldLines[oldIdx],
-                        kind: .unchanged
-                    ))
-                    oldIdx += 1
-                    newIdx += 1
-                } else {
-                    // Check if old line was replaced or deleted
-                    result.append(DiffLine(
-                        oldLineNumber: oldIdx + 1,
-                        newLineNumber: nil,
-                        text: oldLines[oldIdx],
-                        kind: .deleted
-                    ))
-                    result.append(DiffLine(
-                        oldLineNumber: nil,
-                        newLineNumber: newIdx + 1,
-                        text: newLines[newIdx],
-                        kind: .added
-                    ))
-                    oldIdx += 1
-                    newIdx += 1
-                }
-            } else if oldIdx < oldLines.count {
-                result.append(DiffLine(
-                    oldLineNumber: oldIdx + 1,
-                    newLineNumber: nil,
-                    text: oldLines[oldIdx],
-                    kind: .deleted
-                ))
-                oldIdx += 1
-            } else if newIdx < newLines.count {
-                result.append(DiffLine(
-                    oldLineNumber: nil,
-                    newLineNumber: newIdx + 1,
-                    text: newLines[newIdx],
-                    kind: .added
-                ))
-                newIdx += 1
+        InlineFileDiff.diff(
+            old: old.isEmpty ? [] : old.components(separatedBy: "\n"),
+            new: new.isEmpty ? [] : new.components(separatedBy: "\n")
+        ).compactMap { line in
+            let kind: DiffLineKind
+            switch line.kind {
+            case .added: kind = .added
+            case .removed: kind = .deleted
+            case .context: kind = .unchanged
+            case .gap: return nil
             }
+            return DiffLine(
+                oldLineNumber: line.oldNumber,
+                newLineNumber: line.newNumber,
+                text: line.text,
+                kind: kind
+            )
         }
-
-        return result
     }
 }

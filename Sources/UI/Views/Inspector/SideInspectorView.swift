@@ -176,7 +176,7 @@ public struct IntegratedTerminalView: View {
                     terminalSession.clear()
                 }
                 .font(.system(size: 10))
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
                 .foregroundColor(.secondary)
 
                 if terminalSession.isRunning {
@@ -185,7 +185,7 @@ public struct IntegratedTerminalView: View {
                     }
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.red)
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                 }
             }
             .padding(.horizontal, 10)
@@ -289,7 +289,7 @@ public struct IntegratedTerminalView: View {
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                 }
 
                 Button {
@@ -299,7 +299,7 @@ public struct IntegratedTerminalView: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundColor(inputCommand.trimmingCharacters(in: .whitespaces).isEmpty ? .secondary : ThemeColors.accent(for: appState.settings.accentColor))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
                 .disabled(inputCommand.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(.horizontal, 10)

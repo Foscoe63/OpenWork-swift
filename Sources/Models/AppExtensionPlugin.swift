@@ -88,7 +88,7 @@ public struct AppExtensionPlugin: Identifiable, Codable, Hashable, Sendable {
         name: String,
         description: String = "",
         version: String = "1.0.0",
-        author: String = "OpenWork Community",
+        author: String = "SwiftOpenWork Community",
         pluginType: PluginType = .mcpServer,
         source: PluginSource = .custom,
         isEnabled: Bool = true,

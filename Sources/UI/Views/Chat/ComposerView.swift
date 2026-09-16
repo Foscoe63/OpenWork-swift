@@ -1,5 +1,7 @@
 import SwiftUI
+import Combine
 import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - Custom Native Chat Text View for macOS (Return to send, Shift/Option/Slash+Return for newline)
 public struct ChatInputRepresentable: NSViewRepresentable {
@@ -7,6 +9,7 @@ public struct ChatInputRepresentable: NSViewRepresentable {
     var placeholder: String
     var onSend: () -> Void
     var onTextChange: ((String) -> Void)?
+    var onImportAttachments: (([MessageAttachment]) -> Void)?
 
     public func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -32,7 +35,9 @@ public struct ChatInputRepresentable: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 2
         textView.textContainer?.widthTracksTextView = true
         textView.onSend = onSend
+        textView.onImportAttachments = onImportAttachments
         textView.placeholderString = placeholder
+        textView.registerForDraggedTypes([.fileURL])
 
         scrollView.documentView = textView
         context.coordinator.textView = textView
@@ -41,6 +46,7 @@ public struct ChatInputRepresentable: NSViewRepresentable {
     }
 
     public func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
         if let textView = nsView.documentView as? CustomChatNSTextView {
             if textView.string != text {
                 textView.string = text
@@ -48,6 +54,7 @@ public struct ChatInputRepresentable: NSViewRepresentable {
             }
             textView.placeholderString = placeholder
             textView.onSend = onSend
+            textView.onImportAttachments = onImportAttachments
         }
     }
 
@@ -69,7 +76,59 @@ public struct ChatInputRepresentable: NSViewRepresentable {
 
 final class CustomChatNSTextView: NSTextView {
     var onSend: (() -> Void)?
+    var onImportAttachments: (([MessageAttachment]) -> Void)?
     var placeholderString: String = ""
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        var types = super.readablePasteboardTypes
+        types.append(contentsOf: [.fileURL, .png, .tiff])
+        return types
+    }
+
+    override func paste(_ sender: Any?) {
+        let imported = ComposerAttachmentIntake.attachments(fromPasteboard: .general)
+        if !imported.isEmpty {
+            onImportAttachments?(imported)
+            return
+        }
+        super.paste(sender)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Cmd+V with image/files should hit our paste path even when AppKit would paste a filename string.
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers == "v" {
+            let imported = ComposerAttachmentIntake.attachments(fromPasteboard: .general)
+            if !imported.isEmpty {
+                onImportAttachments?(imported)
+                return true
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        canImport(from: sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        canImport(from: sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        canImport(from: sender.draggingPasteboard)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let imported = ComposerAttachmentIntake.attachments(fromPasteboard: sender.draggingPasteboard)
+        guard !imported.isEmpty else { return false }
+        onImportAttachments?(imported)
+        return true
+    }
+
+    private func canImport(from pasteboard: NSPasteboard) -> Bool {
+        !ComposerAttachmentIntake.attachments(fromPasteboard: pasteboard).isEmpty
+    }
 
     override func keyDown(with event: NSEvent) {
         // Return key is 36, Numpad Enter is 76
@@ -84,9 +143,7 @@ final class CustomChatNSTextView: NSTextView {
 
             // Command+Return -> Send message
             if flags.contains(.command) {
-                if !self.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    onSend?()
-                }
+                onSend?()
                 return
             }
 
@@ -104,9 +161,7 @@ final class CustomChatNSTextView: NSTextView {
 
             // Plain Return without modifiers -> Send message
             if flags.isEmpty {
-                if !self.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    onSend?()
-                }
+                onSend?()
                 return
             }
         }
@@ -149,12 +204,59 @@ public struct ComposerView: View {
         }
     }
 
+    private var mentionQuery: String? {
+        ComposerContextMentions.activeQuery(in: appState.composerText)
+    }
+
+    private var mentionSuggestions: [ComposerContextMentions.Suggestion] {
+        guard let query = mentionQuery else { return [] }
+        return ComposerContextMentions.suggestions(
+            query: query,
+            workspacePath: appState.currentWorkspace.folderPath
+        )
+    }
+
+    /// Attachments alone are a valid prompt — a dropped screenshot needs no sentence.
+    private var canSend: Bool {
+        !appState.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !attachments.isEmpty
+    }
+
     public init(appState: AppState) {
         self.appState = appState
     }
 
     public var body: some View {
         VStack(spacing: 8) {
+            if let queued = appState.queuedFollowUp {
+                HStack(spacing: 8) {
+                    Image(systemName: "tray.and.arrow.down.fill")
+                        .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                    Text("Queued: \(queued.text)")
+                        .font(.system(size: 11.5))
+                        .lineLimit(2)
+                        .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                    Spacer()
+                    if !appState.isGenerating {
+                        Button("Send now") {
+                            appState.sendQueuedFollowUpNow()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    Button("Clear") {
+                        appState.clearQueuedFollowUp()
+                    }
+                    .buttonStyle(.hitTestable)
+                    .font(.system(size: 11, weight: .medium))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(ThemeColors.cardBg(for: appState.settings.theme))
+                .cornerRadius(8)
+                .padding(.horizontal, 16)
+            }
+
             if let pending = userChoiceManager.pending {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 6) {
@@ -223,6 +325,59 @@ public struct ComposerView: View {
                 .padding(.horizontal, 16)
             }
 
+            if !mentionSuggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Image(systemName: "at")
+                            .font(.system(size: 10))
+                            .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                        Text("ATTACH CONTEXT")
+                            .font(.system(size: 9.5, weight: .bold))
+                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+
+                    ScrollView {
+                        LazyVStack(spacing: 2) {
+                            ForEach(mentionSuggestions) { suggestion in
+                                Button {
+                                    insertMention(suggestion.path)
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: suggestion.isDirectory ? "folder.fill" : "doc.text")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                                            .frame(width: 18)
+                                        Text(suggestion.path)
+                                            .font(.system(size: 11.5, design: .monospaced))
+                                            .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                                            .lineLimit(1)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color.secondary.opacity(0.06))
+                                    .cornerRadius(6)
+                                }
+                                .buttonStyle(.hitTestable)
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(maxHeight: 160)
+                }
+                .background(ThemeColors.cardBg(for: appState.settings.theme))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(ThemeColors.border(for: appState.settings.theme), lineWidth: 1)
+                )
+                .padding(.horizontal, 16)
+            }
+
             // Slash Command Autocomplete Popover / Overlay
             if !matchingPromptTemplates.isEmpty && appState.composerText.hasPrefix("/") {
                 VStack(alignment: .leading, spacing: 2) {
@@ -272,7 +427,7 @@ public struct ComposerView: View {
                                     .background(Color.secondary.opacity(0.06))
                                     .cornerRadius(6)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.hitTestable)
                             }
                         }
                         .padding(6)
@@ -295,7 +450,7 @@ public struct ComposerView: View {
                     HStack(spacing: 6) {
                         ForEach(attachments) { att in
                             HStack(spacing: 4) {
-                                Image(systemName: "doc.fill")
+                                Image(systemName: ImageTransport.isImage(att) ? "photo.fill" : "doc.fill")
                                     .font(.system(size: 10))
                                 Text(att.name)
                                     .font(.system(size: 11))
@@ -305,7 +460,7 @@ public struct ComposerView: View {
                                     Image(systemName: "xmark.circle.fill")
                                         .font(.system(size: 10))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.hitTestable)
                             }
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
@@ -330,7 +485,7 @@ public struct ComposerView: View {
                         .background(ThemeColors.cardBg(for: appState.settings.theme))
                         .cornerRadius(6)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
                 .help("Attach file from workspace")
 
                 // Voice Dictation Button. Hidden when dictation is switched off in Settings —
@@ -348,18 +503,23 @@ public struct ComposerView: View {
                             .background(voiceEngine.isRecording ? Color.red.opacity(0.15) : ThemeColors.cardBg(for: appState.settings.theme))
                             .cornerRadius(6)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .help(voiceEngine.isRecording ? "Stop Dictation" : "Dictate with Voice (macOS STT)")
+                    .onReceive(voiceEngine.$lastError.compactMap { $0 }) { message in
+                        appState.showToast(message)
+                        voiceEngine.lastError = nil
+                    }
                 }
 
                 // Text Input Field (Return sends, Shift/Option/Slash+Return inserts newline)
                 ChatInputRepresentable(
                     text: $appState.composerText,
-                    placeholder: "Type a prompt, or / for slash commands (Return to send, Shift+Return for newline)...",
+                    placeholder: "Type a prompt, @ for files, / for commands. Drop or paste files and images.",
                     onSend: {
-                        if !appState.isGenerating && !appState.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            sendMessage()
-                        }
+                        if canSend { sendMessage() }
+                    },
+                    onImportAttachments: { imported in
+                        addAttachments(imported)
                     }
                 )
                 .frame(minHeight: 36, maxHeight: 120)
@@ -375,7 +535,7 @@ public struct ComposerView: View {
                             .font(.system(size: 24))
                             .foregroundColor(.red)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .help("Stop Generation")
                 } else {
                     Button {
@@ -383,15 +543,18 @@ public struct ComposerView: View {
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 26))
-                            .foregroundColor(appState.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.4) : ThemeColors.accent(for: appState.settings.accentColor))
+                            .foregroundColor(canSend ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.4))
                     }
-                    .buttonStyle(.plain)
-                    .disabled(appState.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(.hitTestable)
+                    .disabled(!canSend)
                     .help("Send Message (Return)")
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                importDroppedProviders(providers)
+            }
             .background(ThemeColors.cardBg(for: appState.settings.theme))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
@@ -452,14 +615,36 @@ public struct ComposerView: View {
                     .foregroundColor(appState.isReasoningEnabled ? Color.purple : ThemeColors.textSecondary(for: appState.settings.theme))
                     .cornerRadius(4)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
                 .help(appState.isReasoningEnabled
                     ? "Reasoning is on for this chat — models that support it will think before answering. Click to disable."
                     : "Reasoning is off for this chat — models will answer directly without a thinking step. Click to enable.")
 
+                Button {
+                    appState.settings.planModeEnabled.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "list.clipboard")
+                            .font(.system(size: 10))
+                        Text(appState.settings.planModeEnabled ? "Plan: On" : "Plan: Off")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(appState.settings.planModeEnabled ? Color.orange.opacity(0.2) : Color.clear)
+                    .foregroundColor(appState.settings.planModeEnabled ? .orange : ThemeColors.textSecondary(for: appState.settings.theme))
+                    .cornerRadius(4)
+                }
+                .buttonStyle(.hitTestable)
+                .help("Plan mode blocks writes until exit_plan_mode. Also toggled with /plan.")
+
                 Spacer()
 
-                Text("OpenWork-Swift Standalone")
+                if let meter = contextMeter, meter.isWorthShowing {
+                    contextMeterPill(meter)
+                }
+
+                Text("SwiftOpenWork Standalone")
                     .font(.system(size: 10))
                     .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.5))
             }
@@ -468,11 +653,78 @@ public struct ComposerView: View {
         .padding(.bottom, 12)
     }
 
+    private var contextMeter: ContextMeter? {
+        guard let session = appState.currentSession else { return nil }
+        return ContextMeter.forSession(session.messages, contextWindow: appState.currentModel.contextWindow)
+    }
+
+    /// Context exhaustion looks like the model getting stupid, not like an error, so the only
+    /// place this helps is next to the box where you decide whether to keep typing into it.
+    private func contextMeterPill(_ meter: ContextMeter) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: meter.pressure == .tight ? "gauge.high" : "gauge.medium")
+                .font(.system(size: 10))
+            Text(meter.label)
+                .font(.system(size: 10, design: .monospaced))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(contextMeterTint(meter).opacity(0.18))
+        .foregroundColor(contextMeterTint(meter))
+        .cornerRadius(4)
+        .help(meter.help)
+    }
+
+    private func contextMeterTint(_ meter: ContextMeter) -> Color {
+        switch meter.pressure {
+        case .comfortable: return ThemeColors.textSecondary(for: appState.settings.theme)
+        case .filling: return .orange
+        case .tight: return .red
+        }
+    }
+
+    private func insertMention(_ path: String) {
+        var text = appState.composerText
+        if let at = text.lastIndex(of: "@") {
+            text = String(text[..<at]) + "@\(path) "
+        } else {
+            text += "@\(path) "
+        }
+        appState.composerText = text
+    }
+
     private func sendMessage() {
-        let text = appState.composerText
+        let typed = appState.composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         let atts = attachments
+        guard !typed.isEmpty || !atts.isEmpty else { return }
+        // A dropped screenshot with no sentence still has to reach the model as a real turn.
+        let text = typed.isEmpty
+            ? (atts.count == 1 ? "Look at the attached \(atts[0].name)." : "Look at the \(atts.count) attached files.")
+            : typed
         attachments.removeAll()
         appState.sendMessage(text: text, attachments: atts)
+    }
+
+    private func addAttachments(_ imported: [MessageAttachment]) {
+        guard !imported.isEmpty else { return }
+        for att in imported where !attachments.contains(where: { $0.path == att.path }) {
+            attachments.append(att)
+        }
+    }
+
+    /// SwiftUI drop on the composer chrome, for drags that miss the text view itself.
+    private func importDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        var handled = false
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            handled = true
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, let att = ComposerAttachmentIntake.attachment(fromFileURL: url) else { return }
+                DispatchQueue.main.async {
+                    addAttachments([att])
+                }
+            }
+        }
+        return handled
     }
 
     private func chooseFileAttachment() {
@@ -481,13 +733,7 @@ public struct ComposerView: View {
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         if panel.runModal() == .OK {
-            for url in panel.urls {
-                let name = url.lastPathComponent
-                let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
-                let preview = try? String(contentsOf: url, encoding: .utf8)
-                let att = MessageAttachment(name: name, path: url.path, sizeBytes: size, previewText: preview)
-                attachments.append(att)
-            }
+            addAttachments(panel.urls.compactMap(ComposerAttachmentIntake.attachment(fromFileURL:)))
         }
     }
 }

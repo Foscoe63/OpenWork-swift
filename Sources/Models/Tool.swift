@@ -115,6 +115,11 @@ public struct ToolCallInfo: Identifiable, Codable, Hashable, Sendable {
     /// Human-readable reason this call was routed through interactive user approval (set only while
     /// status == .waitingApproval / .pendingApproval, or after the user has responded to that request).
     public var approvalReason: String?
+    /// What this call changed, when it edited a single file. Stored with the transcript so the
+    /// diff is still there after a relaunch, unlike the turn-scoped checkpoint it was taken beside.
+    public var fileDiff: InlineFileDiff?
+    /// Every file a multi-file call changed, bounded by `InlineFileDiff.boundedSet`.
+    public var fileDiffs: [InlineFileDiff]?
 
     public init(
         id: String = UUID().uuidString,
@@ -125,7 +130,9 @@ public struct ToolCallInfo: Identifiable, Codable, Hashable, Sendable {
         errorMessage: String? = nil,
         durationMs: Double = 0,
         timestamp: Date = Date(),
-        approvalReason: String? = nil
+        approvalReason: String? = nil,
+        fileDiff: InlineFileDiff? = nil,
+        fileDiffs: [InlineFileDiff]? = nil
     ) {
         self.id = id
         self.toolName = toolName
@@ -136,5 +143,7 @@ public struct ToolCallInfo: Identifiable, Codable, Hashable, Sendable {
         self.durationMs = durationMs
         self.timestamp = timestamp
         self.approvalReason = approvalReason
+        self.fileDiff = fileDiff
+        self.fileDiffs = fileDiffs
     }
 }

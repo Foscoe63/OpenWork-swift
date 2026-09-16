@@ -688,10 +688,10 @@ private actor GoogleOAuthLoopbackReceiver {
 
                 let callback = Self.parseCallback(from: request)
                 let html = """
-                <!DOCTYPE html><html><head><meta charset="utf-8"><title>OpenWork</title></head>
+                <!DOCTYPE html><html><head><meta charset="utf-8"><title>SwiftOpenWork</title></head>
                 <body style="font-family:-apple-system,sans-serif;padding:40px;text-align:center">
                 <h2>Google sign-in complete</h2>
-                <p>You can close this window and return to OpenWork.</p>
+                <p>You can close this window and return to SwiftOpenWork.</p>
                 </body></html>
                 """
                 let response = """

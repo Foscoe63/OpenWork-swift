@@ -373,7 +373,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         ))
     }
 
-    /// Map OpenWork `Tool` models into mlx-swift-lm `ToolSpec` dictionaries.
+    /// Map SwiftOpenWork `Tool` models into mlx-swift-lm `ToolSpec` dictionaries.
     /// Sampling parameters for the in-process path.
     ///
     /// This path previously passed only maxTokens and temperature, so every penalty setting was
@@ -645,8 +645,8 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// Where in-process downloads land. Also a `knownMLXSearchRoots` entry, so anything fetched
     /// here resolves on the next turn without a rescan.
     public static var downloadCacheRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".openwork/mlx_models/hub", isDirectory: true)
+        AppIdentity.homeDataDirectory
+            .appendingPathComponent("mlx_models/hub", isDirectory: true)
     }
 
     /// Download `modelId`'s weights from Hugging Face into the app's own hub cache.
@@ -882,8 +882,8 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     public func preload(modelId: String) {}
 
     public static var downloadCacheRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".openwork/mlx_models/hub", isDirectory: true)
+        AppIdentity.homeDataDirectory
+            .appendingPathComponent("mlx_models/hub", isDirectory: true)
     }
 
     public func download(

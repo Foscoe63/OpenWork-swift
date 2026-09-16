@@ -32,7 +32,7 @@ public struct ModelPickerButton: View {
         } label: {
             labelContent
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hitTestable)
         .popover(isPresented: $isOpen, arrowEdge: style == .header ? .bottom : .top) {
             ModelPickerPopoverContent(
                 appState: appState,
@@ -137,7 +137,7 @@ private struct ModelPickerPopoverContent: View {
                             .font(.system(size: 12))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                 }
             }
             .padding(.horizontal, 12)

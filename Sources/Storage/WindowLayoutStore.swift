@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Persists main-window chrome: nav destination, inspector, split widths, and window frame.
 public enum WindowLayoutStore {
-    private static let prefix = "openwork.windowLayout.v1."
+    private static let prefix = "swiftopenwork.windowLayout.v1."
 
     private enum Key {
         static let navigation = prefix + "navigation"
@@ -47,14 +47,20 @@ public enum WindowLayoutStore {
 
     public static var inspectorTab: InspectorTab {
         get {
-            let raw = UserDefaults.standard.string(forKey: Key.inspectorTab) ?? InspectorTab.subagents.rawValue
-            return InspectorTab(rawValue: raw) ?? .subagents
+            let raw = UserDefaults.standard.string(forKey: Key.inspectorTab) ?? InspectorTab.tools.rawValue
+            return InspectorTab(rawValue: raw) ?? .tools
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.inspectorTab) }
     }
 
+    static let removedSettingsTabs: Set<String> = ["cloud", "connect"]
+
     public static var settingsTab: String {
-        get { UserDefaults.standard.string(forKey: Key.settingsTab) ?? "general" }
+        get {
+            let stored = UserDefaults.standard.string(forKey: Key.settingsTab) ?? "general"
+            // Pages that were removed. Restoring onto one would highlight nothing in the sidebar.
+            return removedSettingsTabs.contains(stored) ? "general" : stored
+        }
         set { UserDefaults.standard.set(newValue, forKey: Key.settingsTab) }
     }
 
@@ -147,7 +153,7 @@ public enum WindowLayoutStore {
         NSScreen.screens.first { $0.frame.intersects(frame) }
     }
 
-    public static let mainWindowAutosaveName = "OpenWorkMainWindow"
+    public static let mainWindowAutosaveName = "SwiftOpenWorkMainWindow"
 
     private static var didObserve = false
 

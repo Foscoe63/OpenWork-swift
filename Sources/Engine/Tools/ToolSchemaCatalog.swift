@@ -19,7 +19,7 @@ public enum ToolSchemaCatalog {
                 }
             }
             // Ensure Radiant-parity requiresApproval defaults for mutating tools
-            if ["file_write", "file_delete", "file_move", "file_copy", "edit_file", "file_edit", "multi_edit", "edit_file_multi"].contains(name),
+            if ["file_write", "file_delete", "file_move", "file_copy", "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol", "setup_xcode_language_server"].contains(name),
                !tools[i].requiresApproval {
                 tools[i].requiresApproval = true
                 changed = true
@@ -145,6 +145,72 @@ public enum ToolSchemaCatalog {
                 parametersJsonSchema: schemas["find_symbol"]!
             ),
             Tool(
+                id: "rename_symbol",
+                name: "rename_symbol",
+                displayName: "Rename Symbol",
+                description: "Rename a symbol across the workspace. In a Swift package it uses the compiler index, so only references to that declaration change; elsewhere it falls back to whole-word replacement and says so. Prefer dry_run=true first; pass path (and line) when find_symbol shows more than one declaration.",
+                category: .files,
+                parametersJsonSchema: schemas["rename_symbol"]!,
+                requiresApproval: true
+            ),
+            Tool(
+                id: "go_to_definition",
+                name: "go_to_definition",
+                displayName: "Go to Definition",
+                description: "Ask the language server where the symbol used at a position is defined. Give the file, the 1-based line, and the symbol name as it appears on that line. Unlike find_symbol this resolves the actual reference (which `value` a call means), including across modules. kind can also be declaration, type_definition or implementation. Needs a language server and project root (Package.swift, tsconfig.json, Cargo.toml, go.mod…); the error says when one is missing.",
+                category: .files,
+                parametersJsonSchema: schemas["go_to_definition"]!
+            ),
+            Tool(
+                id: "find_references",
+                name: "find_references",
+                displayName: "Find References",
+                description: "Every use of the symbol at a position, from the compiler's index — only references to that declaration, not same-named symbols, comments or strings. Use before changing a function's signature or behaviour to see every caller. Returns path:line:column: source line.",
+                category: .files,
+                parametersJsonSchema: schemas["find_references"]!
+            ),
+            Tool(
+                id: "symbol_info",
+                name: "symbol_info",
+                displayName: "Symbol Info",
+                description: "The type, signature and documentation of the symbol at a position (what an editor shows on hover), and where it is declared. Use to learn an inferred type or an API's parameters without reading its source.",
+                category: .files,
+                parametersJsonSchema: schemas["symbol_info"]!
+            ),
+            Tool(
+                id: "code_diagnostics",
+                name: "code_diagnostics",
+                displayName: "Code Diagnostics",
+                description: "Errors and warnings the language server reports for one file, as path:line:column: severity: message. Much faster than build_project for checking a file you just edited; still run build_project before reporting work as done.",
+                category: .files,
+                parametersJsonSchema: schemas["code_diagnostics"]!
+            ),
+            Tool(
+                id: "document_symbols",
+                name: "document_symbols",
+                displayName: "Document Symbols",
+                description: "An outline of one file: its types, functions and properties with line numbers, nested by scope. Cheaper than reading a large file to find your way around it.",
+                category: .files,
+                parametersJsonSchema: schemas["document_symbols"]!
+            ),
+            Tool(
+                id: "setup_xcode_language_server",
+                name: "setup_xcode_language_server",
+                displayName: "Set Up Xcode Code Intelligence",
+                description: "Make the code-intelligence tools (go_to_definition, find_references, symbol_info, code_diagnostics, call_hierarchy, compiler rename) work in an Xcode project that has no Package.swift. Writes buildServer.json next to the .xcodeproj/.xcworkspace using xcode-build-server, and builds the scheme if it has never been built, because the index comes from Xcode's build. Run it once when those tools say the project needs it. Their answers then reflect the last build, so run build_project after editing before relying on references.",
+                category: .files,
+                parametersJsonSchema: schemas["setup_xcode_language_server"]!,
+                requiresApproval: true
+            ),
+            Tool(
+                id: "call_hierarchy",
+                name: "call_hierarchy",
+                displayName: "Call Hierarchy",
+                description: "For the function at a position: every call site (direction incoming, the default) or the functions it calls (outgoing), from the compiler's index.",
+                category: .files,
+                parametersJsonSchema: schemas["call_hierarchy"]!
+            ),
+            Tool(
                 id: "glob",
                 name: "glob",
                 displayName: "Find Files",
@@ -249,13 +315,13 @@ public enum ToolSchemaCatalog {
 
         // Isolation. A worktree is where an agent may commit, because history added on a branch
         // of its own cannot rewrite anything you wrote.
-        "worktree_create": #"{"type":"object","properties":{"name":{"type":"string","description":"Short name for the task being isolated, e.g. 'dark-mode-fix'. Becomes branch openwork/<name>."}},"required":["name"]}"#,
+        "worktree_create": #"{"type":"object","properties":{"name":{"type":"string","description":"Short name for the task being isolated, e.g. 'dark-mode-fix'. Becomes branch swiftopenwork/<name>."}},"required":["name"]}"#,
         "worktree_list": #"{"type":"object","properties":{}}"#,
         "worktree_remove": #"{"type":"object","properties":{"name":{"type":"string"},"force":{"type":"boolean","description":"Discard uncommitted changes. Refused without this if the worktree is dirty."}},"required":["name"]}"#,
         "git_commit": #"{"type":"object","properties":{"worktree_path":{"type":"string","description":"Absolute path of the agent worktree to commit in. Committing anywhere else is refused."},"message":{"type":"string","description":"Commit message."}},"required":["worktree_path","message"]}"#,
 
         // Perception. The agent could write a view and never look at it; these are the eyes.
-        "screenshot_window": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name, e.g. 'OpenWork' or 'ai.openwork.OpenWorkSwift'. The app must already be running - use run_app first."}},"required":["app"]}"#,
+        "screenshot_window": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name, e.g. 'SwiftOpenWork' or 'io.github.foscoe63.SwiftOpenWork'. The app must already be running - use run_app first."}},"required":["app"]}"#,
         "accessibility_tree": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name. The app must already be running."},"max_depth":{"type":"integer","description":"Tree depth budget, default 14."}},"required":["app"]}"#,
         "run_app": #"{"type":"object","properties":{"app_path":{"type":"string","description":"Path to the built .app bundle or executable."},"observe_seconds":{"type":"number","description":"How long to watch before reporting, 1-60. Default 8."},"keep_running":{"type":"boolean","description":"Leave the app running so accessibility_tree and screenshot_window can inspect it. Default true. Call quit_app when finished."},"arguments":{"type":"array","items":{"type":"string"},"description":"Launch arguments."}},"required":["app_path"]}"#,
         "quit_app": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name to quit."}},"required":["app"]}"#,
@@ -271,6 +337,14 @@ public enum ToolSchemaCatalog {
         "glob": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Path glob, e.g. **/*.swift or Sources/**/Tool*.swift"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"limit":{"type":"integer","description":"Max paths (default 200)"}},"required":["pattern"]}"#,
         "build_project": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred build command"}},"required":[]}"#,
         "find_symbol": #"{"type":"object","properties":{"name":{"type":"string","description":"Symbol name to locate."},"path":{"type":"string","description":"Directory to search; defaults to the workspace."},"limit":{"type":"integer"}},"required":["name"]}"#,
+        "go_to_definition": #"{"type":"object","properties":{"path":{"type":"string","description":"File containing the symbol, relative to the workspace or absolute."},"line":{"type":"integer","description":"1-based line where the symbol appears."},"symbol":{"type":"string","description":"The symbol name exactly as written on that line."},"column":{"type":"integer","description":"1-based column, only needed when the name appears more than once on the line."},"kind":{"type":"string","enum":["definition","declaration","type_definition","implementation"],"description":"What to find (default definition)."}},"required":["path","line","symbol"]}"#,
+        "find_references": #"{"type":"object","properties":{"path":{"type":"string","description":"File containing the symbol, relative to the workspace or absolute."},"line":{"type":"integer","description":"1-based line where the symbol appears."},"symbol":{"type":"string","description":"The symbol name exactly as written on that line."},"column":{"type":"integer","description":"1-based column, only needed when the name appears more than once on the line."},"include_declaration":{"type":"boolean","description":"Include the declaration itself (default true)."},"limit":{"type":"integer","description":"Max references listed (default 200)."}},"required":["path","line","symbol"]}"#,
+        "symbol_info": #"{"type":"object","properties":{"path":{"type":"string","description":"File containing the symbol, relative to the workspace or absolute."},"line":{"type":"integer","description":"1-based line where the symbol appears."},"symbol":{"type":"string","description":"The symbol name exactly as written on that line."},"column":{"type":"integer","description":"1-based column, only needed when the name appears more than once on the line."}},"required":["path","line","symbol"]}"#,
+        "code_diagnostics": #"{"type":"object","properties":{"path":{"type":"string","description":"File to check, relative to the workspace or absolute."}},"required":["path"]}"#,
+        "document_symbols": #"{"type":"object","properties":{"path":{"type":"string","description":"File to outline, relative to the workspace or absolute."}},"required":["path"]}"#,
+        "setup_xcode_language_server": #"{"type":"object","properties":{"path":{"type":"string","description":"Folder containing the .xcodeproj or .xcworkspace (default: workspace root)."},"scheme":{"type":"string","description":"Scheme to build and take settings from (default: the shared scheme named after the project)."},"build":{"type":"boolean","description":"true: always build first. false: never build. Omit to build only when the scheme has never been built."}},"required":[]}"#,
+        "call_hierarchy": #"{"type":"object","properties":{"path":{"type":"string","description":"File containing the symbol, relative to the workspace or absolute."},"line":{"type":"integer","description":"1-based line where the symbol appears."},"symbol":{"type":"string","description":"The symbol name exactly as written on that line."},"column":{"type":"integer","description":"1-based column, only needed when the name appears more than once on the line."},"direction":{"type":"string","enum":["incoming","outgoing"],"description":"incoming (default): who calls it. outgoing: what it calls."},"limit":{"type":"integer","description":"Max entries listed (default 100)."}},"required":["path","line","symbol"]}"#,
+        "rename_symbol": #"{"type":"object","properties":{"old_name":{"type":"string"},"new_name":{"type":"string"},"path":{"type":"string","description":"File of the declaration to rename, when find_symbol shows more than one."},"line":{"type":"integer","description":"Line of the declaration, when one file declares the name more than once."},"mode":{"type":"string","enum":["auto","semantic","text"],"description":"auto (default): compiler rename in Swift packages, otherwise whole-word text replacement, and the result says which ran. semantic: compiler only, fail rather than fall back. text: whole-word replacement everywhere."},"dry_run":{"type":"boolean","description":"Report matches without writing."}},"required":["old_name","new_name"]}"#,
         "run_tests": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred test command"},"only_failing":{"type":"boolean","description":"Re-run only the tests that failed in the previous run. Falls back to the whole suite, and says so, when there is nothing recorded or the runner cannot be narrowed."}},"required":[]}"#,
         "git_status": #"{"type":"object","properties":{}}"#,
         "git_diff": #"{"type":"object","properties":{"path":{"type":"string","description":"Limit the diff to this path"},"staged":{"type":"boolean","description":"Show staged changes instead of the working tree"}},"required":[]}"#,
@@ -290,7 +364,6 @@ public enum ToolSchemaCatalog {
         "document_extract": #"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
         "workspace_semantic_search": #"{"type":"object","properties":{"query":{"type":"string","description":"Natural-language or keyword description of the code you are looking for"},"top_k":{"type":"integer"}},"required":["query"]}"#,
         "search_workspace": #"{"type":"object","properties":{"query":{"type":"string","description":"Natural-language or keyword description of the code you are looking for"},"top_k":{"type":"integer"}},"required":["query"]}"#,
-        "generate_image": #"{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]}"#,
         "mlx_vision_describe": #"{"type":"object","properties":{"path":{"type":"string"},"prompt":{"type":"string"}},"required":["path"]}"#,
         "image_analyze": #"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
         "agent_message": #"{"type":"object","properties":{"to_agent_id":{"type":"string"},"to_agent_name":{"type":"string"},"content":{"type":"string"},"message_type":{"type":"string"}},"required":["content"]}"#,

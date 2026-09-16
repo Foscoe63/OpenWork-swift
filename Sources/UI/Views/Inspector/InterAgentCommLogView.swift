@@ -28,7 +28,7 @@ public struct InterAgentCommLogView: View {
                             .font(.system(size: 11))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .help("Clear Message Log")
                 }
                 .padding(.horizontal, 12)

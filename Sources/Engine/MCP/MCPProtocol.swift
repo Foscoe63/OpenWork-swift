@@ -508,9 +508,25 @@ public actor MCPClientManager {
 
     /// True when the user is asking which MCP servers exist / are configured — no connect required.
     public nonisolated static func isMCPInventoryPrompt(_ prompt: String) -> Bool {
-        let p = prompt.lowercased()
+        let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let mentionsMCP = p.contains("mcp")
         guard mentionsMCP else { return false }
+
+        // Inventory mode removes every tool and asks for a one-table answer, so it must only ever
+        // catch a *question about* the servers — never a task that *uses* one.
+        //
+        // It used to match any prompt mentioning "mcp" beside a word like "configured" or
+        // "mcp-server", whatever its length. The MorningBrief automation — eight steps, one of
+        // them "if an email MCP tool is configured, always use the macuse mcp-server" — ran with
+        // no tools every morning and answered with a table saying it was "restricted from calling
+        // tools". The README's own example, "use the macuse mcp-server and check the mail", did
+        // the same.
+        guard p.count <= 120 else { return false }
+        let usesAServer = [
+            "use ", "using ", "via ", "through ", "call ", "run ", "send ", "read ", "open ",
+            "mail", "calendar", "reminder", "message", "note", "create", "write", "summar", "search", "fetch"
+        ]
+        if usesAServer.contains(where: { p.contains($0) }) { return false }
         let inventoryHints = [
             "available", "configured", "what mcp", "which mcp", "list mcp",
             "mcp server", "mcp-server", "show mcp", "see what mcp", "check.*mcp"
@@ -916,7 +932,7 @@ public actor MCPClientManager {
                 "params": [
                     "protocolVersion": "2024-11-05",
                     "capabilities": ["tools": [:]],
-                    "clientInfo": ["name": "OpenWorkSwift", "version": "1.0.0"]
+                    "clientInfo": ["name": "SwiftOpenWork", "version": "1.0.0"]
                 ]
             ]
             try sendJson(initRequest, to: inPipe)
@@ -1068,7 +1084,7 @@ public actor MCPClientManager {
                 serverStatus[config.id] = .unreachable
                 let msg = config.headers["Authorization"] != nil || config.env["MCP_TOKEN"] != nil
                     ? "That server rejected the token — check it is current and has the right scope."
-                    : "That server needs you to sign in. Paste an access token in headers/env; OpenWork cannot yet do a full OAuth sign-in for MCP servers."
+                    : "That server needs you to sign in. Paste an access token in headers/env; SwiftOpenWork cannot yet do a full OAuth sign-in for MCP servers."
                 serverErrors[config.id] = msg
                 discoveredTools[config.id] = []
                 return []

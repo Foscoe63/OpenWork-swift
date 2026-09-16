@@ -54,7 +54,7 @@ public enum ProviderSelection {
             return """
             \(name) is switched off, and it runs locally.
 
-            Rather than send this turn to a cloud provider you did not choose, OpenWork stopped. \
+            Rather than send this turn to a cloud provider you did not choose, SwiftOpenWork stopped. \
             Turn \(name) back on in Model Providers, or pick a different provider for this session.
             """
         }

@@ -10,7 +10,7 @@ public final class PersistenceManager: @unchecked Sendable {
     // MARK: - Workspaces
     public var defaultWorkspaces: [Workspace] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let baseWs = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces")
+        let baseWs = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath)
         return [
             Workspace(
                 id: "default-workspace",
@@ -458,6 +458,23 @@ public final class PersistenceManager: @unchecked Sendable {
         return stored == base || stored == withMemory
     }
 
+    /// The seed's old self-description with the new name, or nil when there is nothing to change.
+    static func renamedSeedAgentText(_ text: String) -> String? {
+        // "OpenWork-Swift" was the name for a few hours before SwiftOpenWork, and test runs in
+        // that window already rewrote this machine's agents.json to it. The lookbehind matters:
+        // the new name itself contains "OpenWork Lead Agent", and without it every launch would
+        // prepend another "Swift".
+        let range = NSRange(text.startIndex..., in: text)
+        guard seedAgentNamePattern.firstMatch(in: text, range: range) != nil else { return nil }
+        return seedAgentNamePattern.stringByReplacingMatches(
+            in: text, range: range, withTemplate: "SwiftOpenWork Lead Agent"
+        )
+    }
+
+    private static let seedAgentNamePattern = try! NSRegularExpression(
+        pattern: #"(?<!Swift)OpenWork(?:-Swift)? Lead Agent"#
+    )
+
     public func loadAgents() -> [Agent] {
         var items: [Agent] = []
         if let loaded = storage.load([Agent].self, from: "agents.json"), !loaded.isEmpty {
@@ -487,6 +504,20 @@ public final class PersistenceManager: @unchecked Sendable {
             modified = true
         }
 
+        // The app was renamed SwiftOpenWork. The seeded lead agent introduces itself by name,
+        // so an install from before the rename would keep answering as "OpenWork". Only the
+        // seed's exact wording is changed; a name or prompt the user edited is theirs.
+        for i in items.indices {
+            if let renamed = Self.renamedSeedAgentText(items[i].name) {
+                items[i].name = renamed
+                modified = true
+            }
+            if let renamed = Self.renamedSeedAgentText(items[i].systemPrompt) {
+                items[i].systemPrompt = renamed
+                modified = true
+            }
+        }
+
         // Sanitize any invalid or obsolete SF symbols loaded from user's disk cache
         for i in 0..<items.count {
             if items[i].avatar == "person.crop.circle.badge.sparkables" || items[i].avatar == "person.crop.circle.badge.sparkles" {
@@ -507,13 +538,13 @@ public final class PersistenceManager: @unchecked Sendable {
         [
             Agent(
                 id: "lead-assistant",
-                name: "OpenWork Lead Agent",
+                name: "SwiftOpenWork Lead Agent",
                 description: "Primary orchestrator agent capable of answering questions, decomposing complex goals, and spawning specialized sub-agents.",
                 avatar: "person.crop.circle.badge.checkmark",
                 color: "#8B5CF6",
                 role: "Lead General Orchestrator",
                 systemPrompt: """
-                You are OpenWork Lead Agent, a robust, highly capable autonomous software engineering and research assistant.
+                You are SwiftOpenWork Lead Agent, a robust, highly capable autonomous software engineering and research assistant.
                 You can answer queries directly, or orchestrate specialized sub-agents (Coder, Researcher, Critic, Architect) for complex tasks.
                 When a task has multiple independent steps, plan methodically, communicate clearly, and leverage tools and sub-agents.
                 """,
@@ -769,7 +800,7 @@ public final class PersistenceManager: @unchecked Sendable {
             Session(
                 id: "welcome-session",
                 workspaceId: "default-workspace",
-                title: "Welcome to OpenWork-Swift",
+                title: "Welcome to SwiftOpenWork",
                 agentId: "lead-assistant",
                 providerId: "ollama-local",
                 modelId: "llama3:latest",
@@ -779,9 +810,9 @@ public final class PersistenceManager: @unchecked Sendable {
                         sessionId: "welcome-session",
                         role: .assistant,
                         content: """
-                        # Welcome to OpenWork-Swift 🚀
+                        # Welcome to SwiftOpenWork 🚀
                         
-                        OpenWork-Swift is your native macOS autonomous AI workspace powered by SwiftUI.
+                        SwiftOpenWork is your native macOS autonomous AI workspace powered by SwiftUI.
                         
                         ### Key Features:
                         - **Local & Cloud Model Providers**: Run locally with **Ollama**, **LM Studio**, or connect to **OpenAI**, **Anthropic Claude 3.7**, **Groq**, **DeepSeek**, and **OpenRouter**.
@@ -793,7 +824,7 @@ public final class PersistenceManager: @unchecked Sendable {
                         Ask any question below or type `/help` to see available slash commands!
                         """,
                         agentId: "lead-assistant",
-                        agentName: "OpenWork Lead Agent",
+                        agentName: "SwiftOpenWork Lead Agent",
                         agentAvatar: "person.crop.circle.badge.checkmark",
                         agentColor: "#8B5CF6",
                         modelId: "llama3:latest"
@@ -822,9 +853,8 @@ public final class PersistenceManager: @unchecked Sendable {
             Tool(id: "get_current_date", name: "get_current_date", displayName: "Get Current Date", description: "Returns the current date in YYYY-MM-DD format", category: .system, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "get_current_date")),
             Tool(id: "document_extract", name: "document_extract", displayName: "PDF & Vision OCR Extractor", description: "Extracts text from PDF documents via PDFKit or scanned images/receipts via Apple Vision framework OCR", category: .files, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "document_extract")),
             Tool(id: "workspace_semantic_search", name: "workspace_semantic_search", displayName: "Workspace Semantic Search (RAG)", description: "Performs local semantic chunk search across all source files in the active workspace", category: .files, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "workspace_semantic_search")),
-            Tool(id: "generate_image", name: "generate_image", displayName: "Generative Media & Canvas Image", description: "Generates UI diagrams, illustrations, charts, or SVG canvas artwork from prompts", category: .mediaVision, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "generate_image")),
-            Tool(id: "mlx_vision_describe", name: "mlx_vision_describe", displayName: "MLX Vision Multi-modal Describer", description: "Analyzes images, diagrams, and screenshots using local MLX vision models and Apple Vision classification", category: .mediaVision, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "mlx_vision_describe")),
-            Tool(id: "image_analyze", name: "image_analyze", displayName: "Vision OCR & Image Structure Analyzer", description: "Detects text, bounding boxes, labels, and structured components inside screenshots and image files", category: .mediaVision, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "image_analyze")),
+            Tool(id: "mlx_vision_describe", name: "mlx_vision_describe", displayName: "Describe Image", description: "Describe an image, answering an optional prompt about it. Uses the loaded vision model when one is loaded; otherwise reads text out of it with Apple Vision OCR and says that is what it did.", category: .mediaVision, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "mlx_vision_describe")),
+            Tool(id: "image_analyze", name: "image_analyze", displayName: "Read Text In Image", description: "Extract text from a screenshot or image with Apple Vision OCR. Text only — it does not describe what the image depicts.", category: .mediaVision, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "image_analyze")),
             Tool(id: "agent_spawn", name: "agent_spawn", displayName: "Spawn Sub-Agent", description: "Launches a specialized child sub-agent to execute a sub-task autonomously", category: .agents, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "agent_spawn")),
             Tool(id: "agent_message", name: "agent_message", displayName: "Message Agent", description: "Sends an inter-agent message or query to another agent in the network", category: .agents, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "agent_message")),
             Tool(id: "memory_store", name: "memory_store", displayName: "Save to Memory", description: "Saves a persistent fact, preference, or context item to the workspace memory", category: .system, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "memory_store")),
@@ -852,6 +882,15 @@ public final class PersistenceManager: @unchecked Sendable {
 
         var modified = ToolSchemaCatalog.ensureParityTools(in: &items)
         if ToolSchemaCatalog.applySchemas(to: &items) { modified = true }
+
+        // Tools that were removed because they did not do what they said. Left in a saved
+        // `tools.json` they would keep being offered to the model — `defaultTools` is a seed, not
+        // a filter, so nothing else drops a tool an install already has.
+        let retired: Set<String> = ["generate_image"]
+        if items.contains(where: { retired.contains($0.name) }) {
+            items.removeAll { retired.contains($0.name) }
+            modified = true
+        }
 
         for def in defaultTools {
             if !items.contains(where: { $0.id == def.id || $0.name == def.name }) {
@@ -891,7 +930,7 @@ public final class PersistenceManager: @unchecked Sendable {
             MemoryItem(
                 workspaceId: "default-workspace",
                 key: "architecture_rule",
-                content: "OpenWork-Swift is an autonomous, standalone desktop app. It does not rely on external node CLI daemons.",
+                content: "SwiftOpenWork is an autonomous, standalone desktop app. It does not rely on external node CLI daemons.",
                 category: .instruction,
                 tags: ["Architecture", "Rules"]
             )
@@ -1048,7 +1087,7 @@ public final class PersistenceManager: @unchecked Sendable {
                 name: "Git Automated Diff & Staging Hook",
                 description: "Shell script plugin to analyze git dirty trees, commit history, and automated branch workflows.",
                 version: "1.0.0",
-                author: "OpenWork Community",
+                author: "SwiftOpenWork Community",
                 pluginType: .customScript,
                 source: .custom,
                 isEnabled: true,
@@ -1060,7 +1099,7 @@ public final class PersistenceManager: @unchecked Sendable {
                 name: "Gmail",
                 description: "Read and search Gmail via Google APIs. Configure Client ID, API Key, and OAuth Access Token under Extensions → Google Integrations.",
                 version: "1.0.0",
-                author: "Google / OpenWork",
+                author: "Google / SwiftOpenWork",
                 pluginType: .workspaceTool,
                 source: .builtIn,
                 isEnabled: false,
@@ -1071,7 +1110,7 @@ public final class PersistenceManager: @unchecked Sendable {
                 name: "Google Calendar",
                 description: "List upcoming Google Calendar events. Configure Client ID, API Key, and OAuth Access Token under Extensions → Google Integrations.",
                 version: "1.0.0",
-                author: "Google / OpenWork",
+                author: "Google / SwiftOpenWork",
                 pluginType: .workspaceTool,
                 source: .builtIn,
                 isEnabled: false,
@@ -1110,7 +1149,7 @@ public final class PersistenceManager: @unchecked Sendable {
     // MARK: - Watch Folders & Watch Items
     public var defaultWatchItems: [WatchItem] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let defaultWorkspacePath = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces/Main")
+        let defaultWorkspacePath = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath + "/Main")
         let inputPath = (defaultWorkspacePath as NSString).appendingPathComponent("input")
 
         return [
@@ -1195,7 +1234,7 @@ public final class PersistenceManager: @unchecked Sendable {
                 category: .brief,
                 content: """
                 # 🌅 Morning Executive Brief
-                *Generated automatically by OpenWork-Swift Agent Pipeline*
+                *Generated automatically by SwiftOpenWork Agent Pipeline*
 
                 ---
 

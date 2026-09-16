@@ -232,13 +232,13 @@ public struct AgentsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     if collaborationLog.isEmpty {
-                        Text("Click 'Start Collaboration' to initiate autonomous multi-agent roundtable.")
+                        Text("Start a plan → draft → review roundtable with the lead agent's team. Text only; nothing is written to disk.")
                             .font(.system(size: 12))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                             .padding(.vertical, 30)
                             .frame(maxWidth: .infinity)
                     } else {
-                        ForEach(collaborationLog, id: \.self) { log in
+                        ForEach(Array(collaborationLog.enumerated()), id: \.offset) { _, log in
                             Text(LocalizedStringKey(log))
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
@@ -254,89 +254,97 @@ public struct AgentsView: View {
         }
     }
 
+    /// A plan → draft → review roundtable with the lead agent's own team. Text only.
+    ///
+    /// This used to fill in for the agents. When a model returned nothing it showed a hardcoded
+    /// plan, a hardcoded `actor PipelineManager`, and a review reading "✅ Verified: Strict actor
+    /// isolation preserved. No race conditions detected. Ready for merge." — then "Team Consensus
+    /// Reached. Objective complete." whatever had happened. And a model that did answer could
+    /// still read as empty: chunks were applied on later main-actor hops, so the text was read
+    /// before they landed and the fabricated fallback was shown instead of the real reply. It also
+    /// picked agents by hardcoded id, falling back to whichever agent happened to be first.
+    ///
+    /// Now each step shows what that agent actually said, a failure stops the roundtable and says
+    /// why, and the team comes from the lead agent's configuration.
     private func startCollaboration() {
         isCollaborating = true
         collaborationLog.removeAll()
-        collaborationLog.append("🚀 [Orchestrator] Starting live multi-agent team session for: \"\(collaborationGoal)\"")
 
         let goal = collaborationGoal
         Task { @MainActor in
-            let lead = appState.agents.first(where: { $0.id == "lead-assistant" }) ?? appState.agents.first ?? Agent(name: "Lead")
-            let coder = appState.agents.first(where: { $0.id == "coder-agent" }) ?? appState.agents.first ?? Agent(name: "Engineer")
-            let reviewer = appState.agents.first(where: { $0.id == "reviewer-agent" }) ?? appState.agents.first ?? Agent(name: "Reviewer")
-            let provider = appState.currentProvider
-            let model = appState.currentModel
+            defer { isCollaborating = false }
 
-            // Phase 1: Lead Architect decomposition
-            collaborationLog.append("🧠 [\(lead.name)] Analyzing objective & generating blueprint...")
-            let planPrompt = "You are the Lead Systems Architect. Create a structured 3-point technical implementation plan for: \(goal)"
-            let dummyMsg1 = [ChatMessage(sessionId: "collab", role: .user, content: planPrompt)]
-            
-            let planAccumulator = AgentStreamAccumulator(initialMessage: dummyMsg1[0]) { _ in }
-            _ = try? await ProviderRouter.shared.stream(
-                provider: provider,
-                model: model,
-                systemPrompt: lead.systemPrompt,
-                messages: dummyMsg1,
-                temperature: lead.temperature,
-                maxTokens: 512,
-                reasoningEffort: .low
-            ) { chunk in
-                Task { @MainActor in
-                    planAccumulator.applyChunk(chunk)
+            let lead = appState.currentAgent.subAgentIds.isEmpty
+                ? (appState.agents.first(where: { $0.isLeadAgent && !$0.subAgentIds.isEmpty }) ?? appState.currentAgent)
+                : appState.currentAgent
+            let team = lead.subAgentIds.compactMap { id in appState.agents.first { $0.id == id } }
+            func matches(_ agent: Agent, _ words: [String]) -> Bool {
+                let text = (agent.role + " " + agent.name).lowercased()
+                return words.contains { text.contains($0) }
+            }
+            guard let implementer = team.first(where: { matches($0, ["engineer", "coder", "develop"]) }) ?? team.first else {
+                collaborationLog.append("❌ \(lead.name) has no team. Add sub-agents to it in AI Agents, then start again.")
+                return
+            }
+            let reviewer = team.first { $0.id != implementer.id && matches($0, ["review", "critic", "quality"]) }
+
+            collaborationLog.append("🚀 Roundtable for: \"\(goal)\" — \(lead.name) plans, \(implementer.name) drafts\(reviewer.map { ", \($0.name) reviews" } ?? ""). Text only: nothing is written to disk.")
+
+            let parent = AgentRunContext.Frame(provider: appState.currentProvider, model: appState.currentModel, depth: 0)
+
+            @MainActor func step(_ agent: Agent, _ prompt: String) async -> String? {
+                guard let choice = AgentRunContext.subAgentModel(
+                    for: agent, parent: parent, providers: appState.providers, settings: appState.settings
+                ) else {
+                    collaborationLog.append("❌ No usable model for \(agent.name).")
+                    return nil
                 }
+                if let note = choice.note { collaborationLog.append("ℹ️ \(note)") }
+                // Appended synchronously from the stream callback, so the full reply is there the
+                // moment the stream returns.
+                let box = ConcurrentTextBox()
+                do {
+                    try await ProviderRouter.shared.stream(
+                        provider: choice.provider,
+                        model: choice.model,
+                        systemPrompt: agent.systemPrompt,
+                        messages: [ChatMessage(sessionId: "collab", role: .user, content: prompt)],
+                        temperature: agent.temperature,
+                        maxTokens: max(agent.maxTokens, 1024),
+                        reasoningEffort: .low
+                    ) { chunk in
+                        if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
+                    }
+                } catch {
+                    collaborationLog.append("❌ \(agent.name) failed: \(error.localizedDescription)")
+                    return nil
+                }
+                let text = AssistantContentSanitizer.splitThinking(from: box.text).visible
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else {
+                    collaborationLog.append("❌ \(agent.name) returned nothing. The roundtable stopped here.")
+                    return nil
+                }
+                return text
             }
 
-            let finalPlan = planAccumulator.fullText.isEmpty ? "1. Define actor isolated data models.\n2. Implement async stream processing pipeline.\n3. Add comprehensive tests." : planAccumulator.fullText
-            collaborationLog.append("📋 [\(lead.name) Blueprint]:\n\(finalPlan)")
+            collaborationLog.append("🧠 [\(lead.name)] Planning…")
+            guard let plan = await step(lead, "Write a short, structured implementation plan (at most five points) for: \(goal)") else { return }
+            collaborationLog.append("📋 [\(lead.name) — plan]\n\(plan)")
 
-            // Phase 2: Software Engineer implementation
-            collaborationLog.append("💻 [\(coder.name)] Writing implementation based on plan...")
-            let codePrompt = "Implement the core Swift logic for the following architecture plan:\n\(finalPlan)"
-            let dummyMsg2 = [ChatMessage(sessionId: "collab", role: .user, content: codePrompt)]
+            collaborationLog.append("💻 [\(implementer.name)] Drafting…")
+            guard let draft = await step(implementer, "Objective: \(goal)\n\nDraft the core implementation for this plan:\n\(plan)") else { return }
+            collaborationLog.append("💻 [\(implementer.name) — draft]\n\(draft)")
 
-            let codeAccumulator = AgentStreamAccumulator(initialMessage: dummyMsg2[0]) { _ in }
-            _ = try? await ProviderRouter.shared.stream(
-                provider: provider,
-                model: model,
-                systemPrompt: coder.systemPrompt,
-                messages: dummyMsg2,
-                temperature: coder.temperature,
-                maxTokens: 1024,
-                reasoningEffort: .low
-            ) { chunk in
-                Task { @MainActor in
-                    codeAccumulator.applyChunk(chunk)
-                }
+            if let reviewer {
+                collaborationLog.append("🔍 [\(reviewer.name)] Reviewing…")
+                guard let review = await step(reviewer, "Objective: \(goal)\n\nReview this draft against the plan. List concrete problems first; do not approve what you have not checked.\n\nPlan:\n\(plan)\n\nDraft:\n\(draft)") else { return }
+                collaborationLog.append("🔍 [\(reviewer.name) — review]\n\(review)")
+            } else {
+                collaborationLog.append("ℹ️ No reviewer on \(lead.name)'s team, so the draft was not reviewed.")
             }
 
-            let finalCode = codeAccumulator.fullText.isEmpty ? "```swift\nactor PipelineManager {\n    func process() async throws {\n        print(\"Processing async stream\")\n    }\n}\n```" : codeAccumulator.fullText
-            collaborationLog.append("💻 [\(coder.name) Implementation]:\n\(finalCode)")
-
-            // Phase 3: Code Reviewer & Security Audit
-            collaborationLog.append("🔍 [\(reviewer.name)] Auditing code for edge cases, performance & concurrency...")
-            let reviewPrompt = "Perform strict code review and quality verification on this code:\n\(finalCode)"
-            let dummyMsg3 = [ChatMessage(sessionId: "collab", role: .user, content: reviewPrompt)]
-
-            let reviewAccumulator = AgentStreamAccumulator(initialMessage: dummyMsg3[0]) { _ in }
-            _ = try? await ProviderRouter.shared.stream(
-                provider: provider,
-                model: model,
-                systemPrompt: reviewer.systemPrompt,
-                messages: dummyMsg3,
-                temperature: reviewer.temperature,
-                maxTokens: 512,
-                reasoningEffort: .low
-            ) { chunk in
-                Task { @MainActor in
-                    reviewAccumulator.applyChunk(chunk)
-                }
-            }
-
-            let finalReview = reviewAccumulator.fullText.isEmpty ? "✅ Verified: Strict actor isolation preserved. No race conditions detected. Ready for merge." : reviewAccumulator.fullText
-            collaborationLog.append("✅ [\(reviewer.name) Review]:\n\(finalReview)")
-            collaborationLog.append("🎉 [Team Consensus Reached] Objective complete.")
-            isCollaborating = false
+            collaborationLog.append("Done. This was a text roundtable — no files were changed. To have agents do the work, give the objective to \(lead.name) in Chat; it delegates to its team with real tools.")
         }
     }
 
@@ -417,7 +425,7 @@ public struct AgentEditModalView: View {
                                         .background(draft.avatar == av ? ThemeColors.accent(for: appState.settings.accentColor).opacity(0.3) : Color.clear)
                                         .cornerRadius(6)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.hitTestable)
                             }
                         }
 
@@ -435,7 +443,7 @@ public struct AgentEditModalView: View {
                                             Circle().stroke(Color.white, lineWidth: draft.color == col ? 2 : 0)
                                         )
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.hitTestable)
                             }
                         }
 

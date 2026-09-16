@@ -97,6 +97,22 @@ public actor FileCheckpointStore {
 
     public func trackedPaths() -> [String] { entries.keys.sorted() }
 
+    /// The turn's baseline, for `SessionCheckpointStore` to seal into durable history.
+    ///
+    /// This window still gets discarded on the next `beginTurn`. What survives is the copy on
+    /// disk, which only the user can reach — the agent's own `revert_changes` stays scoped to the
+    /// turn it is running in.
+    public func baseline() -> [FileBaseline] {
+        entries.map { path, entry in
+            FileBaseline(
+                path: path,
+                previousContents: entry.previousContents,
+                existedBefore: entry.previousContents != nil
+            )
+        }
+        .sorted { $0.path < $1.path }
+    }
+
     /// One changed file, with both sides, so a reviewer can be shown a diff rather than a list.
     public struct Change: Sendable, Identifiable, Equatable {
         public enum Kind: String, Sendable { case created, modified, deleted }

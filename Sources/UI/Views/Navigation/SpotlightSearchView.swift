@@ -163,7 +163,7 @@ public struct SpotlightSearchView: View {
                         .cornerRadius(4)
                         .foregroundColor(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(14)
             .background(ThemeColors.sidebarBg(for: appState.settings.theme))
@@ -208,7 +208,7 @@ public struct SpotlightSearchView: View {
                             .background(ThemeColors.cardBg(for: appState.settings.theme))
                             .cornerRadius(8)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                     }
                 }
                 .padding(12)

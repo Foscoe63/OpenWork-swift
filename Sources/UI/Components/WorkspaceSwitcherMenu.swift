@@ -144,7 +144,7 @@ public struct WorkspaceSwitcherMenu<LabelContent: View>: View {
                                 get: {
                                     if newWorkspaceFolderPath.isEmpty && !newWorkspaceName.isEmpty {
                                         let home = FileManager.default.homeDirectoryForCurrentUser.path
-                                        let baseWs = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces")
+                                        let baseWs = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath)
                                         return (baseWs as NSString).appendingPathComponent(newWorkspaceName.replacingOccurrences(of: " ", with: "-"))
                                     }
                                     return newWorkspaceFolderPath
@@ -191,7 +191,7 @@ public struct WorkspaceSwitcherMenu<LabelContent: View>: View {
                         folder = newWorkspaceFolderPath
                     } else {
                         let home = FileManager.default.homeDirectoryForCurrentUser.path
-                        let baseWs = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces")
+                        let baseWs = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath)
                         folder = (baseWs as NSString).appendingPathComponent(newWorkspaceName.replacingOccurrences(of: " ", with: "-"))
                     }
 

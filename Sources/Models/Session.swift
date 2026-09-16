@@ -22,6 +22,8 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     public var forkedFromSessionId: String?
     /// The message in the parent that this session ends at.
     public var forkedAtMessageId: String?
+    /// Sticky checklist from `todo_write` — survives across turns in this session.
+    public var todos: [SessionTodoItem]
 
     public init(
         id: String = UUID().uuidString,
@@ -41,7 +43,8 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         totalCompletionTokens: Int = 0,
         estimatedCost: Double = 0.0,
         forkedFromSessionId: String? = nil,
-        forkedAtMessageId: String? = nil
+        forkedAtMessageId: String? = nil,
+        todos: [SessionTodoItem] = []
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -61,5 +64,29 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         self.estimatedCost = estimatedCost
         self.forkedFromSessionId = forkedFromSessionId
         self.forkedAtMessageId = forkedAtMessageId
+        self.todos = todos
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        workspaceId = try c.decode(String.self, forKey: .workspaceId)
+        title = try c.decode(String.self, forKey: .title)
+        agentId = try c.decode(String.self, forKey: .agentId)
+        providerId = try c.decode(String.self, forKey: .providerId)
+        modelId = try c.decode(String.self, forKey: .modelId)
+        isArchived = try c.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
+        isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        messages = try c.decodeIfPresent([ChatMessage].self, forKey: .messages) ?? []
+        activeSubAgentTasks = try c.decodeIfPresent([SubAgentTask].self, forKey: .activeSubAgentTasks) ?? []
+        interAgentMessages = try c.decodeIfPresent([AgentMessage].self, forKey: .interAgentMessages) ?? []
+        totalPromptTokens = try c.decodeIfPresent(Int.self, forKey: .totalPromptTokens) ?? 0
+        totalCompletionTokens = try c.decodeIfPresent(Int.self, forKey: .totalCompletionTokens) ?? 0
+        estimatedCost = try c.decodeIfPresent(Double.self, forKey: .estimatedCost) ?? 0
+        forkedFromSessionId = try c.decodeIfPresent(String.self, forKey: .forkedFromSessionId)
+        forkedAtMessageId = try c.decodeIfPresent(String.self, forKey: .forkedAtMessageId)
+        todos = try c.decodeIfPresent([SessionTodoItem].self, forKey: .todos) ?? []
     }
 }

@@ -36,7 +36,7 @@ public struct ToolsView: View {
                             .background(Color.green.opacity(0.12))
                             .clipShape(Capsule())
                     }
-                    Text("Built-in system tools, Vision/Media models, MCP servers, and installed extensions connected to OpenWork")
+                    Text("Built-in system tools, Vision/Media models, MCP servers, and installed extensions connected to SwiftOpenWork")
                         .font(.system(size: 11))
                         .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                 }
@@ -93,7 +93,7 @@ public struct ToolsView: View {
                                 .foregroundColor(.secondary)
                                 .font(.system(size: 10))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                     }
                 }
                 .padding(.horizontal, 8)

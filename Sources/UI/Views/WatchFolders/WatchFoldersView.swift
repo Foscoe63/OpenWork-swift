@@ -154,7 +154,7 @@ public struct WatchFoldersView: View {
                                 .foregroundColor(.secondary)
                                 .font(.system(size: 10))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                     }
                 }
                 .padding(.horizontal, 8)
@@ -292,7 +292,7 @@ public struct WatchFoldersView: View {
                                 .font(.system(size: 10))
                                 .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                         .help("Reveal in Finder")
                     }
 
@@ -479,7 +479,7 @@ public struct WatchFoldersView: View {
                         Image(systemName: "trash")
                             .foregroundColor(.red)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .padding(4)
                 }
             }
@@ -540,7 +540,7 @@ public struct WatchItemEditModalView: View {
                         .foregroundColor(.secondary)
                         .font(.system(size: 14))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
@@ -833,7 +833,7 @@ public struct ArtifactDetailModalView: View {
                         .foregroundColor(.secondary)
                         .font(.system(size: 14))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
