@@ -7,8 +7,8 @@ against this machine, not remembered.
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| SwiftOpenWork | yes, `fee26d7` (fourth to sixth passes, rename, language servers); CI green | 703 |
-| GrizzyBot | `03eb11e` pushed; `ecce520` (project file) committed, not pushed | 538 |
+| SwiftOpenWork | yes, `74553ec`; `fee26d7` (fourth to sixth passes, rename, language servers) passed CI | 703 |
+| GrizzyBot | yes, `ecce520` | 538 |
 
 SwiftOpenWork went from 13 tests to 703 over this work. Released as 1.1.0, under its old name, OpenWork.
 
