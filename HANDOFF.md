@@ -7,10 +7,10 @@ against this machine, not remembered.
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| SwiftOpenWork | yes, `74553ec`; `fee26d7` (fourth to sixth passes, rename, language servers) passed CI | 703 |
+| SwiftOpenWork | yes, `e1f6afe`; release `1.2.0` at `51abca3` | 707 |
 | GrizzyBot | yes, `ecce520` | 538 |
 
-SwiftOpenWork went from 13 tests to 707 over this work. Released as 1.1.0, under its old name, OpenWork.
+SwiftOpenWork went from 13 tests to 707 over this work. Latest release: 1.2.0, the first under the SwiftOpenWork name (signed, not notarised).
 
 > **The app was renamed SwiftOpenWork on 2026-09-16** (bundle ID `io.github.foscoe63.SwiftOpenWork`,
 > was `ai.openwork.OpenWorkSwift`). Sections written before that say "OpenWork" and use the old
