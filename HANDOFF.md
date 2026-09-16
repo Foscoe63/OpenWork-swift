@@ -7,8 +7,8 @@ against this machine, not remembered.
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| SwiftOpenWork | `main` (`83a7cf2`) + uncommitted fourth, fifth and sixth passes, rename, language servers | 703 |
-| GrizzyBot | yes, `03eb11e` | 538 |
+| SwiftOpenWork | yes, `fee26d7` (fourth to sixth passes, rename, language servers); CI green | 703 |
+| GrizzyBot | `03eb11e` pushed; `ecce520` (project file) committed, not pushed | 538 |
 
 SwiftOpenWork went from 13 tests to 703 over this work. Released as 1.1.0, under its old name, OpenWork.
 
@@ -1044,10 +1044,6 @@ macOS is the only authority on whether a login item is registered.
 
 ### Needs you
 
-- **A new local signing certificate.** `project.yml` now signs Debug builds with
-  `SwiftOpenWork Local Signing`, which does not exist yet. Run `Scripts/create-local-signing-cert.sh`
-  once (it asks for your password to trust the certificate). Until then, build with
-  `CODE_SIGN_IDENTITY="-"`, and expect permission grants not to survive rebuilds.
 - **Re-grant Accessibility and Screen Recording** to SwiftOpenWork, and remove the old OpenWork
   entries.
 - **Release 1.2.0 under the new name:** bump `MARKETING_VERSION`, run the notarise script, and
@@ -1059,12 +1055,6 @@ macOS is the only authority on whether a login item is registered.
   up, and a build was notarised and stapled. That build was still `OpenWork.app`, so its zip was
   deleted. The issuer ID is on the App Store Connect Integrations page. Run:
   `DEVELOPER_ID_APP="Developer ID Application: Edward Griswold (5XKHL47YG3)" APPLE_API_KEY_ID=J9TT53PZQ4 APPLE_API_ISSUER=<issuer> APPLE_API_KEY_PATH=~/.appstoreconnect/AuthKey_J9TT53PZQ4.p8 Scripts/notarize-release.sh`
-- **The six stray `MorningBrief` sessions** from test runs (see the sixth pass). Delete them in
-  the app if you do not want them.
-- **GrizzyBot's project file.** `xcodegen generate` has been run in
-  `/Volumes/Storage/Projects/GrokBot/GrizzyBot`. It added `McpSessionPool.swift` and also
-  `McpSessionPoolTests.swift` and `McpTimeoutTests.swift`, which were missing too. Not yet
-  committed.
 
 ### Worth building next
 
