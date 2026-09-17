@@ -123,6 +123,25 @@ public enum MLXSessionReuse {
         return (nil, firstRebuild ?? .rebuild(reason: "no cached session"))
     }
 
+    /// Insert `entry` as most recently used, dropping any stale session for the same conversation
+    /// and capping the list at `maxCount`.
+    ///
+    /// A rebuild used to push a new `ChatSession` without removing the one it replaced, so a chat
+    /// that diverged (compaction, tool-set change) pinned two KV caches until LRU evicted one —
+    /// unified memory held a cache that would never be hit again.
+    public static func remember<T>(
+        _ entry: T,
+        in list: inout [T],
+        maxCount: Int,
+        droppingStale: (T) -> Bool
+    ) {
+        list.removeAll(where: droppingStale)
+        list.insert(entry, at: 0)
+        if maxCount > 0, list.count > maxCount {
+            list.removeLast(list.count - maxCount)
+        }
+    }
+
     /// The system prompt goes into the session's *history*, never its `instructions`.
     ///
     /// `ChatSession` prepends `instructions` to every call, including calls that continue a live

@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 import UniformTypeIdentifiers
 
 /// Serves a folder over HTTP on the loopback interface, for previewing plain HTML sites.
@@ -18,9 +19,14 @@ public final class StaticFileServer: @unchecked Sendable {
 
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "SwiftOpenWork.StaticFileServer")
+    private let connections = OSAllocatedUnfairLock(initialState: [ObjectIdentifier: NWConnection]())
 
     public init(root: URL) {
         self.root = root.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
+    deinit {
+        stop()
     }
 
     public var url: URL? {
@@ -29,6 +35,7 @@ public final class StaticFileServer: @unchecked Sendable {
 
     /// Start listening on a free loopback port. Returns once the port is known.
     public func start() async throws -> URL {
+        stop()
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: .any)
         parameters.allowLocalEndpointReuse = true
@@ -39,39 +46,87 @@ public final class StaticFileServer: @unchecked Sendable {
             self?.handle(connection)
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            var resumed = false
-            listener.stateUpdateHandler = { [weak self] state in
-                guard let self, !resumed else { return }
-                switch state {
-                case .ready:
-                    resumed = true
-                    self.port = listener.port?.rawValue ?? 0
-                    if let url = self.url {
-                        continuation.resume(returning: url)
-                    } else {
-                        continuation.resume(throwing: URLError(.cannotConnectToHost))
-                    }
-                case .failed(let error):
-                    resumed = true
-                    continuation.resume(throwing: error)
-                default:
-                    break
+        enum Once {
+            case idle
+            case pending(CheckedContinuation<URL, Error>)
+            case finished
+        }
+        let once = OSAllocatedUnfairLock(initialState: Once.idle)
+
+        func takePending() -> CheckedContinuation<URL, Error>? {
+            once.withLock { state in
+                if case .pending(let continuation) = state {
+                    state = .finished
+                    return continuation
                 }
+                return nil
             }
-            listener.start(queue: queue)
+        }
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+                once.withLock { $0 = .pending(continuation) }
+                if Task.isCancelled {
+                    takePending()?.resume(throwing: CancellationError())
+                    self.stop()
+                    return
+                }
+                listener.stateUpdateHandler = { [weak self] state in
+                    switch state {
+                    case .ready:
+                        guard let self else {
+                            takePending()?.resume(throwing: CancellationError())
+                            return
+                        }
+                        self.port = listener.port?.rawValue ?? 0
+                        if let url = self.url {
+                            takePending()?.resume(returning: url)
+                        } else {
+                            takePending()?.resume(throwing: URLError(.cannotConnectToHost))
+                            self.stop()
+                        }
+                    case .failed(let error):
+                        takePending()?.resume(throwing: error)
+                        self?.stop()
+                    case .cancelled:
+                        takePending()?.resume(throwing: CancellationError())
+                    default:
+                        break
+                    }
+                }
+                listener.start(queue: self.queue)
+            }
+        } onCancel: { [weak self] in
+            takePending()?.resume(throwing: CancellationError())
+            self?.stop()
         }
     }
 
     public func stop() {
         listener?.cancel()
         listener = nil
+        let open = connections.withLock { held -> [NWConnection] in
+            let values = Array(held.values)
+            held.removeAll()
+            return values
+        }
+        open.forEach { $0.cancel() }
         port = 0
     }
 
     // MARK: Requests
 
     private func handle(_ connection: NWConnection) {
+        let id = ObjectIdentifier(connection)
+        connections.withLock { $0[id] = connection }
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed, .cancelled:
+                self?.connections.withLock { $0[id] = nil }
+            default:
+                break
+            }
+        }
         connection.start(queue: queue)
         receiveRequest(on: connection, buffer: Data())
     }

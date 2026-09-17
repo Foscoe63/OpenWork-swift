@@ -74,5 +74,13 @@ final class NativeMLXServiceTests: XCTestCase {
 
         XCTAssertFalse(NativeMLXService.isModelDirectoryComplete(dir))
     }
+
+    func testAFreshInstanceHoldsNoCachesOrInFlightLoads() {
+        let service = NativeMLXService()
+        XCTAssertEqual(service.cachedChatCount, 0)
+        XCTAssertEqual(service.inFlightLoadCount, 0)
+        XCTAssertEqual(service.activeGenerationCount, 0)
+        XCTAssertEqual(service.unloadAll(), 0)
+    }
 }
 #endif

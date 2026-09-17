@@ -17,7 +17,14 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     private var recentLoadFailures: [String: Date] = [:]
     /// Loads already running. A load that overran its deadline keeps going, and the next turn
     /// waits on the same task instead of starting a second copy of a 48GB read.
-    private var inFlightLoads: [String: Task<ModelContainer, Error>] = [:]
+    /// `token` is identity: a completing load must not install itself after `unload` / `deinit`
+    /// has abandoned it and a newer load for the same id has started.
+    private final class LoadToken: @unchecked Sendable {}
+    private struct InFlightLoad {
+        let token: LoadToken
+        let task: Task<ModelContainer, Error>
+    }
+    private var inFlightLoads: [String: InFlightLoad] = [:]
     /// A live chat session and what it has already consumed, so a continuing conversation
     /// reuses its KV cache instead of re-prefilling the whole transcript every turn.
     private final class CachedChat {
@@ -48,6 +55,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     private let lock = NSLock()
 
     private struct ActiveGeneration: @unchecked Sendable {
+        let modelId: String
         let cancel: @Sendable () -> Void
         let join: @Sendable () async -> Void
     }
@@ -123,6 +131,41 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
 
     public init() {}
 
+    deinit {
+        // A test instance (or a discarded engine) must not leave GPU work and KV caches behind.
+        abandonInFlightLoads()
+        let active = lock.withLock { Array(activeGenerations.values) }
+        active.forEach { $0.cancel() }
+        lock.withLock {
+            activeGenerations.removeAll()
+            cachedChats.removeAll()
+            loadedContainers.removeAll()
+            recentLoadFailures.removeAll()
+        }
+    }
+
+    var cachedChatCount: Int {
+        lock.withLock { cachedChats.count }
+    }
+
+    var inFlightLoadCount: Int {
+        lock.withLock { inFlightLoads.count }
+    }
+
+    /// Drop in-flight load tasks so a completing load cannot reinstall a container this instance
+    /// has already abandoned. Cancels the tasks; does not wait.
+    private func abandonInFlightLoads(modelId: String? = nil) {
+        let tasks = lock.withLock { () -> [Task<ModelContainer, Error>] in
+            if let modelId {
+                return [inFlightLoads.removeValue(forKey: modelId)?.task].compactMap { $0 }
+            }
+            let all = inFlightLoads.values.map(\.task)
+            inFlightLoads.removeAll()
+            return all
+        }
+        tasks.forEach { $0.cancel() }
+    }
+
     public var loadedModelIds: [String] {
         lock.withLock { Array(loadedContainers.keys).sorted() }
     }
@@ -134,7 +177,13 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// Evict an in-process model from Metal/RAM so another can be loaded.
     @discardableResult
     public func unload(modelId: String) -> Bool {
+        abandonInFlightLoads(modelId: modelId)
+        let toCancel = lock.withLock { activeGenerations.values.filter { $0.modelId == modelId } }
+        toCancel.forEach { $0.cancel() }
         let removed = lock.withLock { () -> Bool in
+            for (id, generation) in activeGenerations where generation.modelId == modelId {
+                activeGenerations[id] = nil
+            }
             guard loadedContainers.removeValue(forKey: modelId) != nil else { return false }
             recentLoadFailures[modelId] = nil
             // A cached session holds the container too. Dropping only the dictionary entry left
@@ -152,8 +201,12 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// Evict every in-process MLX model currently held in memory.
     @discardableResult
     public func unloadAll() -> Int {
+        abandonInFlightLoads()
+        let toCancel = lock.withLock { Array(activeGenerations.values) }
+        toCancel.forEach { $0.cancel() }
         let count = lock.withLock { () -> Int in
             let n = loadedContainers.count
+            activeGenerations.removeAll()
             loadedContainers.removeAll()
             recentLoadFailures.removeAll()
             cachedChats.removeAll()
@@ -343,10 +396,14 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             entry = CachedChat(session: fresh, key: key, consumed: fingerprints)
             contextBefore = 0
             lock.withLock {
-                cachedChats.insert(entry, at: 0)
-                if cachedChats.count > Self.maxCachedChats {
-                    cachedChats.removeLast(cachedChats.count - Self.maxCachedChats)
-                }
+                MLXSessionReuse.remember(
+                    entry,
+                    in: &cachedChats,
+                    maxCount: Self.maxCachedChats,
+                    droppingStale: {
+                        $0.key.modelId == key.modelId && $0.key.instructions == key.instructions
+                    }
+                )
             }
         }
 
@@ -375,7 +432,11 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             await sessionBox.value.synchronize()
         }
         lock.withLock {
-            activeGenerations[generationId] = ActiveGeneration(cancel: { consumer.cancel() }, join: join)
+            activeGenerations[generationId] = ActiveGeneration(
+                modelId: model.id,
+                cancel: { consumer.cancel() },
+                join: join
+            )
         }
 
         let outcome: Result<ConsumedGeneration, Error>
@@ -575,20 +636,42 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         // model writes anyway are still split out.
         let splitter = ReasoningChannel.StreamSplitter(startsInsideReasoning: false)
         let stream = session.streamDetails(to: sanitizeForHFChatTemplate(user), role: .user, images: [], videos: [], audios: [])
-        for try await generation in stream {
-            if Task.isCancelled { break }
-            if case .chunk(let piece) = generation, !piece.isEmpty {
-                let split = splitter.consume(piece)
-                if !split.visible.isEmpty {
-                    onVisibleText(split.visible)
-                    // Stop as soon as the suggestion is complete. Breaking out ends the stream,
-                    // which cancels the generation behind it.
-                    if split.visible.contains("\n"), shouldStop() { break }
+        let consumer = Task {
+            for try await generation in stream {
+                if Task.isCancelled { break }
+                if case .chunk(let piece) = generation, !piece.isEmpty {
+                    let split = splitter.consume(piece)
+                    if !split.visible.isEmpty {
+                        onVisibleText(split.visible)
+                        // Stop as soon as the suggestion is complete. Breaking out ends the stream,
+                        // which cancels the generation behind it.
+                        if split.visible.contains("\n"), shouldStop() { break }
+                    }
                 }
             }
+            let tail = splitter.flush()
+            if !tail.visible.isEmpty { onVisibleText(tail.visible) }
         }
-        let tail = splitter.flush()
-        if !tail.visible.isEmpty { onVisibleText(tail.visible) }
+        let generationId = UUID()
+        let sessionBox = UncheckedSendable(session)
+        let join: @Sendable () async -> Void = {
+            _ = try? await consumer.value
+            await sessionBox.value.synchronize()
+        }
+        lock.withLock {
+            activeGenerations[generationId] = ActiveGeneration(
+                modelId: modelId,
+                cancel: { consumer.cancel() },
+                join: join
+            )
+        }
+        defer { lock.withLock { activeGenerations[generationId] = nil } }
+        try await withTaskCancellationHandler {
+            try await consumer.value
+        } onCancel: {
+            consumer.cancel()
+        }
+        _ = try? await AsyncDeadline.wait(for: Task<Void, Error> { await join() }, seconds: Self.generationJoinSeconds)
     }
 
     /// Map SwiftOpenWork `Tool` models into mlx-swift-lm `ToolSpec` dictionaries.
@@ -722,20 +805,36 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         )
 
         let task: Task<ModelContainer, Error> = lock.withLock {
-            if let existing = inFlightLoads[modelId] { return existing }
-            let created = Task<ModelContainer, Error> {
-                let container = try await self.loadContainerFromDiskOrDownload(
-                    modelId: modelId, onProgress: onProgress
-                )
-                self.lock.withLock {
-                    self.loadedContainers[modelId] = container
-                    self.recentLoadFailures[modelId] = nil
-                    self.inFlightLoads[modelId] = nil
+            if let existing = inFlightLoads[modelId] { return existing.task }
+            let token = LoadToken()
+            let created = Task<ModelContainer, Error> { [weak self] in
+                guard let self else { throw CancellationError() }
+                do {
+                    let container = try await self.loadContainerFromDiskOrDownload(
+                        modelId: modelId, onProgress: onProgress
+                    )
+                    let installed = self.lock.withLock { () -> Bool in
+                        // Abandoned (unload/deinit) or superseded by a newer load: drop the result.
+                        guard self.inFlightLoads[modelId]?.token === token else { return false }
+                        self.loadedContainers[modelId] = container
+                        self.recentLoadFailures[modelId] = nil
+                        self.inFlightLoads[modelId] = nil
+                        return true
+                    }
+                    if installed {
+                        NotificationCenter.default.post(name: .mlxLoadedModelsDidChange, object: nil)
+                    }
+                    return container
+                } catch {
+                    self.lock.withLock {
+                        guard self.inFlightLoads[modelId]?.token === token else { return }
+                        self.recentLoadFailures[modelId] = Date()
+                        self.inFlightLoads[modelId] = nil
+                    }
+                    throw error
                 }
-                NotificationCenter.default.post(name: .mlxLoadedModelsDidChange, object: nil)
-                return container
             }
-            inFlightLoads[modelId] = created
+            inFlightLoads[modelId] = InFlightLoad(token: token, task: created)
             return created
         }
 
@@ -767,12 +866,6 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                 code: 3,
                 userInfo: [NSLocalizedDescriptionKey: "Loading '\(modelId)' is taking longer than \(Int(budget))s. It is still running in the background — this turn falls back; try again once it finishes."]
             )
-        } catch {
-            lock.withLock {
-                recentLoadFailures[modelId] = Date()
-                inFlightLoads[modelId] = nil
-            }
-            throw error
         }
     }
 
@@ -1097,6 +1190,9 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     @discardableResult public func unloadAll() -> Int { 0 }
     @discardableResult public func prepareForExit(timeout: TimeInterval = 3) -> Bool { true }
     public func preload(modelId: String) {}
+    var cachedChatCount: Int { 0 }
+    var inFlightLoadCount: Int { 0 }
+    var activeGenerationCount: Int { 0 }
 
     public static var downloadCacheRoot: URL {
         AppIdentity.homeDataDirectory

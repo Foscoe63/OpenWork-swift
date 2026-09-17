@@ -292,6 +292,60 @@ final class StaticFileServerTests: XCTestCase {
         let (_, missing) = try await URLSession.shared.data(from: base.appendingPathComponent("nope.js"))
         XCTAssertEqual((missing as? HTTPURLResponse)?.statusCode, 404)
     }
+
+    func testStopReleasesThePortSoASecondStartWorks() async throws {
+        let server = StaticFileServer(root: root)
+        let first = try await server.start()
+        server.stop()
+        XCTAssertNil(server.url)
+        let second = try await server.start()
+        defer { server.stop() }
+        XCTAssertNotEqual(second.port, 0)
+        let (_, response) = try await URLSession.shared.data(from: second)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        _ = first
+    }
+
+    func testCancellingStartDoesNotLeaveAListener() async throws {
+        let server = StaticFileServer(root: root)
+        let task = Task { try await server.start() }
+        task.cancel()
+        do {
+            _ = try await task.value
+        } catch is CancellationError {
+            // start noticed the cancel
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        if server.url != nil {
+            server.stop()
+        }
+        let url = try await server.start()
+        defer { server.stop() }
+        let (_, response) = try await URLSession.shared.data(from: url)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+    }
+
+    func testDeinitStopsTheListener() async throws {
+        let url: URL
+        do {
+            let server = StaticFileServer(root: root)
+            url = try await server.start()
+            let (_, response) = try await URLSession.shared.data(from: url)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 2
+        let config = URLSessionConfiguration.ephemeral
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let session = URLSession(configuration: config)
+        do {
+            _ = try await session.data(for: request)
+            XCTFail("the deallocated server must have released the port")
+        } catch {
+            // connection refused / timed out — the listener is gone
+        }
+    }
 }
 
 /// A real server, started, found, reached and stopped — including the processes it spawned.

@@ -231,6 +231,7 @@ public final class AppState: ObservableObject {
     }
 
     deinit {
+        currentExecutionTask?.cancel()
         if let mlxLoadedObserver {
             NotificationCenter.default.removeObserver(mlxLoadedObserver)
         }
@@ -660,26 +661,27 @@ public final class AppState: ObservableObject {
             restorableMessageIds = []
             return
         }
-        Task { @MainActor in
+        Task { [weak self] in
             let ids = await SessionCheckpointStore.shared.restorableMessageIds(forSession: id)
-            // The session can change while the actor call is in flight.
-            if self.currentSessionId == id { self.restorableMessageIds = ids }
+            guard let self, self.currentSessionId == id else { return }
+            self.restorableMessageIds = ids
         }
     }
 
     /// Work out what rewinding to a message would do, and show it. Writes nothing.
     public func prepareRestore(toMessageId messageId: String) {
         guard let sessionId = currentSessionId else { return }
-        Task { @MainActor in
+        Task { [weak self] in
             guard let checkpoint = await SessionCheckpointStore.shared.checkpoint(
                 forSession: sessionId, messageId: messageId
             ) else {
-                self.showToast("No file snapshot was kept for that turn")
+                self?.showToast("No file snapshot was kept for that turn")
                 return
             }
             let plan = await SessionCheckpointStore.shared.plan(
                 sessionId: sessionId, checkpointId: checkpoint.id
             )
+            guard let self else { return }
             guard !plan.isEmpty else {
                 self.showToast("Nothing to restore — those turns changed no files")
                 return
@@ -700,10 +702,11 @@ public final class AppState: ObservableObject {
     public func confirmPendingRestore() {
         guard let pending = pendingRestore, let sessionId = currentSessionId else { return }
         pendingRestore = nil
-        Task { @MainActor in
+        Task { [weak self] in
             let outcome = await SessionCheckpointStore.shared.restore(
                 sessionId: sessionId, checkpointId: pending.checkpointId
             )
+            guard let self else { return }
             self.refreshRestorePoints()
             self.showToast(Self.describeRestore(outcome))
         }
@@ -970,7 +973,6 @@ public final class AppState: ObservableObject {
 
         currentExecutionTask?.cancel()
         currentExecutionTask = Task { [weak self] in
-            guard let self = self else { return }
             await AgentRunner.shared.run(
                 session: session,
                 agent: agent,
@@ -1027,7 +1029,8 @@ public final class AppState: ObservableObject {
                 sessionId: session.id, messageId: userMsg.id, label: trimmed
             )
 
-            await MainActor.run {
+            await MainActor.run { [weak self] in
+                guard let self else { return }
                 self.isGenerating = false
                 self.currentExecutionTask = nil
                 self.persistence.saveSessions(self.sessions)
@@ -1265,12 +1268,11 @@ public final class AppState: ObservableObject {
 
     public func showToast(_ message: String) {
         self.toastMessage = message
-        Task {
+        Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             await MainActor.run {
-                if self.toastMessage == message {
-                    self.toastMessage = nil
-                }
+                guard let self, self.toastMessage == message else { return }
+                self.toastMessage = nil
             }
         }
     }
@@ -1305,9 +1307,10 @@ public final class AppState: ObservableObject {
 
     public func rescanMLXModels() {
         isScanningMLX = true
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .userInitiated) { [weak self] in
             let models = LocalMLXEngine.shared.scanInstalledModels(settings: PersistenceManager.shared.loadSettings())
             await MainActor.run {
+                guard let self else { return }
                 self.localMLXModels = models
                 self.isScanningMLX = false
 
@@ -1402,10 +1405,11 @@ public final class AppState: ObservableObject {
     }
 
     public func refreshModels(for provider: ModelProvider) {
-        Task {
+        Task { [weak self] in
             do {
                 let models = try await ProviderRouter.shared.client(for: provider).listModels(provider: provider)
                 await MainActor.run {
+                    guard let self else { return }
                     if let idx = self.providers.firstIndex(where: { $0.id == provider.id }) {
                         if !models.isEmpty {
                             self.providers[idx].models = models
@@ -1418,7 +1422,7 @@ public final class AppState: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    self.showToast("Could not fetch models: \(error.localizedDescription)")
+                    self?.showToast("Could not fetch models: \(error.localizedDescription)")
                 }
             }
         }
@@ -1505,12 +1509,12 @@ public final class AppState: ObservableObject {
             showToast("Invalid URL")
             return
         }
-        Task {
+        Task { [weak self] in
             do {
                 let (data, response) = try await URLSession.shared.data(from: url)
                 guard let http = response as? HTTPURLResponse, http.statusCode == 200,
                       let content = String(data: data, encoding: .utf8) else {
-                    await MainActor.run { self.showToast("Failed to fetch skill from URL") }
+                    await MainActor.run { self?.showToast("Failed to fetch skill from URL") }
                     return
                 }
                 let skillName = name?.isEmpty == false ? name! : url.lastPathComponent.replacingOccurrences(of: ".md", with: "").capitalized
@@ -1523,12 +1527,12 @@ public final class AppState: ObservableObject {
                     url: urlString
                 )
                 await MainActor.run {
-                    self.saveSkill(skill)
-                    self.showToast("Imported skill: \(skill.name)")
+                    self?.saveSkill(skill)
+                    self?.showToast("Imported skill: \(skill.name)")
                 }
             } catch {
                 await MainActor.run {
-                    self.showToast("Fetch error: \(error.localizedDescription)")
+                    self?.showToast("Fetch error: \(error.localizedDescription)")
                 }
             }
         }
@@ -1594,18 +1598,18 @@ public final class AppState: ObservableObject {
             showToast("Invalid URL")
             return
         }
-        Task {
+        Task { [weak self] in
             do {
                 let (data, response) = try await URLSession.shared.data(from: url)
                 guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                    await MainActor.run { self.showToast("Failed to fetch from URL") }
+                    await MainActor.run { self?.showToast("Failed to fetch from URL") }
                     return
                 }
                 let pluginName = name?.isEmpty == false ? name! : url.lastPathComponent.replacingOccurrences(of: ".json", with: "").capitalized
                 if let decoded = try? JSONDecoder().decode(AppExtensionPlugin.self, from: data) {
                     await MainActor.run {
-                        self.savePlugin(decoded)
-                        self.showToast("Imported plugin: \(decoded.name)")
+                        self?.savePlugin(decoded)
+                        self?.showToast("Imported plugin: \(decoded.name)")
                     }
                 } else {
                     let plugin = AppExtensionPlugin(
@@ -1616,13 +1620,13 @@ public final class AppState: ObservableObject {
                         pathOrUrl: urlString
                     )
                     await MainActor.run {
-                        self.savePlugin(plugin)
-                        self.showToast("Imported plugin: \(plugin.name)")
+                        self?.savePlugin(plugin)
+                        self?.showToast("Imported plugin: \(plugin.name)")
                     }
                 }
             } catch {
                 await MainActor.run {
-                    self.showToast("Plugin fetch error: \(error.localizedDescription)")
+                    self?.showToast("Plugin fetch error: \(error.localizedDescription)")
                 }
             }
         }
@@ -1833,8 +1837,9 @@ public final class AppState: ObservableObject {
                 agent: agent,
                 provider: provider,
                 model: model
-            ) { newArtifact in
+            ) { [weak self] newArtifact in
                 Task { @MainActor in
+                    guard let self else { return }
                     self.saveArtifact(newArtifact)
                     if let idx = self.watchItems.firstIndex(where: { $0.id == item.id }) {
                         self.watchItems[idx].createdArtifactsCount += 1
@@ -1877,7 +1882,7 @@ public final class AppState: ObservableObject {
         Format in rich Markdown with clean sections, emojis, and clear takeaways.
         """
 
-        Task {
+        Task { [weak self] in
             let autoAccumulator = SubAgentAccumulator()
             var failure: Error?
             do {
@@ -1936,6 +1941,7 @@ public final class AppState: ObservableObject {
             )
 
             await MainActor.run {
+                guard let self else { return }
                 self.saveArtifact(artifact)
                 self.recordAutomationRun(
                     id: automation.id,
