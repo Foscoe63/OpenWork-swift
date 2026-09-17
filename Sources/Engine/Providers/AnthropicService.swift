@@ -13,6 +13,7 @@ public final class AnthropicService: LLMProviderClient, @unchecked Sendable {
     }
 
     public func testConnection(provider: ModelProvider) async throws -> Bool {
+        let provider = await ProviderCredentials.hydrated(provider)
         guard !provider.apiKey.isEmpty else { return false }
         let endpoint = "\(provider.baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/models"
         guard let url = URL(string: endpoint) else { return false }
@@ -29,6 +30,7 @@ public final class AnthropicService: LLMProviderClient, @unchecked Sendable {
     }
 
     public func listModels(provider: ModelProvider) async throws -> [ModelInfo] {
+        let provider = await ProviderCredentials.hydrated(provider)
         let endpoint = "\(provider.baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/models"
         if let url = URL(string: endpoint), !provider.apiKey.isEmpty {
             var request = URLRequest(url: url)
@@ -88,6 +90,7 @@ public final class AnthropicService: LLMProviderClient, @unchecked Sendable {
         tools: [Tool],
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws {
+        let provider = await ProviderCredentials.hydrated(provider)
         let endpoint = "\(provider.baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/messages"
         guard let url = URL(string: endpoint) else {
             throw NSError(domain: "AnthropicService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid Anthropic URL"])

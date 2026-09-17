@@ -143,6 +143,8 @@ The code-intelligence tools run real language servers, started on first use and 
 
 ### Workspace, skills & desktop UX
 
+- **Command palette (⌘K)** — every command with its shortcut, workspace files, chats, agents and settings in one fuzzy-ranked list (initials work: `fip` → Find in Project), driven from the keyboard, recently run commands first. `>` narrows to commands, `@` jumps to a declared symbol, `:42` goes to a line in the open file
+- **Find in Project (⇧⌘F)** — above the editor: match case, whole word, regex, include/exclude globs; results grouped by file with the match highlighted, and clicking selects it in the editor. Open files are searched as shown, unsaved edits included. Replace All opens each file in the editor with the change unsaved and one undo step, so nothing reaches disk until you save
 - Workspace switcher on the chat header (synced with the sidebar)
 - Enabled **Skills** injected into the agent system prompt
 - Extensions, prompt templates, slash commands (`/clear`, `/agent`, `/model`, …)

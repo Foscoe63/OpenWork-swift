@@ -74,6 +74,7 @@ public struct ProvidersView: View {
                 editingProvider = nil
             }
         }
+        .onAppear { appState.loadProviderKeysForDisplay() }
     }
 
     // MARK: - Header Bar

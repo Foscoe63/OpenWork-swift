@@ -1097,9 +1097,9 @@ public final class AppState: ObservableObject {
     ///
     /// Shows it where the user already is: Artifacts & Files has its own editor; anywhere else the
     /// inspector opens on its Editor tab, widened when it is too narrow to read code in.
-    public func openInEditor(path: String, line: Int? = nil) {
+    public func openInEditor(path: String, line: Int? = nil, selecting selection: (column: Int, length: Int)? = nil) {
         do {
-            try EditorWorkspace.shared.open(path: path, line: line, workspaceRoot: currentWorkspace.folderPath)
+            try EditorWorkspace.shared.open(path: path, line: line, selecting: selection, workspaceRoot: currentWorkspace.folderPath)
         } catch {
             showToast(error.localizedDescription)
             return
@@ -1109,6 +1109,15 @@ public final class AppState: ObservableObject {
             navigationDestination = .chat
         }
         revealInspector(tab: .editor, minimumWidth: 560)
+    }
+
+    /// Show Find in Project in the editor, searching for the editor's selection when there is one.
+    public func showProjectSearch() {
+        if navigationDestination != .chat && navigationDestination != .tools {
+            navigationDestination = .chat
+        }
+        revealInspector(tab: .editor, minimumWidth: 560)
+        EditorWorkspace.shared.showProjectSearch(prefill: EditorWorkspace.shared.selectionForSearch)
     }
 
     /// Open the inspector on `tab`, asking for at least `minimumWidth`.
@@ -1287,7 +1296,29 @@ public final class AppState: ObservableObject {
         persistence.saveProviders(providers)
     }
 
+    /// Fill in cloud API keys for the provider settings screens, which show them.
+    ///
+    /// Keys are not loaded at launch (see `ProviderCredentials`), so a key field would read as empty
+    /// until the key was used. Called when those screens appear; reads run off the main thread, and
+    /// nothing is saved — the keys are already in the Keychain.
+    public func loadProviderKeysForDisplay() {
+        let missing = providers.filter { $0.type == .cloud && $0.apiKey.isEmpty }
+        guard !missing.isEmpty else { return }
+        Task { [weak self] in
+            for provider in missing {
+                let filled = await ProviderCredentials.hydrated(provider)
+                guard !filled.apiKey.isEmpty else { continue }
+                await MainActor.run {
+                    guard let self, let index = self.providers.firstIndex(where: { $0.id == provider.id }),
+                          self.providers[index].apiKey.isEmpty else { return }
+                    self.providers[index].apiKey = filled.apiKey
+                }
+            }
+        }
+    }
+
     public func deleteProvider(_ provider: ModelProvider) {
+        ProviderCredentials.forget(provider.id)
         providers.removeAll(where: { $0.id == provider.id })
         persistence.saveProviders(providers)
     }

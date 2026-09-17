@@ -1240,6 +1240,29 @@ with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afte
 
 ---
 
+## What landed 2026-09-17 (eighth pass): launch, palette, project search
+
+- **No Keychain reads at launch.** `PersistenceManager.loadProviders()` hydrated every cloud key on
+  the main thread inside `AppState.loadAll()`, before the window existed; after any signature change
+  each read can raise a prompt, and launch hung with no window (reproduced in a smoke test). Keys now
+  load on first use through `ProviderCredentials.hydrated` inside `OpenAIService`/`AnthropicService`
+  (streamChat, testConnection, listModels), off the main thread and cached — misses too, so a denied
+  prompt is not repeated. `AppState.loadProviderKeysForDisplay()` fills key fields when the provider
+  settings screens open. `saveProviders` never deletes a key it was handed empty, so un-hydrated
+  saves are safe. Verified: the rebuilt app with seeded cloud providers opened its window immediately.
+  Google keys are still read synchronously, but only when the Google settings page is open.
+- **Command palette (⌘K)**, replacing the Spotlight dialog in place (`SpotlightSearchView`):
+  `PaletteCommands`, `PaletteRanker` (prefix > word start > initials > substring > subsequence,
+  recents boosted), `PaletteRecents`. Rows are buttons (a tap gesture was not clickable through
+  accessibility and not reachable by VoiceOver).
+- **Find in Project (⇧⌘F)**: `ProjectSearch` (pure; columns for selection; open documents' text
+  instead of disk; binary and >2MB files skipped; 5,000-match cap) and `ProjectSearchPanel` /
+  `ProjectSearchModel` (debounced, cancellable). `EditorWorkspace.open(path:line:selecting:)` selects
+  the match. Replace All uses `EditorDocument.applyEdit` — unsaved, one undo step, capped at 40 files.
+- **CI**: `ExecutableLocator.isInertRustupProxy` — rustup's `rust-analyzer` proxy exists without the
+  component and was treated as installed (the only CI failure). The npm lifecycle test no longer
+  assumes the server is a child of the launched shell.
+
 ## What is left
 
 ### Settings still dead
