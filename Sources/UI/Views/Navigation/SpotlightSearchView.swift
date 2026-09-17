@@ -391,10 +391,16 @@ public struct SpotlightSearchView: View {
                     ScrollView {
                         LazyVStack(spacing: 2) {
                             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                                row(item, isSelected: index == selection)
-                                    .id(item.id)
-                                    .onTapGesture { run(items, at: index) }
-                                    .onHover { if $0 { selection = index } }
+                                // A button, not a tap gesture: clickable across the row, and reachable
+                                // by VoiceOver and accessibility automation.
+                                Button {
+                                    run(items, at: index)
+                                } label: {
+                                    row(item, isSelected: index == selection)
+                                }
+                                .buttonStyle(.hitTestable)
+                                .id(item.id)
+                                .onHover { if $0 { selection = index } }
                             }
                         }
                         .padding(8)
