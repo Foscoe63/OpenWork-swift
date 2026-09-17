@@ -2131,6 +2131,7 @@ public struct SettingsView: View {
                 }
             }
         }
+        .onAppear { appState.loadProviderKeysForDisplay() }
     }
 
     // 7. Appearance

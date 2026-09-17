@@ -1287,7 +1287,29 @@ public final class AppState: ObservableObject {
         persistence.saveProviders(providers)
     }
 
+    /// Fill in cloud API keys for the provider settings screens, which show them.
+    ///
+    /// Keys are not loaded at launch (see `ProviderCredentials`), so a key field would read as empty
+    /// until the key was used. Called when those screens appear; reads run off the main thread, and
+    /// nothing is saved — the keys are already in the Keychain.
+    public func loadProviderKeysForDisplay() {
+        let missing = providers.filter { $0.type == .cloud && $0.apiKey.isEmpty }
+        guard !missing.isEmpty else { return }
+        Task { [weak self] in
+            for provider in missing {
+                let filled = await ProviderCredentials.hydrated(provider)
+                guard !filled.apiKey.isEmpty else { continue }
+                await MainActor.run {
+                    guard let self, let index = self.providers.firstIndex(where: { $0.id == provider.id }),
+                          self.providers[index].apiKey.isEmpty else { return }
+                    self.providers[index].apiKey = filled.apiKey
+                }
+            }
+        }
+    }
+
     public func deleteProvider(_ provider: ModelProvider) {
+        ProviderCredentials.forget(provider.id)
         providers.removeAll(where: { $0.id == provider.id })
         persistence.saveProviders(providers)
     }
