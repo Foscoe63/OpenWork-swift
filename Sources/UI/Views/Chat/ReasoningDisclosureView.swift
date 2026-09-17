@@ -40,7 +40,7 @@ public struct ReasoningDisclosureView: View {
                 .background(Color.purple.opacity(0.08))
                 .cornerRadius(6)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hitTestable)
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 6) {
@@ -63,7 +63,7 @@ public struct ReasoningDisclosureView: View {
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                         .help("Copy the full thinking process")
                     }
 

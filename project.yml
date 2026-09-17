@@ -1,6 +1,6 @@
-name: OpenWorkSwift
+name: SwiftOpenWork
 options:
-  bundleIdPrefix: ai.openwork
+  bundleIdPrefix: io.github.foscoe63
   deploymentTarget:
     macOS: "14.0"
   xcodeVersion: "15.0"
@@ -10,7 +10,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
-    PRODUCT_NAME: "OpenWork"
+    PRODUCT_NAME: "SwiftOpenWork"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     CLANG_CXX_LANGUAGE_STANDARD: "c++17"
     # mlx-swift Metal headers use C++17 `if constexpr`; silence dialect noise from the Metal frontend.
@@ -39,7 +39,7 @@ packages:
     from: 1.3.0
 
 targets:
-  OpenWorkSwift:
+  SwiftOpenWork:
     type: application
     platform: macOS
     deploymentTarget: "14.0"
@@ -48,7 +48,7 @@ targets:
       - path: Resources
     scheme:
       testTargets:
-        - OpenWorkSwiftTests
+        - SwiftOpenWorkTests
       gatherCoverageData: true
     dependencies:
       - package: Yams
@@ -77,20 +77,29 @@ targets:
         product: Tokenizers
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.openwork.OpenWorkSwift
-        # PRODUCT_NAME is "OpenWork" (the shipped .app name), which would otherwise make the
-        # Swift module "OpenWork" too. Tests do `@testable import OpenWorkSwift`, matching the
-        # SPM module, so pin the module name independently of the product name.
-        PRODUCT_MODULE_NAME: OpenWorkSwift
+        # Renamed from OpenWork / ai.openwork.OpenWorkSwift in 1.2: another app is called
+        # OpenWork, and ai.openwork is its domain. LegacyIdentityMigration carries 1.1 data over.
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.foscoe63.SwiftOpenWork
+        # Product, module, scheme and target are all SwiftOpenWork now. The module name stays
+        # pinned so a future change to PRODUCT_NAME cannot silently rename the module that
+        # `@testable import SwiftOpenWork` needs.
+        PRODUCT_MODULE_NAME: SwiftOpenWork
         # The About row used to hardcode "1.0.0" while the released tag was 1.1.0. With
         # GENERATE_INFOPLIST_FILE and no MARKETING_VERSION the bundle also reported 1.0, so
         # there was no single place that knew the version. Bump these on release.
         MARKETING_VERSION: "1.1.0"
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
-        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 OpenWork. All rights reserved."
-        INFOPLIST_KEY_CFBundleDisplayName: "OpenWork"
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 SwiftOpenWork. All rights reserved."
+        INFOPLIST_KEY_CFBundleDisplayName: "SwiftOpenWork"
         INFOPLIST_KEY_CFBundleIconFile: "AppIcon"
+        # Privacy strings. macOS terminates an app that touches the microphone or speech
+        # recognition without these, rather than showing a permission prompt — so the composer's
+        # mic button crashed the app on first press. Apple Events covers the osascript bridge,
+        # whose requests are attributed to this app.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "SwiftOpenWork listens to the microphone only while you are dictating into the composer."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "SwiftOpenWork turns your dictation into text for the composer."
+        INFOPLIST_KEY_NSAppleEventsUsageDescription: "SwiftOpenWork runs AppleScript on your behalf when an agent tool or automation asks it to control another app."
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_EMIT_LOC_STRINGS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
@@ -113,30 +122,30 @@ targets:
         # line; anyone building without the local certificate can do the same.
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: ""
-        CODE_SIGN_IDENTITY: "OpenWork Local Signing"
+        CODE_SIGN_IDENTITY: "SwiftOpenWork Local Signing"
         OTHER_SWIFT_FLAGS: "$(inherited) -strict-concurrency=minimal"
         OTHER_CPLUSPLUSFLAGS: "$(inherited) -std=c++17 -Wno-c++17-extensions"
         OTHER_CFLAGS: "$(inherited) -Wno-c++17-extensions"
         OTHER_METAL_FLAGS: "$(inherited) -Wno-c++17-extensions"
 
-  OpenWorkSwiftTests:
+  SwiftOpenWorkTests:
     type: bundle.unit-test
     platform: macOS
     deploymentTarget: "14.0"
     sources:
-      - path: Tests/OpenWorkSwiftTests
+      - path: Tests/SwiftOpenWorkTests
     dependencies:
-      # Sets TEST_HOST/BUNDLE_LOADER so `@testable import OpenWorkSwift` resolves.
-      - target: OpenWorkSwift
+      # Sets TEST_HOST/BUNDLE_LOADER so `@testable import SwiftOpenWork` resolves.
+      - target: SwiftOpenWork
     settings:
       base:
-        # The base settings force PRODUCT_NAME to "OpenWork" for every target; the
+        # The base settings force PRODUCT_NAME to "SwiftOpenWork" for every target; the
         # test bundle needs its own name or it collides with the app product.
-        PRODUCT_NAME: "OpenWorkSwiftTests"
-        PRODUCT_BUNDLE_IDENTIFIER: ai.openwork.OpenWorkSwiftTests
+        PRODUCT_NAME: "SwiftOpenWorkTests"
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.foscoe63.SwiftOpenWorkTests
         GENERATE_INFOPLIST_FILE: YES
         OTHER_SWIFT_FLAGS: "$(inherited) -strict-concurrency=minimal"
-        # XcodeGen derives TEST_HOST from the target name and lands on OpenWorkSwift.app,
-        # but the app ships as OpenWork.app. Point at the real product.
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OpenWork.app/Contents/MacOS/OpenWork"
+        # XcodeGen derives TEST_HOST from the target name and lands on SwiftOpenWork.app,
+        # but the app ships as SwiftOpenWork.app. Point at the real product.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SwiftOpenWork.app/Contents/MacOS/SwiftOpenWork"
         BUNDLE_LOADER: "$(TEST_HOST)"

@@ -66,7 +66,7 @@ public struct AddExtensionModalView: View {
         ExtensionPreset(
             id: "preset-wakatime",
             name: "WakaTime Coding Telemetry Plugin",
-            description: "Automatic coding metrics, time tracking, and productivity stats for OpenWork sessions.",
+            description: "Automatic coding metrics, time tracking, and productivity stats for SwiftOpenWork sessions.",
             type: .customScript,
             command: "wakatime-cli --today",
             author: "WakaTime",
@@ -102,7 +102,7 @@ public struct AddExtensionModalView: View {
             description: "Read and search Gmail. Add your Google Client ID, API Key, and OAuth Access Token in Extensions → Google Integrations.",
             type: .workspaceTool,
             command: "gmail_list",
-            author: "Google / OpenWork",
+            author: "Google / SwiftOpenWork",
             version: "1.0.0",
             icon: "envelope.fill",
             permissions: ["network:outbound", "google:gmail.readonly"]
@@ -113,7 +113,7 @@ public struct AddExtensionModalView: View {
             description: "List upcoming Google Calendar events. Configure credentials in Extensions → Google Integrations.",
             type: .workspaceTool,
             command: "google_calendar_list",
-            author: "Google / OpenWork",
+            author: "Google / SwiftOpenWork",
             version: "1.0.0",
             icon: "calendar",
             permissions: ["network:outbound", "google:calendar.readonly"]
@@ -141,7 +141,7 @@ public struct AddExtensionModalView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(16)
 
@@ -255,7 +255,7 @@ public struct AddExtensionModalView: View {
                     .stroke(isSelected ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.border(for: appState.settings.theme).opacity(0.7), lineWidth: 1)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hitTestable)
     }
 
     // Catalog View
@@ -538,7 +538,7 @@ public struct ExtensionDetailModalView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(16)
 

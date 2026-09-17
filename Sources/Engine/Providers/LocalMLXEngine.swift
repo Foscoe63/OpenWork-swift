@@ -72,6 +72,27 @@ public final class LocalMLXEngine: @unchecked Sendable {
     /// Structural, not nominal: a vision tower, an image token, or a nested text config (which
     /// is how multimodal checkpoints separate the language half) all mean the checkpoint can
     /// take pixels, whatever its `model_type` happens to be called.
+    /// The context window a checkpoint's `config.json` declares.
+    ///
+    /// Multimodal checkpoints keep their language model's settings under `text_config` —
+    /// Ornith-1.5, Qwen3.6 and Qwen3.8 all declare 262,144 there and nothing at the top level. Only
+    /// the top level was read, so they were listed at the 131,072 fallback: half their real window,
+    /// which the context meter then measured against.
+    public static func declaredContextWindow(config: [String: Any]) -> Int? {
+        let keys = ["max_position_embeddings", "max_seq_len", "max_sequence_length", "n_positions"]
+        func read(_ dict: [String: Any]) -> Int? {
+            for key in keys {
+                if let value = dict[key] as? Int, value > 0 { return value }
+            }
+            return nil
+        }
+        if let top = read(config) { return top }
+        for nested in ["text_config", "llm_config", "language_config"] {
+            if let dict = config[nested] as? [String: Any], let value = read(dict) { return value }
+        }
+        return nil
+    }
+
     public static func declaresVisionSupport(config: [String: Any]) -> Bool {
         if config["vision_config"] != nil { return true }
         if config["image_token_id"] != nil { return true }
@@ -357,7 +378,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
         return result
     }
 
-    /// Shared roots where OpenWork looks for installed MLX weights.
+    /// Shared roots where SwiftOpenWork looks for installed MLX weights.
     public static func knownMLXSearchRoots(settings: AppSettings? = nil) -> [URL] {
         var roots: [URL] = []
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -372,7 +393,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
             }
         }
 
-        let appMlx = home.appendingPathComponent(".openwork/mlx_models", isDirectory: true)
+        let appMlx = AppIdentity.homeDataDirectory.appendingPathComponent("mlx_models", isDirectory: true)
         try? fm.createDirectory(at: appMlx, withIntermediateDirectories: true)
         roots.append(appMlx)
 
@@ -693,10 +714,8 @@ public final class LocalMLXEngine: @unchecked Sendable {
             // check called blind, so every screenshot sent to it would have been refused as
             // unviewable by the model that could actually have read it.
             isVLM = Self.declaresVisionSupport(config: json)
-            if let maxPos = json["max_position_embeddings"] as? Int {
-                contextWindow = maxPos
-            } else if let maxSeq = json["max_seq_len"] as? Int {
-                contextWindow = maxSeq
+            if let declared = Self.declaredContextWindow(config: json) {
+                contextWindow = declared
             }
         }
 
@@ -754,7 +773,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
     ///
     /// Previously this shelled out to `huggingface-cli` — a Python tool that is not installed on a
     /// stock Mac, so the Download button failed outright here — and wrote to
-    /// `~/.openwork/mlx_models/<org>--<repo>/`, a *different* directory from the one the chat
+    /// `~/.swiftopenwork/mlx_models/<org>--<repo>/`, a *different* directory from the one the chat
     /// loader's own download used. Two mechanisms, two destinations, one of them non-functional.
     /// There is now one: the in-process Hugging Face client, writing to the hub cache that
     /// `resolveLocalModelDirectory` already searches.

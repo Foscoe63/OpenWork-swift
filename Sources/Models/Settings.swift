@@ -34,7 +34,7 @@ public enum AccentColorChoice: String, Codable, CaseIterable, Identifiable, Send
 
     public var displayName: String {
         switch self {
-        case .purple: return "OpenWork Purple"
+        case .purple: return "SwiftOpenWork Purple"
         case .blue: return "Electric Blue"
         case .green: return "Emerald Green"
         case .amber: return "Amber Gold"
@@ -191,6 +191,12 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var theme: AppTheme
     public var accentColor: AccentColorChoice
     public var editorFontSize: Int
+    /// Ghost-text suggestions in the code editor while you type.
+    public var inlineSuggestionsEnabled: Bool
+    /// The provider and model that write them. Empty means automatic: the chat model, but only
+    /// when it runs on this Mac — code is sent to a cloud model only when one is chosen here.
+    public var inlineSuggestionProviderId: String
+    public var inlineSuggestionModelId: String
     public var useTranslucentBackground: Bool
     public var compactSidebar: Bool
 
@@ -224,12 +230,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
     // Environment
     public var customEnvironmentVariables: [String: String]
 
-    // Cloud / Sync (mocked / local-first)
-    public var cloudSyncEnabled: Bool
-    public var cloudControlPlaneUrl: String
-    public var cloudAccountEmail: String
-    public var cloudOrganizationName: String
-
     // Updates & Debug
     public var autoCheckForUpdates: Bool
     public var developerMode: Bool
@@ -246,7 +246,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
 
     public static var defaultMCPServers: [MCPServerConfig] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let workspaceMain = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces/Main")
+        let workspaceMain = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath + "/Main")
         return [
             MCPServerConfig(
                 id: "mcp-filesystem",
@@ -333,13 +333,16 @@ public struct AppSettings: Codable, Hashable, Sendable {
         theme: AppTheme = .dark,
         accentColor: AccentColorChoice = .purple,
         editorFontSize: Int = 14,
+        inlineSuggestionsEnabled: Bool = true,
+        inlineSuggestionProviderId: String = "",
+        inlineSuggestionModelId: String = "",
         useTranslucentBackground: Bool = true,
         compactSidebar: Bool = false,
         allowSubAgentCreation: Bool = true,
         maxGlobalSubAgentDepth: Int = 3,
         maxAutonomousIterations: Int = 25,
-        showInterAgentCommunicationLogs: Bool = true,
-        enableAgentCollaborationRoom: Bool = true,
+        showInterAgentCommunicationLogs: Bool = false,
+        enableAgentCollaborationRoom: Bool = false,
         mcpServers: [MCPServerConfig] = defaultMCPServers,
         // Both features are built and reachable — the mic button in `ComposerView` and the
         // speak button in `MessageBubbleView`. These defaulted to `false` only because nothing
@@ -371,11 +374,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         customHFCachePath: String = "",
         autoLoadTopMLXModelOnLaunch: Bool = false,
         mlxGpuMemoryBudgetRatio: Double = 0.75,
-        customEnvironmentVariables: [String: String] = ["OPENWORK_ENV": "development"],
-        cloudSyncEnabled: Bool = false,
-        cloudControlPlaneUrl: String = "https://cloud.openwork.ai/api",
-        cloudAccountEmail: String = "developer@openwork.local",
-        cloudOrganizationName: String = "Personal Workspace",
+        customEnvironmentVariables: [String: String] = ["SWIFTOPENWORK_ENV": "development"],
         autoCheckForUpdates: Bool = true,
         developerMode: Bool = true,
         verboseLogging: Bool = false
@@ -408,6 +407,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.theme = theme
         self.accentColor = accentColor
         self.editorFontSize = editorFontSize
+        self.inlineSuggestionsEnabled = inlineSuggestionsEnabled
+        self.inlineSuggestionProviderId = inlineSuggestionProviderId
+        self.inlineSuggestionModelId = inlineSuggestionModelId
         self.useTranslucentBackground = useTranslucentBackground
         self.compactSidebar = compactSidebar
         self.allowSubAgentCreation = allowSubAgentCreation
@@ -430,10 +432,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.autoLoadTopMLXModelOnLaunch = autoLoadTopMLXModelOnLaunch
         self.mlxGpuMemoryBudgetRatio = mlxGpuMemoryBudgetRatio
         self.customEnvironmentVariables = customEnvironmentVariables
-        self.cloudSyncEnabled = cloudSyncEnabled
-        self.cloudControlPlaneUrl = cloudControlPlaneUrl
-        self.cloudAccountEmail = cloudAccountEmail
-        self.cloudOrganizationName = cloudOrganizationName
         self.autoCheckForUpdates = autoCheckForUpdates
         self.developerMode = developerMode
         self.verboseLogging = verboseLogging
@@ -477,6 +475,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? def.theme
         self.accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? def.accentColor
         self.editorFontSize = try container.decodeIfPresent(Int.self, forKey: .editorFontSize) ?? def.editorFontSize
+        self.inlineSuggestionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .inlineSuggestionsEnabled) ?? def.inlineSuggestionsEnabled
+        self.inlineSuggestionProviderId = try container.decodeIfPresent(String.self, forKey: .inlineSuggestionProviderId) ?? def.inlineSuggestionProviderId
+        self.inlineSuggestionModelId = try container.decodeIfPresent(String.self, forKey: .inlineSuggestionModelId) ?? def.inlineSuggestionModelId
         self.useTranslucentBackground = try container.decodeIfPresent(Bool.self, forKey: .useTranslucentBackground) ?? def.useTranslucentBackground
         self.compactSidebar = try container.decodeIfPresent(Bool.self, forKey: .compactSidebar) ?? def.compactSidebar
 
@@ -507,10 +508,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
 
         self.customEnvironmentVariables = try container.decodeIfPresent([String: String].self, forKey: .customEnvironmentVariables) ?? def.customEnvironmentVariables
 
-        self.cloudSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .cloudSyncEnabled) ?? def.cloudSyncEnabled
-        self.cloudControlPlaneUrl = try container.decodeIfPresent(String.self, forKey: .cloudControlPlaneUrl) ?? def.cloudControlPlaneUrl
-        self.cloudAccountEmail = try container.decodeIfPresent(String.self, forKey: .cloudAccountEmail) ?? def.cloudAccountEmail
-        self.cloudOrganizationName = try container.decodeIfPresent(String.self, forKey: .cloudOrganizationName) ?? def.cloudOrganizationName
 
         self.autoCheckForUpdates = try container.decodeIfPresent(Bool.self, forKey: .autoCheckForUpdates) ?? def.autoCheckForUpdates
         self.developerMode = try container.decodeIfPresent(Bool.self, forKey: .developerMode) ?? def.developerMode

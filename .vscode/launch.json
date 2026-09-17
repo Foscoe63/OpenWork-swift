@@ -19,20 +19,20 @@
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:OpenWork-Swift}",
-            "name": "Debug OpenWorkSwift",
-            "target": "OpenWorkSwift",
+            "name": "Debug SwiftOpenWork",
+            "target": "SwiftOpenWork",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug OpenWorkSwift"
+            "preLaunchTask": "swift: Build Debug SwiftOpenWork"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:OpenWork-Swift}",
-            "name": "Release OpenWorkSwift",
-            "target": "OpenWorkSwift",
+            "name": "Release SwiftOpenWork",
+            "target": "SwiftOpenWork",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release OpenWorkSwift"
+            "preLaunchTask": "swift: Build Release SwiftOpenWork"
         }
     ]
 }

@@ -49,7 +49,11 @@ public struct ChatView: View {
             }
 
             // Composer Dock
-            ComposerView(appState: appState)
+            VStack(spacing: 8) {
+                PlanModeBanner(appState: appState)
+                SessionTodosBar(appState: appState)
+                ComposerView(appState: appState)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ThemeColors.bg(for: appState.settings.theme))
@@ -68,8 +72,24 @@ public struct ChatView: View {
             )
             .frame(minWidth: 780, minHeight: 520)
         }
+        .sheet(item: $appState.pendingRestore) { pending in
+            RestoreFilesSheet(appState: appState, pending: pending)
+        }
+        .onValueChanged(of: appState.presentTurnChangeReview) {
+            if appState.presentTurnChangeReview {
+                showingChangeReview = true
+                appState.presentTurnChangeReview = false
+            }
+        }
+        .task(id: appState.currentSessionId) {
+            appState.refreshRestorePoints()
+        }
         .task(id: appState.isGenerating) {
-            // Recount when a turn finishes rather than polling.
+            await refreshTurnChangeCount()
+            while !Task.isCancelled, appState.isGenerating {
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                await refreshTurnChangeCount()
+            }
             await refreshTurnChangeCount()
         }
     }
@@ -90,6 +110,15 @@ public struct ChatView: View {
                 Button("Review turn") { showingChangeReview = true }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+            }
+            if appState.isGenerating, turnChangeCount > 0 {
+                Text("live")
+                    .font(.system(size: 9, weight: .bold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.2))
+                    .foregroundColor(.orange)
+                    .cornerRadius(4)
             }
             if sessionChangeCount > 0 {
                 Button("Review session") { showingSessionChangeReview = true }
@@ -156,11 +185,13 @@ public struct ChatView: View {
 
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(appState.isGenerating ? Color.orange : Color.green)
+                        .fill(appState.isGenerating ? Color.orange : (appState.backgroundRuns.isEmpty ? Color.green : Color.blue))
                         .frame(width: 6, height: 6)
-                    Text(appState.isGenerating ? "Agent executing..." : "Agent ready")
+                    Text(BackgroundRun.statusLine(chatIsGenerating: appState.isGenerating, runs: appState.backgroundRuns))
                         .font(.system(size: 10))
                         .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                        .lineLimit(1)
+                        .help(appState.backgroundRuns.map(\.title).joined(separator: "\n"))
                 }
             }
 
@@ -236,7 +267,7 @@ public struct ChatView: View {
                         .font(.system(size: 12))
                         .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
                 .help("Clear Session Messages")
 
                 // Open Interactive Terminal Button
@@ -250,7 +281,7 @@ public struct ChatView: View {
                         .font(.system(size: 12))
                         .foregroundColor(appState.isInspectorOpen && appState.inspectorTab == .terminal ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.textSecondary(for: appState.settings.theme))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
                 .help("Open Workspace Terminal")
 
                 // Toggle Side Inspector
@@ -263,7 +294,7 @@ public struct ChatView: View {
                         .font(.system(size: 13))
                         .foregroundColor(appState.isInspectorOpen ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.textSecondary(for: appState.settings.theme))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
                 .help("Toggle Sub-Agent Inspector Panel")
             }
         }
@@ -282,7 +313,7 @@ public struct ChatView: View {
                 .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
 
             VStack(spacing: 6) {
-                Text("OpenWork AI Agent Workspace")
+                Text("SwiftOpenWork AI Agent Workspace")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
 
@@ -318,7 +349,7 @@ public struct ChatView: View {
                         title: "Automations & Tools",
                         subtitle: "Execute safe shell commands and scheduled task triggers",
                         icon: "bolt.badge.clock.fill",
-                        prompt: "Explain how OpenWork-Swift automations trigger recurring agent workflows."
+                        prompt: "Explain how SwiftOpenWork automations trigger recurring agent workflows."
                     )
                 }
                 .frame(maxWidth: 880)

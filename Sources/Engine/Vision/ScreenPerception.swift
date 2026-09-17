@@ -33,8 +33,8 @@ public enum ScreenPerception {
                 prompts for this the first time it is asked, so a dialog may be on screen now.
 
                 Grant it in System Settings › Privacy & Security › Screen & System Audio \
-                Recording, then **relaunch** OpenWork — this permission is only re-read at launch. \
-                If OpenWork already appears there and this still fails, the entry is stale: this \
+                Recording, then **relaunch** SwiftOpenWork — this permission is only re-read at launch. \
+                If SwiftOpenWork already appears there and this still fails, the entry is stale: this \
                 build is ad-hoc signed, so every rebuild invalidates the grant while leaving the \
                 tick in place. Remove it and add back:
                 \(Bundle.main.bundleURL.path)
@@ -43,7 +43,7 @@ public enum ScreenPerception {
                 return """
                 Accessibility permission is not granted, so the accessibility tree cannot be read.                 macOS has been asked for it, so a permission dialog may be on screen now — approve                 it and call this again.
 
-                If OpenWork already appears ticked under System Settings › Privacy & Security ›                 Accessibility and this still fails, the entry is stale: this build is ad-hoc signed                 (no Developer ID on this machine), so macOS identifies it by the binary's content                 hash and **every rebuild invalidates the grant while leaving the tick in place**.                 Remove OpenWork from the list with the minus button and add the running build back:
+                If SwiftOpenWork already appears ticked under System Settings › Privacy & Security ›                 Accessibility and this still fails, the entry is stale: this build is ad-hoc signed                 (no Developer ID on this machine), so macOS identifies it by the binary's content                 hash and **every rebuild invalidates the grant while leaving the tick in place**.                 Remove OpenWork from the list with the minus button and add the running build back:
                 \(Bundle.main.bundleURL.path)
                 """
             case .appNotRunning(let app):

@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 public struct SettingsView: View {
     @ObservedObject var appState: AppState
     @State private var showingResetAlert = false
+    @State private var updateOutcome: UpdateChecker.Outcome? = nil
+    @State private var checkingForUpdates = false
     @State private var newEnvKey = ""
     @State private var newEnvVal = ""
     @State private var showingAddSkill = false
@@ -94,10 +96,6 @@ public struct SettingsView: View {
                             recoveryPage
                         case "debug":
                             debugPage
-                        case "cloud":
-                            cloudAccountPage
-                        case "connect":
-                            connectPage
                         case "skills":
                             skillsPage
                         case "memory":
@@ -152,7 +150,7 @@ public struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Workspace Name")
                         .font(.system(size: 11, weight: .semibold))
-                    TextField("e.g. External SSD Drive, AI Research, OpenWork-Swift", text: $newWsName)
+                    TextField("e.g. External SSD Drive, AI Research, SwiftOpenWork", text: $newWsName)
                         .textFieldStyle(.roundedBorder)
                 }
 
@@ -192,7 +190,7 @@ public struct SettingsView: View {
                                 get: {
                                     if newWsFolderPath.isEmpty && !newWsName.isEmpty {
                                         let home = FileManager.default.homeDirectoryForCurrentUser.path
-                                        let baseWs = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces")
+                                        let baseWs = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath)
                                         return (baseWs as NSString).appendingPathComponent(newWsName.replacingOccurrences(of: " ", with: "-"))
                                     }
                                     return newWsFolderPath
@@ -241,7 +239,7 @@ public struct SettingsView: View {
                         folder = newWsFolderPath
                     } else {
                         let home = FileManager.default.homeDirectoryForCurrentUser.path
-                        let baseWs = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces")
+                        let baseWs = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath)
                         folder = (baseWs as NSString).appendingPathComponent(newWsName.replacingOccurrences(of: " ", with: "-"))
                     }
 
@@ -327,10 +325,7 @@ public struct SettingsView: View {
                         sidebarItem(id: "debug", title: "Debug & Logs", icon: "ant")
                     }
 
-                    // CLOUD GROUP
-                    sidebarGroup(title: "CLOUD & SYNC") {
-                        sidebarItem(id: "cloud", title: "Cloud Account", icon: "person.crop.circle")
-                        sidebarItem(id: "connect", title: "Connect & Remote", icon: "cable.connector")
+                    sidebarGroup(title: "SKILLS & MEMORY") {
                         sidebarItem(id: "skills", title: "Skills & MCP", icon: "sparkles")
                         sidebarItem(id: "memory", title: "Memory", icon: "brain")
                     }
@@ -419,7 +414,7 @@ public struct SettingsView: View {
                     .background(ThemeColors.cardBg(for: appState.settings.theme))
                     .clipShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hitTestable)
             .help("Close Settings (Esc)")
         }
         .padding(.horizontal, 24)
@@ -1261,7 +1256,7 @@ public struct SettingsView: View {
                                 .font(.system(size: 11))
                                 .foregroundColor(.red)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                     }
                     .padding(8)
                     .background(ThemeColors.border(for: appState.settings.theme).opacity(0.3))
@@ -1446,7 +1441,7 @@ public struct SettingsView: View {
                                         .foregroundColor(.secondary)
                                         .font(.system(size: 10))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.hitTestable)
                             }
                         }
                         .padding(.horizontal, 8)
@@ -1661,7 +1656,7 @@ public struct SettingsView: View {
                                             .foregroundColor(.red.opacity(0.85))
                                             .font(.system(size: 11))
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.hitTestable)
                                     .help("Remove Extension / Plugin")
                                 }
                             }
@@ -1725,7 +1720,7 @@ public struct SettingsView: View {
                             .frame(width: 220)
 
                             Button("Preview") {
-                                VoiceSpeechEngine.shared.speak(text: "This is the OpenWork speaking voice.")
+                                VoiceSpeechEngine.shared.speak(text: "This is the SwiftOpenWork speaking voice.")
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
@@ -2062,7 +2057,11 @@ public struct SettingsView: View {
                     Toggle("", isOn: $appState.settings.planModeEnabled)
                         .toggleStyle(.switch)
                 }
+            }
 
+            WorkspaceRulesCard(appState: appState)
+
+            SettingsCard(title: "Autonomous ReAct Loop & Hierarchy (continued)", description: "Token budgets and multi-agent limits", icon: "gauge.with.dots.needle.67percent") {
                 SettingsRow(title: "Max Turn Tokens (\(appState.settings.maxTurnTokens / 1000)k)", subtitle: "Halt a single turn when estimated token use exceeds this budget", icon: "gauge.with.dots.needle.67percent") {
                     Stepper("", value: $appState.settings.maxTurnTokens, in: 100_000...5_000_000, step: 100_000)
                 }
@@ -2081,8 +2080,7 @@ public struct SettingsView: View {
                         .toggleStyle(.switch)
                 }
 
-                // Also previously unreadable and unsettable: the Agent Messages tab was always
-                // in the inspector whatever this said.
+                // The Agent Messages tab was always shown whatever this said.
                 SettingsRow(title: "Agent Messages Inspector Tab", subtitle: "Show the inter-agent communication log", icon: "list.bullet.rectangle") {
                     Toggle("", isOn: $appState.settings.showInterAgentCommunicationLogs)
                         .toggleStyle(.switch)
@@ -2138,7 +2136,7 @@ public struct SettingsView: View {
     // 7. Appearance
     private var appearancePage: some View {
         VStack(spacing: 16) {
-            SettingsCard(title: "Theme & Palette", description: "Visual appearance of OpenWork", icon: "paintbrush.fill") {
+            SettingsCard(title: "Theme & Palette", description: "Visual appearance of SwiftOpenWork", icon: "paintbrush.fill") {
                 SettingsRow(title: "Theme Mode", subtitle: "Select window theme styling", icon: "circle.lefthalf.filled") {
                     Picker("", selection: $appState.settings.theme) {
                         ForEach(AppTheme.allCases) { th in
@@ -2159,6 +2157,23 @@ public struct SettingsView: View {
 
                 SettingsRow(title: "Editor Font Size (\(appState.settings.editorFontSize)pt)", subtitle: "Font scale for code and chat text", icon: "textformat.size") {
                     Stepper("", value: $appState.settings.editorFontSize, in: 10...22)
+                }
+
+                SettingsRow(title: "Inline AI Suggestions", subtitle: "Ghost text in the code editor when you pause typing. Tab accepts, Esc dismisses. The local model is used only when idle.", icon: "sparkles") {
+                    Toggle("", isOn: $appState.settings.inlineSuggestionsEnabled)
+                        .toggleStyle(.switch)
+                }
+
+                // Stored as settings.inlineSuggestionProviderId and settings.inlineSuggestionModelId.
+                SettingsRow(title: "Suggestion Model", subtitle: "Automatic uses your chat model only when it runs on this Mac. Code is sent to a cloud model only if you choose one here.", icon: "cpu") {
+                    Picker("", selection: SuggestionModelOption.binding(appState)) {
+                        Text("Automatic").tag(SuggestionModelOption.automatic)
+                        ForEach(SuggestionModelOption.options(from: appState.providers), id: \.self) { option in
+                            Text(option.label(in: appState.providers)).tag(option)
+                        }
+                    }
+                    .frame(width: 260)
+                    .disabled(!appState.settings.inlineSuggestionsEnabled)
                 }
 
                 SettingsRow(title: "Translucent Window Background", subtitle: "Show macOS vibrancy behind the sidebar and inspector", icon: "macwindow") {
@@ -2193,7 +2208,7 @@ public struct SettingsView: View {
                         } label: {
                             Image(systemName: "trash").foregroundColor(.red).font(.system(size: 11))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                     }
                     .padding(8)
                     .background(ThemeColors.border(for: appState.settings.theme).opacity(0.3))
@@ -2221,7 +2236,7 @@ public struct SettingsView: View {
     // 9. Updates
     private var updatesPage: some View {
         VStack(spacing: 16) {
-            SettingsCard(title: "Software Updates & Branding", description: "OpenWork-Swift standalone desktop client", icon: "arrow.triangle.2.circlepath") {
+            SettingsCard(title: "Software Updates & Branding", description: "SwiftOpenWork standalone desktop client", icon: "arrow.triangle.2.circlepath") {
                 HStack(spacing: 14) {
                     // Was a hardcoded absolute path into a volume on one developer's machine.
                     if let appIconImage = NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage {
@@ -2232,7 +2247,7 @@ public struct SettingsView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("OpenWork-Swift")
+                        Text("SwiftOpenWork")
                             .font(.system(size: 14, weight: .bold))
                             .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
                         // Was hardcoded "1.0.0" while the shipped release was 1.1.0.
@@ -2246,27 +2261,54 @@ public struct SettingsView: View {
 
                     Spacer()
 
-                    Button("Check for Updates") {
-                        // There is no update feed to check. Claiming "you are on the latest
-                        // version" was a fabricated success — it asserted a fact nothing verified.
-                        appState.showToast("Update checking is not implemented in this build.")
+                    Button(checkingForUpdates ? "Checking…" : "Check for Updates") {
+                        checkingForUpdates = true
+                        Task { @MainActor in
+                            updateOutcome = await UpdateChecker.check()
+                            checkingForUpdates = false
+                        }
                     }
-                    .disabled(true)
+                    .disabled(checkingForUpdates)
                 }
                 .padding(.vertical, 4)
 
+                if let updateOutcome {
+                    updateOutcomeRow(updateOutcome)
+                }
+
                 Divider()
 
-                // The switch beside a disabled button promised periodic checks against an
-                // update feed that does not exist, and toasted "Auto-check for updates enabled"
-                // to confirm it. Same fabrication as the "you are on the latest version" message
-                // the button above used to show, one row down.
-                SettingsRow(title: "Auto-Check Updates", subtitle: "Unavailable: this build has no update feed to check", icon: "bell") {
-                    Toggle("", isOn: .constant(false))
+                // Checks the GitHub releases feed at launch, at most once a day. It reports and
+                // links; it never downloads or installs anything.
+                SettingsRow(title: "Auto-Check Updates", subtitle: "Check GitHub releases at launch, at most once a day", icon: "bell") {
+                    Toggle("", isOn: $appState.settings.autoCheckForUpdates)
                         .toggleStyle(.switch)
-                        .disabled(true)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func updateOutcomeRow(_ outcome: UpdateChecker.Outcome) -> some View {
+        switch outcome {
+        case let .upToDate(current):
+            Label("Up to date — \(current) is the latest release.", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundColor(.green)
+        case let .available(current, latest, url):
+            HStack(spacing: 8) {
+                Label("\(latest) is available (you have \(current)).", systemImage: "arrow.down.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.accentColor)
+                Spacer()
+                Button("View Release") { NSWorkspace.shared.open(url) }
+            }
+        case let .failed(reason):
+            // Never "up to date": a check that could not be made has not verified anything.
+            Label("Could not check: \(reason)", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 11))
+                .foregroundColor(.orange)
+                .textSelection(.enabled)
         }
     }
 
@@ -2312,7 +2354,7 @@ public struct SettingsView: View {
                         .toggleStyle(.switch)
                 }
 
-                SettingsRow(title: "Verbose Logging", subtitle: "Log raw SSE chunks and tool payloads to the unified log (subsystem ai.openwork)", icon: "doc.plaintext") {
+                SettingsRow(title: "Verbose Logging", subtitle: "Log raw SSE chunks and tool payloads to the unified log (subsystem io.github.foscoe63.SwiftOpenWork)", icon: "doc.plaintext") {
                     Toggle("", isOn: $appState.settings.verboseLogging)
                         .toggleStyle(.switch)
                 }
@@ -2373,43 +2415,6 @@ public struct SettingsView: View {
         }
     }
 
-    // 12. Cloud Account
-    private var cloudAccountPage: some View {
-        VStack(spacing: 16) {
-            SettingsCard(title: "OpenWork Cloud Profile", description: "Manage remote sync account", icon: "person.crop.circle.fill") {
-                SettingsRow(title: "Email", subtitle: "Account identifier", icon: "envelope") {
-                    TextField("email@example.com", text: $appState.settings.cloudAccountEmail)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 200)
-                }
-
-                SettingsRow(title: "Organization", subtitle: "Team workspace group", icon: "building.2") {
-                    TextField("Personal", text: $appState.settings.cloudOrganizationName)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 200)
-                }
-
-                SettingsRow(title: "Cloud Sync", subtitle: "Synchronize sessions across devices", icon: "arrow.triangle.2.circlepath") {
-                    Toggle("", isOn: $appState.settings.cloudSyncEnabled)
-                        .toggleStyle(.switch)
-                }
-            }
-        }
-    }
-
-    // 13. Connect
-    private var connectPage: some View {
-        VStack(spacing: 16) {
-            SettingsCard(title: "Remote Workspaces & Pairing", description: "Pair this native client with remote headless servers", icon: "cable.connector") {
-                SettingsRow(title: "Control Plane Endpoint", subtitle: "URL to remote OpenWork gateway", icon: "network") {
-                    TextField("https://...", text: $appState.settings.cloudControlPlaneUrl)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 240)
-                }
-            }
-        }
-    }
-
     // 14. Skills & MCP
     private var skillsPage: some View {
         VStack(spacing: 20) {
@@ -2437,7 +2442,7 @@ public struct SettingsView: View {
                                     .foregroundColor(.secondary)
                                     .font(.system(size: 11))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.hitTestable)
                         }
                     }
                     .padding(6)
@@ -2603,7 +2608,7 @@ public struct SettingsView: View {
                                             .foregroundColor(.red.opacity(0.8))
                                             .font(.system(size: 11))
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.hitTestable)
                                 }
                             }
                             .padding(10)
@@ -2775,7 +2780,7 @@ public struct SettingsView: View {
                                             .foregroundColor(.red.opacity(0.8))
                                             .font(.system(size: 11))
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.hitTestable)
                                 }
                             }
                             .padding(10)
@@ -2831,7 +2836,7 @@ public struct SettingsView: View {
                         } label: {
                             Image(systemName: "trash").foregroundColor(.red).font(.system(size: 11))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                     }
                     .padding(8)
                     .background(ThemeColors.border(for: appState.settings.theme).opacity(0.3))
@@ -2879,7 +2884,7 @@ public struct SettingsView: View {
                 }
                 .foregroundColor(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hitTestable)
 
             if !expanded {
                 Text(advertised.prefix(8).joined(separator: ", ") + (advertised.count > 8 ? "…" : ""))
@@ -3032,8 +3037,6 @@ public struct SettingsView: View {
         case "updates": return "Updates & Diagnostics"
         case "recovery": return "Backup & Recovery"
         case "debug": return "Debug & Developer Logs"
-        case "cloud": return "Cloud Account"
-        case "connect": return "Connect & Remote Workspaces"
         case "skills": return "Skills & MCP"
         case "memory": return "Long-Term Memory"
         default: return "Settings"
@@ -3055,11 +3058,9 @@ public struct SettingsView: View {
         case "updates": return "Application version and release update checking"
         case "recovery": return "Export data archives or perform factory reset"
         case "debug": return "Internal state telemetry and live inspector logs"
-        case "cloud": return "OpenWork Cloud profile and remote synchronization"
-        case "connect": return "Pair with remote headless OpenWork servers"
         case "skills": return "Model Context Protocol tools and custom extensions"
         case "memory": return "Persistent knowledge stored across agent sessions"
-        default: return "Configure OpenWork-Swift preferences"
+        default: return "Configure SwiftOpenWork preferences"
         }
     }
 }
@@ -3096,7 +3097,7 @@ public struct EditWorkspaceModalView: View {
                         .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                         .font(.system(size: 16))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(18)
             .background(ThemeColors.sidebarBg(for: appState.settings.theme))

@@ -36,9 +36,9 @@ public enum LaunchAtLogin {
     /// A description of the real state, for the UI to show instead of assuming the toggle won.
     public static func statusDescription() -> String {
         switch SMAppService.mainApp.status {
-        case .enabled: return "OpenWork will open when you log in."
+        case .enabled: return "SwiftOpenWork will open when you log in."
         case .requiresApproval: return "Waiting for approval in System Settings › General › Login Items."
-        case .notRegistered: return "OpenWork will not open at login."
+        case .notRegistered: return "SwiftOpenWork will not open at login."
         case .notFound: return "macOS could not find this app's login item. Unavailable for unsigned or relocated builds."
         @unknown default: return "Login item state unknown."
         }

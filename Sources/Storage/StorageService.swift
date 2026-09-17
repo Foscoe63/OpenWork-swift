@@ -9,12 +9,41 @@ public final class StorageService: @unchecked Sendable {
     private let lock = NSLock()
 
     public var baseDirectory: URL {
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let openworkDir = appSupport.appendingPathComponent("OpenWorkSwift", isDirectory: true)
-        if !fileManager.fileExists(atPath: openworkDir.path) {
-            try? fileManager.createDirectory(at: openworkDir, withIntermediateDirectories: true)
+        let directory = Self.resolveBaseDirectory(
+            environment: ProcessInfo.processInfo.environment,
+            isTestProcess: AutomationScheduler.isHostedByTests,
+            applicationSupport: fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!,
+            temporaryDirectory: fileManager.temporaryDirectory,
+            processIdentifier: ProcessInfo.processInfo.processIdentifier
+        )
+        if !fileManager.fileExists(atPath: directory.path) {
+            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
-        return openworkDir
+        return directory
+    }
+
+    /// Where settings, sessions, agents and automations live for this process. Pure, for tests.
+    ///
+    /// A test process gets a folder of its own. The unit tests are hosted by the app, so without
+    /// this every `swift test` and `xcodebuild test` read and rewrote the real `settings.json` and
+    /// `mcp_servers.json` — restoring them afterwards when every test was careful, and not when
+    /// one was not. `SWIFTOPENWORK_DATA_DIRECTORY` overrides both, for a deliberate run against
+    /// real data or a smoke test against a prepared folder.
+    static func resolveBaseDirectory(
+        environment: [String: String],
+        isTestProcess: Bool,
+        applicationSupport: URL,
+        temporaryDirectory: URL,
+        processIdentifier: Int32
+    ) -> URL {
+        if let override = environment["SWIFTOPENWORK_DATA_DIRECTORY"]?.trimmingCharacters(in: .whitespaces),
+           !override.isEmpty {
+            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        if isTestProcess {
+            return temporaryDirectory.appendingPathComponent("SwiftOpenWork-tests-\(processIdentifier)", isDirectory: true)
+        }
+        return applicationSupport.appendingPathComponent(AppIdentity.applicationSupportFolderName, isDirectory: true)
     }
 
     private init() {
@@ -64,7 +93,7 @@ public final class StorageService: @unchecked Sendable {
     }
 
     public func exportBackup() -> URL? {
-        let tempDir = fileManager.temporaryDirectory.appendingPathComponent("OpenWorkBackup-\(UUID().uuidString)", isDirectory: true)
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent("SwiftOpenWorkBackup-\(UUID().uuidString)", isDirectory: true)
         try? fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
         
         let files = (try? fileManager.contentsOfDirectory(at: baseDirectory, includingPropertiesForKeys: nil)) ?? []

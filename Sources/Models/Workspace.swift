@@ -108,7 +108,7 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
         name: "Main Workspace",
         icon: "briefcase.fill",
         color: "#6366F1",
-        folderPath: (FileManager.default.homeDirectoryForCurrentUser.path as NSString).appendingPathComponent("Documents/OpenWork/Workspaces/Main"),
+        folderPath: (FileManager.default.homeDirectoryForCurrentUser.path as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath + "/Main"),
         category: .general,
         assignedAgentId: "lead-assistant",
         isPipelineStagingEnabled: true,

@@ -31,13 +31,25 @@ public struct SubAgentTreeVisualizer: View {
                 // Sub-Agent Branch Nodes
                 if appState.activeSubAgentTasks.isEmpty && appState.currentAgent.subAgentIds.isEmpty {
                     VStack(spacing: 8) {
-                        Image(systemName: "person.crop.circle.badge.plus")
+                        Image(systemName: "person.fill")
                             .font(.system(size: 24))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.5))
-                        Text("No active sub-agents spawned yet.")
+                        Text("Single-agent mode")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                        Text("Sub-agents appear here when the lead delegates. Most vibe sessions only need one agent — open Tools for the live tool list.")
                             .font(.system(size: 11))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                        Button("Open Tools tab") {
+                            appState.inspectorTab = .tools
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
                 } else {

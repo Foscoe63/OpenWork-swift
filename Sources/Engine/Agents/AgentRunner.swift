@@ -9,12 +9,26 @@ public final class AgentStreamAccumulator {
     private let startTime: CFAbsoluteTime
     private let onUpdate: (ChatMessage) -> Void
     private let isLoopBreakerEnabled: Bool
+    /// Where the current ReAct iteration's output starts. The loop check looks only past these.
+    private var textIterationStart = 0
+    private var reasoningIterationStart = 0
 
     public init(initialMessage: ChatMessage, onUpdate: @escaping (ChatMessage) -> Void) {
         self.message = initialMessage
         self.startTime = CFAbsoluteTimeGetCurrent()
         self.onUpdate = onUpdate
         self.isLoopBreakerEnabled = PersistenceManager.shared.loadSettings().autoLoopBreakerEnabled
+    }
+
+    /// Mark the start of a new model call within the turn.
+    ///
+    /// The turn's reasoning accumulates across every call, and each call naturally re-states its
+    /// plan: "Let me start by getting today's date and exploring…" at step one and again at step
+    /// two. Checking the whole accumulation read that as a loop and stopped a scheduled run after
+    /// its first tool call. A loop is repetition within one generation.
+    public func beginIteration() {
+        textIterationStart = fullText.count
+        reasoningIterationStart = fullReasoning.count
     }
 
     public func applyChunk(_ chunk: LLMStreamChunk) {
@@ -35,7 +49,7 @@ public final class AgentStreamAccumulator {
             // reasoning over 192 seconds with nothing on screen, and had to be stopped by hand.
             // This is precisely the case the breaker was built for: reasoning models spiral
             // where the visible text never grows.
-            if self.isLoopBreakerEnabled && checkRepetitionLoop(in: fullReasoning) {
+            if self.isLoopBreakerEnabled && checkRepetitionLoop(in: String(fullReasoning.dropFirst(reasoningIterationStart))) {
                 isLoopDetected = true
                 message.isStreaming = false
                 onUpdate(message)
@@ -47,7 +61,7 @@ public final class AgentStreamAccumulator {
             publishVisibleContent()
 
             // Repetition / degenerative loop check on incoming stream (respects user settings)
-            if self.isLoopBreakerEnabled && checkRepetitionLoop(in: fullText) {
+            if self.isLoopBreakerEnabled && checkRepetitionLoop(in: String(fullText.dropFirst(textIterationStart))) {
                 isLoopDetected = true
                 message.isStreaming = false
                 onUpdate(message)
@@ -59,6 +73,9 @@ public final class AgentStreamAccumulator {
         }
         if let compTok = chunk.completionTokens {
             message.completionTokens = compTok
+        }
+        if let speed = chunk.generationTokensPerSecond {
+            message.generationTokensPerSecond = speed
         }
         if chunk.isFinished {
             message.isStreaming = false
@@ -108,8 +125,13 @@ public final class AgentStreamAccumulator {
         }
 
         // 3. Fuzzy / Semantic repetition check on recent lines
+        //
+        // One similar pair is ordinary writing — two bullets that start the same way, a heading and
+        // its restatement. A loop keeps going, so it takes two similar pairs in a row: three
+        // near-identical lines.
         if rawLines.count >= 3 {
             let recentLines = Array(rawLines.suffix(5))
+            var similarRun = 0
             for i in 0..<(recentLines.count - 1) {
                 let lineA = recentLines[i]
                 let lineB = recentLines[i + 1]
@@ -118,33 +140,38 @@ public final class AgentStreamAccumulator {
                 let wordsA = Set(lineA.lowercased().split(separator: " ").map { String($0) })
                 let wordsB = Set(lineB.lowercased().split(separator: " ").map { String($0) })
                 
-                guard wordsA.count >= 6 && wordsB.count >= 6 else { continue }
+                guard wordsA.count >= 6 && wordsB.count >= 6 else { similarRun = 0; continue }
                 let commonWords = wordsA.intersection(wordsB)
                 let unionWords = wordsA.union(wordsB)
                 let similarity = Double(commonWords.count) / Double(unionWords.count)
-                
-                // If two consecutive generated lines share >85% of words, it's an autoregressive loop
-                if similarity >= 0.85 {
-                    return true
-                }
-                
+
                 // Common prefix check (e.g. "Now I have today's date...")
                 let prefixLen = zip(lineA.lowercased(), lineB.lowercased()).prefix(while: { $0 == $1 }).count
-                if prefixLen >= 45 && prefixLen >= min(lineA.count, lineB.count) * 3 / 4 {
-                    return true
+                let samePrefix = prefixLen >= 45 && prefixLen >= min(lineA.count, lineB.count) * 3 / 4
+
+                if similarity >= 0.85 || samePrefix {
+                    similarRun += 1
+                    if similarRun >= 2 { return true }
+                } else {
+                    similarRun = 0
                 }
             }
         }
 
-        // 4. Repeated N-gram phrases in trailing window (checks if identical 5-word sequence appears 3+ times in the tail)
+        // 4. Repeated N-gram phrases in trailing window: an identical 8-word sequence 3+ times.
+        //
+        // This was 5 words, which natural text meets constantly: "by getting today's date and"
+        // three times in a plan, "describes a distinct configuration value" down a list of
+        // settings. Eight identical words, three times, in a thousand characters is a loop.
         let words = text.suffix(1000).lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
-        
+
+        let gramLength = 8
         if words.count >= 20 {
             var ngrams: [String: Int] = [:]
-            for i in 0..<(words.count - 4) {
-                let gram = "\(words[i]) \(words[i+1]) \(words[i+2]) \(words[i+3]) \(words[i+4])"
+            for i in 0..<(words.count - gramLength + 1) {
+                let gram = words[i..<(i + gramLength)].joined(separator: " ")
                 let currentCount = (ngrams[gram] ?? 0) + 1
                 ngrams[gram] = currentCount
                 if currentCount >= 3 {
@@ -166,6 +193,16 @@ public final class AgentStreamAccumulator {
             message.toolCalls[idx] = toolCall
         } else {
             message.toolCalls.append(toolCall)
+        }
+        onUpdate(message)
+    }
+
+    /// Show a delegated task on this message, or update it in place.
+    public func upsertSubAgentTask(_ task: SubAgentTask) {
+        if let idx = message.subAgentTasks.firstIndex(where: { $0.id == task.id }) {
+            message.subAgentTasks[idx] = task
+        } else {
+            message.subAgentTasks.append(task)
         }
         onUpdate(message)
     }
@@ -703,13 +740,14 @@ public final class AgentRunner {
         onMessageUpdated: @escaping (ChatMessage) -> Void,
         onSubAgentTaskCreated: @escaping (SubAgentTask) -> Void,
         onSubAgentTaskUpdated: @escaping (SubAgentTask) -> Void,
-        onInterAgentMessage: @escaping (AgentMessage) -> Void
+        onInterAgentMessage: @escaping (AgentMessage) -> Void,
+        onSessionTodosUpdated: (([SessionTodoItem]) -> Void)? = nil
     ) async {
         // The chat composer's "Reasoning" pill overrides the agent's own configured effort for
         // this turn when set; nil (no override) preserves the agent's own setting.
         let effectiveReasoningEffort = reasoningOverride ?? agent.reasoningEffort
         let assistantMsgId = UUID().uuidString
-        var assistantMsg = ChatMessage(
+        let assistantMsg = ChatMessage(
             id: assistantMsgId,
             sessionId: session.id,
             role: .assistant,
@@ -727,164 +765,17 @@ public final class AgentRunner {
         onMessageUpdated(assistantMsg)
 
         let lastPrompt = session.messages.last(where: { $0.role == .user })?.content ?? ""
-        // Two settings that existed but were never read. `allowSubAgentCreation` is the global
-        // off switch — an agent configured to spawn must still be refused when the user has turned
-        // spawning off — and `maxGlobalSubAgentDepth` caps how deep it can go. A switch that does
-        // nothing is worse than no switch, and these two are the ones that gate autonomy.
-        let subAgentSettings = PersistenceManager.shared.loadSettings()
-        let subAgentDepthBudget = max(0, subAgentSettings.maxGlobalSubAgentDepth)
-        let isComplexGoal = AgentRunner.subAgentSpawningAllowed(agent: agent, settings: subAgentSettings)
-            && (
-            lastPrompt.lowercased().contains("build") ||
-            lastPrompt.lowercased().contains("create") ||
-            lastPrompt.lowercased().contains("project") ||
-            lastPrompt.lowercased().contains("research") ||
-            lastPrompt.lowercased().contains("analyze") ||
-            lastPrompt.lowercased().contains("agent") ||
-            lastPrompt.lowercased().contains("team") ||
-            lastPrompt.lowercased().contains("subagent") ||
-            lastPrompt.lowercased().contains("refactor")
-        )
 
-        // What the sub-agents found, for the parent model to actually read. Their reports used
-        // to reach the Sub-Agent Tree and the Agent Messages log and stop there — the parent LLM
-        // was never told, so it answered as though nothing had been delegated. Work was done,
-        // displayed, and then ignored by the only participant who could act on it.
-        var subAgentBriefing: [String] = []
-
-        // 1. Spawning Multi-Agent Decomposition with real isolated LLM evaluation
-        if isComplexGoal && !agent.subAgentIds.isEmpty {
-            let planMsg = AgentMessage(
-                fromAgentId: agent.id,
-                fromAgentName: agent.name,
-                toAgentId: "broadcast",
-                toAgentName: "All Sub-Agents",
-                messageType: .broadcast,
-                content: "Initializing collaborative task decomposition for: \"\(lastPrompt)\""
-            )
-            AgentCommunicationHub.shared.postMessage(planMsg)
-            onInterAgentMessage(planMsg)
-
-            // Sub-agents run concurrently.
-            //
-            // They used to run in a `for` loop, each awaiting a full completion before the next
-            // began, so two advisory calls cost the sum of their latencies for no reason: they
-            // do not share state, they take no tools (`tools: []`), and they never touch the
-            // filesystem, so nothing about them is ordered. This class is `@MainActor`, so the
-            // streams fan out and every mutation of `assistantMsg` is applied back here in
-            // order — concurrency in the waiting, not in the bookkeeping.
-            let delegated: [(agent: Agent, task: SubAgentTask)] = agent.subAgentIds
-                .prefix(2)
-                .compactMap { subId in
-                    guard let subAgent = allAgents.first(where: { $0.id == subId }) else { return nil }
-                    let subTask = SubAgentTask(
-                        parentAgentId: agent.id,
-                        parentAgentName: agent.name,
-                        subAgentId: subAgent.id,
-                        subAgentName: subAgent.name,
-                        subAgentAvatar: subAgent.avatar,
-                        taskTitle: "\(subAgent.role): Analyze and plan for user request",
-                        taskDescription: "Executing autonomous evaluation scoped to \(subAgent.role)",
-                        status: .planning,
-                        progress: 0.1,
-                        // Depth 1 is this level; the budget is what stops it recursing further.
-                        depth: min(1, subAgentDepthBudget)
-                    )
-                    return (subAgent, subTask)
-                }
-
-            for var entry in delegated {
-                assistantMsg.subAgentTasks.append(entry.task)
-                onSubAgentTaskCreated(entry.task)
-                let delegationMsg = AgentMessage(
-                    fromAgentId: agent.id,
-                    fromAgentName: agent.name,
-                    toAgentId: entry.agent.id,
-                    toAgentName: entry.agent.name,
-                    messageType: .taskDelegation,
-                    content: "Sub-task delegated: \(entry.task.taskTitle)"
-                )
-                AgentCommunicationHub.shared.postMessage(delegationMsg)
-                onInterAgentMessage(delegationMsg)
-
-                entry.task.status = .running
-                entry.task.progress = 0.5
-                if let idx = assistantMsg.subAgentTasks.firstIndex(where: { $0.id == entry.task.id }) {
-                    assistantMsg.subAgentTasks[idx] = entry.task
-                }
-                onSubAgentTaskUpdated(entry.task)
-            }
-            onMessageUpdated(assistantMsg)
-
-            // Real sub-agents, concurrently.
-            //
-            // These used to be one `ProviderRouter.stream` each with `tools: []` and a 512-token
-            // ceiling: a paragraph of advice pasted back under a progress bar. They now run a
-            // full tool loop in an isolated worktree through `SubAgentExecutor`, which is why
-            // the budgets below are small — unattended work needs a hard stop, not a large one.
-            let replies: [(taskId: String, outcome: SubAgentExecutor.Outcome)] = await withTaskGroup(
-                of: (String, SubAgentExecutor.Outcome).self
-            ) { group in
-                for entry in delegated {
-                    let subAgent = entry.agent
-                    let taskId = entry.task.id
-                    let title = entry.task.taskTitle
-                    group.addTask { @MainActor in
-                        let outcome = await SubAgentExecutor.run(
-                            subAgent: subAgent,
-                            parentAgent: agent,
-                            objective: title,
-                            context: lastPrompt,
-                            workspace: workspace,
-                            provider: provider,
-                            model: model,
-                            depth: 1,
-                            maxIterations: 6,
-                            deadlineSeconds: 240
-                        )
-                        return (taskId, outcome)
-                    }
-                }
-                var collected: [(String, SubAgentExecutor.Outcome)] = []
-                for await result in group { collected.append(result) }
-                return collected
-            }
-
-            // Apply in the order the sub-agents were delegated, not the order they happened to
-            // finish, so the transcript does not reshuffle itself run to run.
-            for entry in delegated {
-                guard let reply = replies.first(where: { $0.taskId == entry.task.id }) else { continue }
-                let outcome = reply.outcome
-                var subTask = entry.task
-                subTask.status = outcome.succeeded ? .completed : .failed
-                subTask.progress = 1.0
-                subTask.resultSummary = outcome.report
-                subTask.errorMessage = outcome.succeeded ? nil : outcome.stoppedBecause
-                subTask.completedAt = Date()
-                subTask.tokensUsed = max(180, outcome.report.count / 4)
-                subTask.durationMs = outcome.durationMs
-
-                let replyMsg = AgentMessage(
-                    fromAgentId: entry.agent.id,
-                    fromAgentName: entry.agent.name,
-                    toAgentId: agent.id,
-                    toAgentName: agent.name,
-                    messageType: .taskResponse,
-                    content: subTask.resultSummary
-                )
-                AgentCommunicationHub.shared.postMessage(replyMsg)
-                subAgentBriefing.append("""
-                ### \(entry.agent.name) (\(entry.agent.role))
-                \(outcome.report)
-                """)
-                if let idx = assistantMsg.subAgentTasks.firstIndex(where: { $0.id == subTask.id }) {
-                    assistantMsg.subAgentTasks[idx] = subTask
-                }
-                onMessageUpdated(assistantMsg)
-                onSubAgentTaskUpdated(subTask)
-                onInterAgentMessage(replyMsg)
-            }
-        }
+        // Delegation is the model's decision, made with `agent_spawn`.
+        //
+        // This used to be decided by keywords: any prompt containing "build", "create", "project",
+        // "research", "analyze", "agent", "team", "subagent" or "refactor" sent the *whole prompt*
+        // to the first two team members at once, before the lead did anything, each with a
+        // six-step budget. "Create a note" was enough. On a single local model that meant
+        // re-reading the prompt for every agent switch and two budget-starved copies of the same
+        // job — a scheduled brief took over ten minutes and its research sub-agent ran out of
+        // steps every time. The lead is now told who its team is and delegates a specific
+        // sub-task when one is worth handing off; see `teamPromptSection`.
 
         // 2. Stream Response & Execute Autonomous Multi-Turn ReAct Loop (Up to configurable iterations)
         let accumulator = AgentStreamAccumulator(
@@ -993,6 +884,18 @@ public final class AgentRunner {
             availableTools = Self.filterToolsForPlanMode(availableTools)
         }
 
+        // Offer the agent tools only to an agent allowed to use them, so the model is not handed
+        // a tool whose every call is refused.
+        let canDelegate = AgentRunner.subAgentSpawningAllowed(agent: agent, settings: loadedSettings)
+            && AgentRunContext.depthLimit(for: agent, settings: loadedSettings) >= 1
+        availableTools.removeAll { tool in
+            (tool.name == "agent_spawn" && !canDelegate)
+                || (tool.name == "agent_message" && !agent.canCommunicateWithOthers)
+        }
+        let teamSection = (inventoryPrompt || !canDelegate)
+            ? ""
+            : Self.teamPromptSection(agent: agent, allAgents: allAgents, provider: provider)
+
         // Undo is scoped to one turn, so the window opens here rather than at session start.
         await FileCheckpointStore.shared.beginTurn(label: session.id)
 
@@ -1025,24 +928,6 @@ public final class AgentRunner {
         var iteration = 0
         var workingMessages = session.messages
 
-        // Hand the sub-agents' work to the parent before it starts answering.
-        if !subAgentBriefing.isEmpty {
-            workingMessages.append(ChatMessage(
-                sessionId: session.id,
-                role: .user,
-                content: """
-                Your sub-agents have finished. They ran with real tools in isolated git \
-                worktrees, so any files they changed are on their own branches and not in the \
-                user's checkout.
-
-                \(subAgentBriefing.joined(separator: "\n\n"))
-
-                Use this. Do not repeat work they already did, and do not claim anything they \
-                refused or failed to finish was completed. If their changes need to reach the \
-                user's checkout, say which branch to merge.
-                """
-            ))
-        }
         var turnPromptTokens = 0
         var turnCompletionTokens = 0
         var identicalToolCounts: [String: Int] = [:]
@@ -1081,20 +966,26 @@ public final class AgentRunner {
 
             You are an advanced, fully autonomous coding, systems, and research agent.
             Built-in tools (prefer native function/tool calling):
-            file_read (supports offset/limit), file_write, edit_file, file_list, grep, glob,
+            file_read (supports offset/limit), file_write, edit_file, multi_edit, file_list, grep, glob,
+            find_symbol, rename_symbol, build_project, run_tests,
             git_status, git_diff, git_log, changed_files, revert_changes,
             file_copy, file_move, file_delete,
             terminal_command/run_command, fetch_url, web_search, ask_user, exit_plan_mode,
             todo_write, calculator, get_current_date, document_extract,
+            preview_start, preview_check, preview_logs, preview_stop,
             gmail_list, gmail_search, google_calendar_list, google_calendar_upcoming.
             \(mcpPromptSummary)
             \(skillsSection)
+            \(teamSection)
 
             CRITICAL:
             0. When you change code: locate it with grep/glob rather than guessing, then verify with
                build_project (and run_tests when behaviour changed) before saying it is done. A
                compiler error is yours to fix, not to report. If an edit goes wrong, revert_changes
                undoes everything this turn touched.
+               For a web UI, compiling is not seeing: start it once with preview_start, then run
+               preview_check after each change and fix what its console errors and screenshot show.
+               Never start a dev server with terminal_command — it is killed after two minutes.
             1. Do not narrate ("I will check…" / "Let me…"). Call the tool immediately, then answer.
             2. Prefer native tool calls. Markdown fallback only if needed:
             ```tool_call
@@ -1151,6 +1042,7 @@ public final class AgentRunner {
             // `Task { @MainActor in nativeEmittedToolCalls.append }` raced so tool calls were
             // often lost — the model looked "stuck" narrating without ever executing.
             let toolCallCollector = AgentToolCallCollector()
+            accumulator.beginIteration()
             let textBridge = AgentStreamTextBridge()
             let turnTextBefore = accumulator.fullText
             let stopper = AgentStreamStopper()
@@ -1505,16 +1397,56 @@ public final class AgentRunner {
                         """
                         accumulator.appendNotice("Blocked a repeated failing call to \(toolName).")
                     } else {
-                        let result = await ToolExecutionEngine.shared.execute(
-                            toolName: toolName,
-                            argumentsJson: argsJson,
-                            workspace: workspace,
-                            currentAgent: agent
-                        )
+                        let runFrame = AgentRunContext.Frame(provider: provider, model: model, depth: 0)
+                        let result = await AgentRunContext.$current.withValue(runFrame) {
+                            await ToolExecutionEngine.shared.execute(
+                                toolName: toolName,
+                                argumentsJson: argsJson,
+                                workspace: workspace,
+                                currentAgent: agent,
+                                callId: callInfo.id
+                            )
+                        }
                         resultSuccess = result.success
                         resultOutput = Self.describeToolResult(result)
                         resultError = result.error
                         producedImages = result.producedImages
+                        callInfo.fileDiff = result.fileDiff
+                        callInfo.fileDiffs = result.fileDiffs
+
+                        // `agent_message` builds an `AgentMessage` and hands it back here.
+                        // `ToolExecutionResult.createdAgentMessage` had no reader, so every message
+                        // the agent sent with that tool was reported as sent and shown nowhere.
+                        if let sent = result.createdAgentMessage {
+                            onInterAgentMessage(sent)
+                        }
+                        // Same class of bug, one field over: `agent_spawn` returned the task it ran
+                        // and nothing read it, so a real delegation never reached the Sub-Agent
+                        // Tree, the message's task cards or the Agent Messages log.
+                        if let task = result.createdSubAgentTask {
+                            accumulator.upsertSubAgentTask(task)
+                            onSubAgentTaskCreated(task)
+                            onSubAgentTaskUpdated(task)
+                            onInterAgentMessage(AgentMessage(
+                                fromAgentId: task.parentAgentId,
+                                fromAgentName: task.parentAgentName,
+                                toAgentId: task.subAgentId,
+                                toAgentName: task.subAgentName,
+                                messageType: .taskDelegation,
+                                content: task.taskTitle
+                            ))
+                            onInterAgentMessage(AgentMessage(
+                                fromAgentId: task.subAgentId,
+                                fromAgentName: task.subAgentName,
+                                toAgentId: task.parentAgentId,
+                                toAgentName: task.parentAgentName,
+                                messageType: .taskResponse,
+                                content: task.resultSummary
+                            ))
+                        }
+                        if let todos = result.sessionTodos {
+                            onSessionTodosUpdated?(todos)
+                        }
 
                         // Dispatcher servers reject `"arguments":"{}"` (a string). Retry once with
                         // a real map — but only when the nested target is readable. Substituting a
@@ -1529,16 +1461,21 @@ public final class AgentRunner {
                             callInfo.argumentsJson = repaired
                             accumulator.updateToolCall(callInfo)
                             accumulator.appendNotice("Retrying `\(nested)` with object `arguments`…")
-                            let retry = await ToolExecutionEngine.shared.execute(
-                                toolName: toolName,
-                                argumentsJson: repaired,
-                                workspace: workspace,
-                                currentAgent: agent
-                            )
+                            let retry = await AgentRunContext.$current.withValue(runFrame) {
+                                await ToolExecutionEngine.shared.execute(
+                                    toolName: toolName,
+                                    argumentsJson: repaired,
+                                    workspace: workspace,
+                                    currentAgent: agent,
+                                    callId: callInfo.id
+                                )
+                            }
                             resultSuccess = retry.success
                             resultOutput = Self.describeToolResult(retry)
                             resultError = retry.error
                             producedImages = retry.producedImages
+                            callInfo.fileDiff = retry.fileDiff
+                            callInfo.fileDiffs = retry.fileDiffs
                         }
                     }
                 }
@@ -1737,6 +1674,44 @@ public final class AgentRunner {
     /// Both settings gate it and both were previously unread: the global switch must beat a
     /// per-agent "yes" (that is what a global off switch is for), and a zero or negative depth
     /// budget must not read as unlimited.
+    /// Who the agent can delegate to, and when it should.
+    ///
+    /// Without this the model had `agent_spawn` in its tool list and no idea which agents existed,
+    /// so it could only guess ids. "Auto-Delegate Complex Tasks" — a toggle nothing read — now
+    /// decides whether the agent is encouraged to hand off separable work or only does so when
+    /// asked.
+    nonisolated static func teamPromptSection(agent: Agent, allAgents: [Agent], provider: ModelProvider) -> String {
+        let team = agent.subAgentIds.compactMap { id in allAgents.first { $0.id == id } }
+        let members = team.isEmpty
+            ? allAgents.filter { $0.id != agent.id }
+            : team
+        guard !members.isEmpty else { return "" }
+        let lines = members.map { member -> String in
+            let about = member.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "- `\(member.id)` — \(member.name), \(member.role)\(about.isEmpty ? "" : ": \(about)")"
+        }
+        let when = agent.autoDelegate
+            ? """
+            Delegate with `agent_spawn` when a sub-task is self-contained and suits a specialist — \
+            an independent module to implement, a separate research question, a review of finished \
+            work. Give it a precise `task_title` and everything it needs in `task_description`; it \
+            cannot ask you questions. Do simple, short or tightly sequential steps yourself.
+            """
+            : "Only delegate with `agent_spawn` when the user asks for another agent to do something."
+        let localCost = provider.type == .local
+            ? " This session runs on a local model, so sub-agents run one at a time and each costs a full prompt re-read: delegate sparingly."
+            : ""
+        return """
+
+        ### Your team
+        \(lines.joined(separator: "\n"))
+        \(when)
+        A sub-agent runs unattended with its own tools, in an isolated git worktree when the workspace \
+        is a repository, and its report comes back as the tool result. Changes it makes stay on its \
+        branch until merged; say so rather than claiming they are in the user's checkout.\(localCost)
+        """
+    }
+
     static func subAgentSpawningAllowed(agent: Agent, settings: AppSettings) -> Bool {
         agent.canSpawnSubAgents
             && settings.allowSubAgentCreation
@@ -1761,8 +1736,11 @@ public final class AgentRunner {
             "file_delete", "delete_file", "rm",
             "file_move", "move_file", "mv",
             "file_copy", "copy_file", "cp",
-            "edit_file", "file_edit", "multi_edit", "edit_file_multi",
-            "terminal_command", "run_command"
+            "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol",
+            "terminal_command", "run_command",
+            // Plan mode promises no side effects. These all had requiresApproval set and were
+            // still offered here, where nothing read the flag.
+            "preview_start", "run_app", "launch_app", "git_commit", "worktree_create", "worktree_remove"
         ]
         var filtered = tools.filter { tool in
             if tool.name == "exit_plan_mode" || tool.name == "ask_user" { return true }
@@ -1816,7 +1794,7 @@ public final class AgentRunner {
         case "ask_user":
             return nil
         case "file_write", "write_file", "create_file", "save_file",
-             "edit_file", "file_edit", "multi_edit", "edit_file_multi",
+             "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol",
              "file_move", "move_file", "mv",
              "file_copy", "copy_file", "cp":
             return "This modifies files on disk."
@@ -1825,6 +1803,16 @@ public final class AgentRunner {
         case "revert_changes":
             // Undo is itself destructive: it discards everything the turn produced.
             return "This discards every file change made during this turn."
+        case "preview_start":
+            return PreviewTools.approvalReason(argumentsJson: argumentsJson)
+        case "run_app", "launch_app":
+            // `requiresApproval` was set on these in the catalog and read by nothing, so they ran
+            // without asking. Launching an arbitrary binary is exactly what should ask.
+            return "Launches an app or executable on your Mac."
+        case "git_commit":
+            return "Commits changes in an agent worktree."
+        case "worktree_remove":
+            return "Removes an agent worktree and its branch."
         case "terminal_command", "run_command":
             if settings.terminalSafetyLevel == .alwaysAsk {
                 return "Runs a shell command on your Mac (Terminal Safety Level: Always Ask Confirmation)."

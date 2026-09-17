@@ -119,7 +119,7 @@ public struct ProvidersView: View {
                         )
                         .foregroundColor(isSelected ? .white : ThemeColors.textSecondary(for: appState.settings.theme))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                 }
             }
             .padding(3)
@@ -224,7 +224,7 @@ public struct ProvidersView: View {
                     .foregroundColor(.white)
                     .cornerRadius(6)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
 
             Divider()
@@ -496,7 +496,7 @@ public struct ProvidersView: View {
                     Image(systemName: "slider.horizontal.3")
                         .font(.system(size: 12))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
                 .help("Edit Provider Settings")
 
                 if appState.providers.count > 1 {
@@ -507,7 +507,7 @@ public struct ProvidersView: View {
                             .font(.system(size: 12))
                             .foregroundColor(.red.opacity(0.8))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .help("Delete Provider")
                 }
             }
@@ -584,7 +584,7 @@ public struct ProviderEditModalView: View {
                     .font(.system(size: 15, weight: .bold))
                 Spacer()
                 Button("Cancel", action: onCancel)
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
             }
             .padding(16)
             .background(ThemeColors.sidebarBg(for: appState.settings.theme))
@@ -698,7 +698,7 @@ public struct ProviderEditModalView: View {
                                         .font(.system(size: 11))
                                         .foregroundColor(.red.opacity(0.8))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.hitTestable)
                             }
                             .padding(8)
                             .background(ThemeColors.cardBg(for: appState.settings.theme))

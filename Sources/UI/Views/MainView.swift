@@ -107,6 +107,14 @@ public struct MainView: View {
             }
         }
         .background(WindowFramePersistenceInstaller())
+        .onChange(of: appState.inspectorWidthRequest) { _, requested in
+            guard let requested else { return }
+            appState.inspectorWidthRequest = nil
+            let clamped = min(max(requested, WindowLayoutStore.minInspectorWidth), WindowLayoutStore.maxInspectorWidth)
+            guard Double(inspectorWidth) < clamped else { return }
+            inspectorWidth = CGFloat(clamped)
+            WindowLayoutStore.inspectorWidth = clamped
+        }
         .onAppear {
             sidebarWidth = CGFloat(WindowLayoutStore.sidebarWidth)
             inspectorWidth = CGFloat(WindowLayoutStore.inspectorWidth)

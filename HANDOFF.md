@@ -1,16 +1,20 @@
 # Handoff
 
-Written 2026-09-14, extended 2026-09-15. Everything below is verified against the code and
+Written 2026-09-14, extended through 2026-09-17. Everything below is verified against the code and
 against this machine, not remembered.
 
 ## Where things stand
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| OpenWork-Swift | yes, `main` (`72b7f01`) | 437 |
+| SwiftOpenWork | `main` (`83a7cf2`) + uncommitted fourth to seventh passes | 741 |
 | GrizzyBot | yes, `03eb11e` | 538 |
 
-OpenWork went from 13 tests to 437 over this work. Released as 1.1.0.
+SwiftOpenWork went from 13 tests to 741 over this work. Released as 1.1.0, under its old name, OpenWork.
+
+> **The app was renamed SwiftOpenWork on 2026-09-16** (bundle ID `io.github.foscoe63.SwiftOpenWork`,
+> was `ai.openwork.OpenWorkSwift`). Sections written before that say "OpenWork" and use the old
+> paths; they are left as written. See *Renamed to SwiftOpenWork* below.
 
 ---
 
@@ -54,7 +58,7 @@ rename if anyone touches this again.
 this handoff recorded twice without solving: *"settings.json had reverted to an Ollama default at
 some point and was set back"*. Nothing reverted. `SandboxContainmentTests` saved a fresh
 `AppSettings.default` through the real `PersistenceManager.shared` — the running app's own
-`~/Library/Application Support/OpenWorkSwift/settings.json` — and its `defer` "restored" another
+`~/Library/Application Support/SwiftOpenWork/settings.json` — and its `defer` "restored" another
 fresh default. **Every full test run reset the real settings to stock.** It now captures and
 restores what was actually there, and `SettingsAreNotClobberedByTestsTests` plants a sentinel to
 prove the suite leaves the file intact.
@@ -135,7 +139,7 @@ a clean tree, now triggers compaction as well as token pressure. `isMilestone` r
 have succeeded *and* the output to corroborate it, because a build can exit zero and still print
 errors.
 
-**Shortcuts and Siri.** `AskOpenWorkIntent` and `RunAutomationIntent` run the same `AgentRunner`.
+**Shortcuts and Siri.** `AskSwiftOpenWorkIntent` (then `AskOpenWorkIntent`) and `RunAutomationIntent` run the same `AgentRunner`.
 The design question they turn on is settled: an unattended run refuses approvals instead of
 awaiting them, records what it refused, and reports it. `requestApproval` returns an outcome rather
 than a Bool so "the user said no" and "nobody was asked" cannot be conflated.
@@ -249,7 +253,7 @@ no existing file would ever migrate.
   inside a not-downloaded error message, which was on the "worth building next" list.
 - **`verboseLogging`** had nothing to turn on: there was no verbose logging anywhere. `AppLog`
   now exists, gated on the setting, logging raw SSE payloads and tool call/result payloads to the
-  unified log (`log stream --predicate 'subsystem == "ai.openwork"'`). `saveSettings` invalidates
+  unified log (`log stream --predicate 'subsystem == "io.github.foscoe63.SwiftOpenWork"'`; `ai.openwork` before the rename). `saveSettings` invalidates
   its cached gate, so the switch works without a relaunch.
 - **`imageGenerationEnabled` reads the tools it writes.** It write-throughs to the `.mediaVision`
   category, so enabling one of those tools from the Tools page left the switch reading "off" while
@@ -353,7 +357,7 @@ is strongest. `screenshot_window` is for layout and colour.
 
 Both need TCC permissions **per binary**, so the xctest runner has neither and cannot verify
 them live — they are covered by their failure path, which names the exact System Settings pane.
-To exercise them for real, grant Screen Recording and Accessibility to the built `OpenWork.app`
+To exercise them for real, grant Screen Recording and Accessibility to the built `SwiftOpenWork.app`
 and drive them from the app. Screen Recording is only re-read at launch, so relaunch after
 granting.
 
@@ -424,40 +428,630 @@ stated reason. It caught `autoCheckForUpdates` immediately.
 
 ---
 
+## What landed 2026-09-15 (fourth pass): the surfaces that were not settings
+
+A vibe-coding review of the app asked what still separated it from a tool you would drive daily.
+The answer, again, was **surface built ahead of substance** — but this time in places
+`NoDeadSettingsTests` structurally could not see, because none of them were fields of
+`AppSettings`. Two sweeps had run under the rule "nothing ships with a control until something
+reads it" and both walked straight past the largest dead surface in the app.
+
+**The whole Automations section did nothing on a schedule.** `AutomationTriggerType` declares five
+triggers — manual, scheduled, onStartup, onSessionCreated, fileWatch. Exactly one, `.manual`, was
+consumed anywhere in the codebase, and only to decide whether to *draw* a next-run line. The card
+rendered "Next run: Tomorrow at 9:00 AM" in purple beside a clock icon, computed by a display
+heuristic in the view, above a scheduler that did not exist. The seeded automations shipped with
+`"Daily at 9:00 AM"` and `"On File Change"`. The only paths that ever ran one were the Run button
+and the Shortcuts intent — both manual.
+
+Now: `AutomationSchedule` parses the free-text schedule (`Daily at 9:00 AM`, `Every 30 mins`,
+`Weekly on Monday at 8am`, `Monthly on the 1st`, five-field cron), `CronExpression` implements cron
+properly including the both-day-fields-are-OR rule, and `AutomationScheduler` fires all four
+non-manual triggers. The view now asks `AutomationSchedule` for its next-run text, so **the screen
+and the scheduler cannot disagree** — that is the point of the refactor, not a tidy-up.
+
+Four properties worth keeping if this is touched again:
+
+1. **`parse` returns nil rather than guessing**, and the card says "will not run" in orange. The
+   old heuristic ended in `return schedule`, echoing "Every other Tuesday" back as if it were a
+   time.
+2. **Near-miss periods are refused, not rounded.** "Every other Tuesday" contains "tue"; a weekday
+   reader turns it into a weekly schedule that fires *twice as often as asked*, and nothing would
+   ever say so. `unsupportedQualifiers` refuses "other", "biweekly", "first Monday", "30 seconds",
+   "quarterly". A test caught this, reading did not.
+3. **A bare number is a count, not a clock time.** Without that rule "every 2 weeks" — which the
+   parser cannot honour — came back as `.dailyAt(hour: 2)`.
+4. **Next fire is computed from `lastRunAt`, never from now.** From now, an automation is
+   permanently one interval away from its first run and never fires at all. Firing stamps
+   `lastRunAt` with *now*, so a weekend of missed hourly runs collapses to one overdue run rather
+   than forty-eight queued turns.
+
+Scheduled runs go through `HeadlessAgentTurn`, the path Shortcuts already used, so there is one
+execution path rather than two — and it gained an `agentId` parameter, because it ran
+`appState.currentAgent` and an automation stores a `targetAgentId`. A scheduled prompt was going to
+run against whichever agent the user last had selected in the window.
+
+**`generate_image` was theatre and is deleted.** It wrote a fixed SVG — gradient, circle, square,
+triangle — with the prompt truncated to 60 characters stamped underneath as a caption, then
+returned `success: true` and "🎨 Generative Media Created". Nothing about the output depended on
+the prompt. It was enabled by default, so a model asked to draw a chart got the same circle every
+time and told the user it had worked. There is no local image generator to route it to; the honest
+tool is the one the agent already has, which is to write the SVG itself with `file_write`. The
+`case` is kept, returning an error that says where to go, because agents carry saved tool lists —
+and `loadTools` now strips retired tools, since `defaultTools` seeds a list and never prunes one.
+
+**`mlx_vision_describe` now uses a vision model.** It was Apple Vision OCR behind a name and a
+description claiming "local MLX vision models", and the `prompt` in its schema was never read. An
+image with no text returned "Image verified. No embedded text detected" — which a model reads as
+success. It now sends the image down the same path a chat attachment takes, so it works exactly
+where vision works, and **falls back to OCR only with the fallback stated in the output**. It does
+not quietly answer a "what does this show" question with OCR text. `image_analyze` stays OCR and
+now says so in its name and description.
+
+**`AgentCommunicationHub` is deleted, and deleting it exposed two real bugs.** The hub was a second
+message log with four writers and no readers — the Agent Messages inspector reads
+`AppState.interAgentMessages`, written by a different callback. The previous pass capped the hub at
+2000 messages and moved on, which tidied a dead store instead of noticing what it was hiding: the
+sub-agent **reply** message went to the hub *only*, and `ToolExecutionResult.createdAgentMessage`
+— set by `agent_message` — had no reader at all. So a sub-agent's delegation appeared in the
+inspector and its answer never did, and every message an agent sent with `agent_message` was
+reported as sent and displayed nowhere. Both now go through `onInterAgentMessage`.
+
+**Watch folders fabricated a clean bill of health on failure.** `triggerManualScan`'s `catch` block
+wrote "All monitored items verified. No syntax regressions or permission errors detected." into the
+artifact whenever the provider threw — a finding nothing had checked, filed under the agent's name,
+in the place the user goes to read what the agent found. It now writes the failure and its reason,
+and the artifact subtitle says the run failed.
+
+**"Run now" reported success before the turn started.** It wrote `lastStatus = "Completed"` on the
+line after `sendMessage`, which returns immediately — and returns *early* when a turn is already
+generating. So a run rejected outright was filed as a success. `sendMessage` gained an
+`onFinished` callback, and every trigger now records through `recordAutomationRun`.
+
+### The rule, generalised
+
+`NoDeadSettingsTests` checked fields. `NoDeadFeaturesTests` now also checks:
+
+- every case of `AutomationTriggerType` is consumed outside the model, **and** named in
+  `AutomationScheduler`;
+- every declared tool has a `case` in `ToolExecutionEngine`;
+- retired tools are neither seeded nor left in saved installs;
+- the vision tools' descriptions match what they do.
+
+`HitTestableButtonSweepTests` pins the borderless-button rule with a named exemption list, because
+the previous version of that rule lived in this document and did not get done.
+
+**The lesson is the scope of the sweep, not the findings.** Every one of these was a promise made
+by a piece of UI or a tool description that no code kept. Ask of any user-visible surface — an
+enum case, a tool description, a trigger, a status string — *what reads this, and what happens if
+nothing does?*
+
+---
+
+## What landed 2026-09-15 (fifth pass): the loop you actually sit in
+
+Started from "the sidebars do not come back the way I left them" and turned into the daily-driver
+gap. 503 → 595 tests, all green, and the app was launched and driven after each piece rather than
+only compiled.
+
+### Window layout, and a regression worth the warning
+
+Frame, sidebar width, inspector width, open/closed inspector, destination, settings tab, last
+workspace and session all persist through `WindowLayoutStore`. The first fix for that **broke
+resizing**: with `HSplitView` the panes grew past their content and left black gutters down both
+sides of the chat. `MainView` is now a plain `HStack(spacing: 0)` with its own drag handles —
+`clipped()` on each pane, `layoutPriority(1)` on the centre so it absorbs the slack, and the
+handle's `Rectangle` wrapped in a `Color.clear` so the whole strip is grabbable rather than the
+one-pixel line that is drawn.
+
+**`HSplitView` cannot be made to persist widths reliably**, which is why it is gone. It negotiates
+sizes itself and treats an `idealWidth` as a suggestion, so a restored width silently drifts. Do
+not reintroduce it here; the custom split is the third attempt and the first that holds.
+
+### Durable checkpoints — and yes, this reverses a recorded decision
+
+"Session-wide undo" is listed below under *Explicitly decided against*, on the grounds that an
+agent able to silently revert ten turns of your work is worse than one that cannot revert at all.
+**That argument is about the agent, and it still stands** — `revert_changes` and
+`FileCheckpointStore` remain turn-scoped, and the agent has no reach past the turn it is running.
+
+What was wrong was treating it as settled for the *user*. A person who opens their own transcript,
+picks a point, and is shown the exact list of files that will be rewritten or deleted before
+anything is written is not doing the thing that was rejected. And they need the history to outlive
+a relaunch, because "I'll sort this out later" is precisely when it does not.
+
+So `SessionCheckpointStore` (an actor, `Sources/Storage/`) seals one checkpoint per finished turn:
+the prior contents of every file that turn touched. Contents are content-addressed by SHA-256, so
+a file edited in twenty turns costs twenty digests rather than twenty copies; 40 checkpoints per
+session, pruned oldest-first, with blob GC after every prune and restore.
+
+Four properties to preserve if this is touched:
+
+1. **Restoring replays the *oldest* recorded state of each path from the target checkpoint
+   forward.** Undoing three turns has to land on v1, not v3 — replaying the most recent baseline
+   would undo one turn and claim to have undone three. There is a test named for exactly that.
+2. **Undone checkpoints are deleted afterwards.** Leaving them offers a second restore to a state
+   with no baseline on either side of it.
+3. **A file too large or too binary to snapshot is reported as unrecoverable, never skipped.** A
+   restore the user believes was total, but was not, is worse than one that admits a gap. Both the
+   plan and the outcome carry the list.
+4. **Headless turns seal too** (`HeadlessAgentTurn`). An automation that rewrote six files at 3am
+   is the run you most want to be able to undo.
+
+`FileCheckpointStore.baseline()` is the seam between the in-memory turn window and the durable
+store. UI is `RestoreFilesSheet`, reached from the message context menu; `AppState` holds
+`restorableMessageIds` so the transcript can decorate rows without a call per row.
+
+### `AgentWorktree` was blocking the main thread, and that is why the tests "hung"
+
+Found while chasing a test run that finished its assertions and then sat forever, occasionally
+appearing to re-run itself. `AgentWorktree.git()` built a `Process` and called `waitUntilExit()`
+**on whatever thread called it**, which via `SubAgentExecutor` and an `AgentRunner` closure was the
+main thread. Every `worktree_create` froze the UI for the length of a git invocation, and under
+XCTest it deadlocked the main queue badly enough to look like reentrancy.
+
+Every entry point (`repositoryRoot`, `create`, `list`, `remove`, `isAgentWorktree`, `commit`,
+`branchName`) is now `async` over a serial background queue, suspending the caller instead of
+blocking it. `gitQueueForTesting` is exposed and `testGitRunsOffTheCallersThread` pins it.
+
+**The tell is worth remembering: a test suite that passes and then hangs is usually a blocked main
+queue, not a leaked process.** `sample` the test runner before killing it.
+
+### Xcode projects were invisible to `build_project`
+
+`BuildDiagnostics.command` knew SwiftPM and nothing else, so on this very repo the agent's build
+tool did nothing. It now takes a `root`, discovers `.xcworkspace` (which wins) or `.xcodeproj`,
+picks a shared scheme — preferring one matching the container name, falling back to the container
+name itself — and quotes paths with spaces. `rerunCommand` narrows an xcodebuild test run with
+`-only-testing:`, and refuses to narrow an unqualified suite name rather than guessing a target.
+SwiftPM still wins where both exist.
+
+### Live command output
+
+`runProcess` and `executeShell` already drained their pipes chunk by chunk — they must, or a chatty
+build deadlocks on a full pipe buffer — but the bytes went into a private buffer and surfaced only
+at exit. A four-minute `xcodebuild` was four minutes of spinner, indistinguishable from a hang.
+
+`LiveToolOutput` publishes those same chunks as they land: a bounded 24-line tail keyed by tool
+call id for the running card, and a mirror into `WorkspaceTerminalSession` prefixed `[agent] $ …`
+with a nonzero exit announced.
+
+`ToolExecutionEngine.execute` gained an optional `callId` for the routing. It defaults to nil so
+the tests, Shortcuts and `MockLLMService` call sites are untouched. **The mirroring deliberately
+does not set the panel's `isRunning`/`activeProcess`** — Stop there means "stop the command I
+typed", and claiming the agent's build would be a button that lies. There is a test for it.
+
+### Inline diffs on tool cards
+
+An edit card said only that it succeeded and named the path. Now it carries an `InlineFileDiff`:
+`+N/−N` on the collapsed card, changed lines with two lines of context when expanded.
+
+- **Stored rendered, not as both sides.** It rides in the session transcript, so a twenty-turn
+  refactor of a large file must not carry forty copies of it. The real "before" is in the turn
+  checkpoint; the file is on disk.
+- **Real LCS, not a greedy walk.** A greedy diff reports an inserted line as "rewrote everything
+  below it", which is the exact case a reviewer needs read correctly. Bounds: files over 4,000
+  lines report counts with no body (the table is O(old × new)), rendered body caps at 60 lines.
+- **Single-file tools only.** `rename_symbol`, `terminal_command` and `revert_changes` get none —
+  showing one of the eleven files a rename touched is worse than showing none, and the turn review
+  sheet covers the whole set.
+- `VisualDiffInspectorView` now shares `InlineFileDiff.diff`, so the sheet and the card cannot
+  disagree about a file. Its own diff had the greedy flaw.
+
+### Four controls that did not control anything
+
+Same rule as the settings sweeps, one layer out again.
+
+- **The Side-by-Side / Unified picker rendered nothing.** It bound to `@State` no other line read,
+  and since `.split` was the *default*, the control's resting position asserted something untrue
+  about what was on screen. There is a real two-pane rendering now, padded so an insertion on one
+  side leaves a shaded gap on the other instead of knocking every later line out of step with its
+  counterpart. Persisted via `@AppStorage`.
+- **"Apply & Save Changes" saved nothing.** In the turn review sheet the agent had already written
+  the file and `onAccept` was `{}`. `onAccept` is optional now, the sheet passes nil, and the one
+  real action is relabelled "Revert This File".
+- **Finish notifications.** The chime existed and answered "something happened" but never which
+  session, and it is gone the moment it ends. `TurnCompletionNotifier` posts a banner too. The
+  decision is a `nonisolated` pure function so the rules are testable without a notification
+  centre or a permission grant: silent when the app is frontmost, silent under 20 seconds, but a
+  turn that **failed** is announced however short — that is the one you would otherwise come back
+  to and find nothing happened. Authorization is requested on first use, not at launch, and
+  `UNUserNotificationCenter.current()` is guarded on `Bundle.main.bundleIdentifier` because it
+  traps outside a bundle.
+- **Context meter** in the composer bar. Reads the provider's own prompt-token count for the last
+  turn against the model's window; amber past 60%, red past 85%, hidden below 50% because an
+  always-on meter is furniture. **It shows nothing rather than a guess** when a session has no
+  reply yet — estimating from character counts ignores the system prompt, the tool schemas and
+  every tool result the model saw.
+
+`NoDeadFeaturesTests` gained two cases for this class: a control the user can change must change
+something, and a button that claims to save must save.
+
+### Composer and transcript
+
+Drag-and-drop and paste of files and images straight into the box (`ComposerAttachmentIntake` plus
+overrides on the `NSTextView`), `@file`/`@folder` completion, and `@path:line` which injects a
+numbered excerpt around that line rather than the whole file. Clicking a `file:line` diagnostic in
+tool output reveals it and drops the mention into the composer. Sticky session todos from
+`todo_write` persist on the `Session`. Plan mode has a banner and `/plan`.
+
+**Stop no longer throws away what you typed.** A message written while the agent was generating is
+queued and offered with a "Send now" button rather than silently discarded.
+
+`rename_symbol` renames an identifier across the workspace from its declaration, with `dry_run`.
+
+---
+
+## What landed 2026-09-16 (sixth pass): wiring audit, and closing "What is left"
+
+Every type added in the fourth and fifth passes was checked for a caller outside its own file
+and tests, and the app was launched and driven. All of them are wired. The audit still found
+four real bugs, two of them serious.
+
+### Found while auditing
+
+- **Every test run fired your real startup automations.** The unit tests are hosted by the app,
+  so `xcodebuild test` launches it against the real Application Support folder, and the
+  fifth pass started `AutomationScheduler` in `onAppear`. Each run made a real agent turn, a new
+  `MorningBrief` session and a rewritten `lastRunAt`. Six stray `MorningBrief` sessions on this
+  machine came from that (15 Sep 22:45 and 22:55 UTC, 16 Sep 11:01 and 11:08 UTC). They were
+  **not deleted**, which is your call. `AutomationScheduler.isHostedByTests` now blocks
+  `start`, and the automatic update check uses the same guard.
+- **The mic button would crash the app.** Info.plist had no `NSMicrophoneUsageDescription` or
+  `NSSpeechRecognitionUsageDescription`, and macOS terminates an app that touches either without
+  one. Both are now in `project.yml`, plus `NSAppleEventsUsageDescription` for the osascript
+  bridge. Denied speech permission used to be a `print`, so the button did nothing. It now shows
+  a toast.
+- **`rename_symbol` could silently do half a rename.** Files were found through `CodeSearch.grep`
+  capped at 2,000 matches, and `grep` itself only looked at the first 5,000 files without
+  setting `truncated`. Both limits are now reported, and rename refuses to write when the
+  search was cut off.
+- **`TurnCompletionNotifier` and `AgentWorktreeTests`** had Swift 6 concurrency warnings. They are
+  fixed. Two older warnings in `BuiltInProviderDefaultTests` and `MLXParametersAndDeadlineTests`
+  are still there.
+
+### Closed from "What is left"
+
+- **Update checking is real.** `UpdateChecker` reads `releases/latest` from the GitHub repo. The
+  button reports up to date, newer (with a link), or *could not check*, and a rate limit or a
+  non-version tag is never shown as up to date. `autoCheckForUpdates` now controls a check at
+  launch, at most once a day. It never downloads anything.
+- **The cloud settings are deleted.** There is no cloud service, so the Cloud Account and Connect
+  pages and their four fields were removed. Old settings files still decode (`RemovedSettingsTests`), and a
+  saved `cloud`/`connect` settings tab reopens on General. `knownDead` in `NoDeadSettingsTests`
+  now holds only `startOnLogin` and `settingsSchemaVersion`.
+- **Local Models › Folders** lists every folder the scan searched, each with Reveal, plus Add
+  Models Folder and Rescan. Its first version rendered an empty list, because popover content
+  did not see state set in the same click. It now loads its own state in `onAppear`. Checked
+  in the running app: 9 folders listed.
+- **`rename_symbol` uses the compiler in Swift packages** (`SourceKitRename`, an LSP client for
+  `sourcekit-lsp`). In the test, renaming `Alpha.value` changes its call site and leaves
+  `Beta.value` and a comment alone. `mode` is `auto` (the default), `semantic` or `text`, and
+  the output always names the method used. Rules worth keeping:
+  1. **Wait for indexing before renaming.** A rename sent early covers only the files already
+     indexed and looks complete. It waits for the `indexing.*` progress token and indexing logs
+     to go quiet, and a timeout is a failure.
+  2. **Merge edits by resolved path.** The server named one file as both `/var/…` and
+     `/private/var/…`, and it was edited twice. A test caught this.
+  3. **An edit that does not fit the file rejects the whole rename.** Half a rename does not
+     compile either.
+  4. **Xcode-only projects stay text-only.** Without a build server, `sourcekit-lsp` returns
+     only the declaring file, which looks like success. `auto` falls back and says why;
+     `semantic` refuses.
+- **Multi-file diffs.** `rename_symbol` carries `fileDiffs`. The collapsed card shows file count
+  and totals, and the expanded card lists every file. `InlineFileDiff.boundedSet` keeps every
+  path and count and drops bodies past 12 files or 240 lines.
+- **cargo re-runs can be narrowed:** `cargo test -- --exact 'a::b' …`, using names from libtest's
+  `test … FAILED` lines. Doc-tests are skipped. **npm stays whole-suite on purpose:** `npm test`
+  runs any runner, and a filter one runner honours another ignores.
+- **Release script.** `Scripts/notarize-release.sh` builds Release, signs nested code first
+  instead of `--deep`, signs with hardened runtime and `Scripts/OpenWork-release.entitlements`
+  (microphone and Apple Events, which hardened runtime otherwise blocks), notarises, staples,
+  checks with `spctl`, and zips **after** stapling to `build/release/OpenWork.zip`. The old
+  script zipped before stapling and deleted that zip. `SIGN_ONLY=1` stops before submitting; it
+  ran end to end here with `OpenWork Local Signing`.
+
+---
+
+## Renamed to SwiftOpenWork (2026-09-16)
+
+Another app is already called OpenWork, and `ai.openwork` is its domain, so this app now uses
+its own name everywhere. **`AppIdentity` (`Sources/Utils/`) is the single place the name and
+identifiers live**; nothing new should spell them out.
+
+| | 1.1 | Now |
+|---|---|---|
+| App | `OpenWork.app`, display name OpenWork | `SwiftOpenWork.app`, SwiftOpenWork |
+| Xcode project, scheme, module, tests | `OpenWorkSwift…` | `SwiftOpenWork…` |
+| Bundle ID | `ai.openwork.OpenWorkSwift` | `io.github.foscoe63.SwiftOpenWork` |
+| Keychain service, log subsystem | `ai.openwork.OpenWorkSwift`, `ai.openwork` | the bundle ID |
+| Settings, sessions, agents | `~/Library/Application Support/OpenWorkSwift` | `…/SwiftOpenWork` |
+| Home data | `~/.openwork` | `~/.swiftopenwork` |
+| Rules file written | `OPENWORK.md` | `SWIFTOPENWORK.md` |
+| Agent worktrees | `.openwork-worktrees`, `openwork/<task>` | `.swiftopenwork-worktrees`, `swiftopenwork/<task>` |
+| New workspaces | `~/Documents/OpenWork/Workspaces` | `~/Documents/SwiftOpenWork/Workspaces` |
+| Local signing certificate | `OpenWork Local Signing` | `SwiftOpenWork Local Signing` |
+| Release zip | `OpenWork.zip` | `SwiftOpenWork.zip` |
+
+The name was briefly **OpenWork-Swift** (`io.github.foscoe63.OpenWorkSwift`) the same morning and
+then changed to SwiftOpenWork to be unmistakably different. That name never shipped and nothing
+migrates from it, except the lead agent's name, which test runs had already written.
+
+A new bundle ID is a new app to macOS. `LegacyIdentityMigration` runs before `AppState` loads
+anything, and only once per install:
+
+- **Application Support/OpenWorkSwift → SwiftOpenWork.** Settings, sessions, agents and
+  automations. This is the move that matters.
+- **`~/.openwork` → `~/.swiftopenwork`.**
+- **Preferences** are copied from the old domain, with this app's own keys renamed (window
+  layout, update-check stamp, window frame).
+- **Keychain secrets migrate lazily.** `KeychainManager.getSecret` falls back to the old service
+  on a miss and copies what it finds, so macOS asks only about credentials in use. Deleting or
+  clearing a secret removes the 1.1 copy too; otherwise the fallback would bring it back.
+- **The seeded lead agent** is renamed in saved `agents.json` where it still has the seed's
+  wording. The pattern has a `(?<!Swift)` lookbehind because "SwiftOpenWork Lead Agent" itself
+  contains "OpenWork Lead Agent"; without it every launch would prepend another "Swift".
+
+**Before the first real launch, 1.1 data wins over anything under the new name.** The tests run
+inside the app on the real home folder, so on a development machine `SwiftOpenWork/` (seed files),
+`~/.swiftopenwork` and the new preferences domain already exist before the renamed app has ever
+been opened. On this Mac they do, as of the last test run. A folder in the way is renamed
+`<name>.before-migration-<timestamp>`, never deleted or merged, and the 1.1 folder takes its place.
+Keeping the test-host copy would have looked like every session had been lost. Once the migration
+has run it never runs again, so nothing a real launch writes can be displaced. Until the first real
+launch, `VisionDetectionTests.testTheInstalledDefaultModelIsDetectedCorrectly` skips, because the
+test host reads the seed settings rather than yours.
+
+The 1.1 names are still **read**: `OPENWORK.md` and `.openwork.md` rule files (Save writes back to
+the one that was loaded instead of shadowing it with a new file), worktrees under the old
+folder and branch prefix, and old Keychain items. Existing workspaces keep their stored paths;
+moving someone's project folders is not a rename's job.
+
+**What cannot be migrated by an app:** Accessibility and Screen Recording belong to the bundle ID,
+so they must be granted again, and the old "OpenWork" entries removed from System Settings.
+Shortcuts built on the old intents must be re-added. `OpenWork.zip` in `build/release`, notarised
+earlier the same day, is the old identity and must not be published.
+
+---
+
+## Automations that never finished, and multi-agent delegation (2026-09-16)
+
+Started from "the MorningBrief sessions have a prompt and no reply". There were 25 of them, all
+filed as successes, and `/Volumes/WorkSpaces/OpenWorkSwift`, where the brief writes its notes, was
+empty. Four separate faults stacked up, and none of them was a crash.
+
+**1. Runs were saved at the start and the end only.** `HeadlessAgentTurn` (automations, Shortcuts,
+Siri) saved the session twice; a chat turn saves on every message update. Any run that did not
+finish left a prompt with no reply, however much it had done. Test hosts exit in seconds, and
+launches during the Cursor work were quit before a ten-minute run ended. It now saves as it goes.
+
+**2. "Success" was written when a run started.** Claiming `lastRunAt` up front is right (a crashing
+run must not re-fire every tick), but the status went with it. `recordAutomationRunStarted` now
+writes `running` and the run's session id (`Automation.lastSessionId`). At launch, when nothing can
+be running, `AppState.recoveringInterruptedRuns` turns a leftover `running` into `interrupted` and
+appends " (interrupted)" to that session's title. Launch only: Settings also calls `loadAll`, while
+a run may be in flight.
+
+**3. Inventory mode took every tool away.** `isMCPInventoryPrompt` matched any prompt mentioning
+"mcp" beside "configured" or "mcp-server". The brief's step 6 does, so every run had no tools and
+was told to answer with one table. The finished run said so: "this turn I'm restricted from calling
+tools directly". The README's own example prompt tripped it too. It now only matches short questions
+about servers (at most 120 characters, with no verb that uses one), and `MCPInventoryPromptTests`
+covers both sides.
+
+**4. Keyword delegation.** Any prompt containing "build", "create", "project", "research",
+"analyze", "agent", "team", "subagent" or "refactor" sent the *whole* prompt to the first two team
+members at once, before the lead did anything, with six steps each. On one local model every agent
+switch re-read the prompt ("Context cache reset"), the lead thought for four minutes, and the
+research sub-agent ran out of steps every time. **Removed.** The lead decides with `agent_spawn`.
+
+### Making `agent_spawn` the path that works
+
+Removing the keyword path would have broken delegation outright, because the tool path had its own
+faults:
+
+- **Wrong model.** A sub-agent ran on its *configured* model, and the seeded team is configured for
+  Ollama models on a machine where Ollama is off. `AgentRunContext.subAgentModel` uses the agent's
+  own model only when its provider is on and, for a local provider, lists the model. Otherwise it
+  inherits the running model and the report says so. Inheriting also avoids loading a second local
+  checkpoint beside the parent's.
+- **No real depth.** Every spawn called itself depth 1, so the budget never stopped a chain. Depth
+  and the running model now travel as a `@TaskLocal` (`AgentRunContext.current`) set around every
+  tool call in `AgentRunner` and `SubAgentExecutor`.
+- **The lead was not told who its team was.** It had the tool but no ids. `teamPromptSection` lists
+  the team and says when to delegate: self-contained work for a specialist, not short or sequential
+  steps. On a local model it adds that delegating is expensive.
+- **Delegations were invisible.** `createdSubAgentTask` had no reader (same bug class as
+  `createdAgentMessage` in the fourth pass). It now reaches the message's task cards, the Sub-Agent
+  Tree and the Agent Messages log, and the sub-agent's steps stream into the tool card's live tail.
+- **Silent guesses.** A missing `target_agent_id` defaulted to `coder-agent`, and an agent could
+  spawn itself. Both are now refused with the list of agents.
+- **Worktree litter.** Every sub-agent left a worktree and branch behind, even read-only research.
+  One with no changed files and no commits is now removed.
+- **Three dead agent controls, now wired.** *Auto-Delegate Complex Tasks* decides whether the team
+  section encourages delegation or says "only when asked". *Can Communicate with Other Agents*
+  gates `agent_message`. *Max Sub-Agent Nesting Depth* narrows the global depth budget.
+
+**The Collaboration Room invented results.** When a model returned nothing it showed a hardcoded
+plan, hardcoded code and a hardcoded "✅ Verified … No race conditions detected. Ready for merge",
+then "Team Consensus Reached". Chunks were applied on later main-actor hops, so a model that *did*
+answer could still read as empty and get the fake text. It also picked agents by hardcoded id.
+Now it streams into a synchronous buffer, takes its roles from the lead's team, stops and says why
+on a failure, and states that it is text only.
+
+**The Visual Flow builder is deleted.** "Execute Pipeline" animated the connector lines on a timer
+and toasted "Multi-Agent Pipeline executed successfully!" Its nodes were not linked to agents and
+nothing was saved. A real one would be a feature of its own.
+
+Still worth knowing: headless runs do not set `isGenerating`, so a chat turn started during a
+scheduled run shares the local model with it, and the header says "Agent ready" throughout.
+
+---
+
+## What landed 2026-09-17 (seventh pass): local engine, editor, live preview
+
+Asked for: make local models, seeing the result, editing code yourself, and polish "very good".
+Every claim below was checked live — a real 35B model, a real `npm run dev`, a real web view, and
+the built app driven through its UI on throwaway data.
+
+### Local models
+
+- **The system prompt was re-prefilled on every continued turn.** `ChatSession` prepends its
+  `instructions` on *every* call, including calls that continue a live KV cache (its own docs:
+  "re-tokenized on each call"). `NativeMLXService` passed the system prompt as `instructions` and
+  reused sessions, so every turn and every tool round appended the whole prompt — tool schemas and
+  workspace context — to the cache again. Measured on Ornith-1.5-35B with a 490-token system
+  prompt: turn two, adding a six-word message, prefilled **499** tokens. The system prompt is now
+  the first message of the session's `history`; the same turn prefills **14**. In a twenty-step
+  agent run that was twenty extra copies of the prompt displacing real context.
+  `SystemPromptIsRenderedOnceTests` reads the source so `ChatSession(instructions:)` cannot come back.
+- **Concurrent generations corrupted each other's cache bookkeeping.** Chat turns, automations,
+  Shortcuts and parallel sub-agents all shared one `cachedSession`/`cachedConsumed`; an automation
+  arriving mid-turn replaced the session a chat turn was streaming from, and the chat turn's
+  cleanup then recorded its reply against the automation's history. `LocalGenerationGate` (an
+  actor, FIFO, cancellable while queued) now serialises load + generate + bookkeeping, and a
+  queued turn shows "Waiting for the local model — it is busy with background run “Morning
+  Brief”". Labels come from a task-local set in `HeadlessAgentTurn` and `SubAgentExecutor`.
+  Verified live: two simultaneous turns, the second queued with that notice, both answered.
+- **Two cached sessions (`maxCachedChats`), chosen by `MLXSessionReuse.select`**, so a chat and an
+  automation taking turns do not each rebuild the other's cache. A conversation none of them
+  belongs to is new, not a "Context cache reset" — that chip is now only shown for real resets.
+- **The chat header named nothing during background runs.** `AppState.backgroundRuns` →
+  "Agent ready · “Morning Brief” running in background" with a blue dot.
+- **The context meter never appeared for local models** — the MLX path sent no `promptTokens`.
+  It now reports the tokens in view (cached prefix + prefilled), which on a continued session is
+  not the same as MLX's per-call `promptTokenCount`.
+- **Replies show measured decode speed** (`generationTokensPerSecond`, persisted).
+- **Unload did not free memory.** `unload`/`unloadAll` removed the container but the cached
+  `ChatSession` still held it. They now drop matching cached sessions and clear MLX's cache.
+- **Multimodal checkpoints declared half their context.** Ornith, Qwen3.6 and Qwen3.8 keep
+  `max_position_embeddings` under `text_config`; discovery read only the top level and fell back to
+  131,072. `LocalMLXEngine.declaredContextWindow` reads nested configs (262,144).
+
+### Editor (`Sources/Engine/Editor`, `Sources/UI/Views/Editor`)
+
+- `EditorWorkspace` / `EditorDocument`: tabs whose `NSTextStorage` and `UndoManager` live on the
+  document, so switching tabs keeps undo and unsaved edits. Opens from build errors
+  (`revealDiagnostic` no longer reveals in Finder and pastes a mention), tool-card diffs (file name
+  → first changed line), preview console stack traces, Quick Open (⇧⌘O), Artifacts & Files.
+- **Agent-aware disk sync** (`EditorDiskSync.decide`): polled `stat` every 1.5s and after each turn.
+  Clean tab → reload quietly with a notice. Unsaved edits → conflict banner (Compare / Take Disk /
+  Keep Mine); `save()` throws until resolved, so nothing the agent wrote is overwritten unseen.
+  Deleted → banner, Save writes it back. Polling, not vnode watchers, because atomic renames
+  replace the watched inode.
+- CRLF and indentation are detected and preserved. **Trap:** `"\r\n"` is one `Character`, so
+  `text.contains("\r")` is false for CRLF text — check `utf16`.
+- `SyntaxHighlighter`: one left-to-right lexer per language family, UTF-16 ranges, applied as
+  layout-manager temporary attributes off the main thread. Strings/comments first, so `//` in a
+  string stays a string.
+- `CodeTextView`: auto-indent (opens `{|}` pairs), Tab completes a word in progress (document words →
+  workspace declarations via `SymbolIndex.declaredNames` → keywords) and indents otherwise, ⌘/,
+  ⌘] ⌘[, ⌘L, ⌘S, ⌘F (find bar; `TextEditingCommands` added), ⌘-click to definition.
+- Composer banner when editor files are unsaved: the agent reads disk.
+- **AppKit trap found live:** on this macOS a vertical ruler is laid *over* a full-width clip view
+  and the text is inset with a negative bounds origin (x = −ruleThickness). Scrolling the clip view
+  to x = 0 hid the first characters of every line under the line numbers.
+  `Coordinator.leftmostOriginX` derives the real leftmost origin.
+
+### Live preview (`Sources/Engine/Preview`, `Sources/UI/Views/Preview`)
+
+- `DevServerManager`: long-lived servers outside any tool call (`terminal_command` kills after
+  120s). Login-shell PATH resolved once with a timeout (nvm/Homebrew node from a Dock launch),
+  `BROWSER=none`, stdin at EOF, URL detected from output (Vite/Next/Python/Rails banners, ANSI
+  stripped, wildcard binds → localhost), else from `lsof` of the process tree, then confirmed by an
+  HTTP answer. Stop signals the **whole tree** (`ps` parse) then SIGKILLs survivors; quitting the app
+  kills all. Verified: `npm run dev` → npm → sh → node all dead and the port released.
+- `StaticFileServer` (Network.framework, loopback only, traversal and symlink escapes refused) for
+  plain sites — no `python3` stub installer prompt.
+- `PreviewController`: one `WKWebView` that outlives the pane; injected script forwards console,
+  uncaught errors, unhandled rejections, failed fetch/XHR and resource errors; console resets per
+  page load; non-loopback links open in the browser; alerts are logged, not shown (an unattended
+  check would hang). Parked in an offscreen window when the pane is hidden, so checks still render
+  — the live test asserts the screenshot pixels are the page's colour. **Trap:** WebKit's
+  `error.stack` omits the message V8 includes; send `name: message` + stack.
+- Tools: `preview_start` (approval + sandbox + safety level, like `terminal_command`; a `url`-only
+  attach needs none), `preview_check`, `preview_logs` (read-only, allowed in plan mode),
+  `preview_stop`. The system prompt tells the agent to check web UIs rather than trust a build.
+- Reload-on-change is on for static sites and off for dev servers, which hot-reload themselves.
+
+### Found on the way
+
+- **`requiresApproval: true` on `run_app`, `git_commit` and `worktree_remove` was read by nothing**
+  — they ran without asking, and plan mode offered them. `approvalReason` now covers them, plan
+  mode blocks them, and `testEveryCatalogApprovalFlagIsEnforced` fails for any future tool whose
+  flag is not enforced.
+- **The test data isolation recorded on 2026-09-16 was not in the code.** `StorageService.baseDirectory`
+  always returned the real folder; every `swift test` rewrote the real `settings.json` and
+  `mcp_servers.json` (restored by careful tests, which is luck, not isolation). It now uses
+  `$TMPDIR/SwiftOpenWork-tests-<pid>` under XCTest, and `SWIFTOPENWORK_DATA_DIRECTORY` overrides
+  both. Verified by diffing real-data mtimes around a full run. One side effect, reported rather than
+  hidden: a smoke launch made *before* the fix loaded the real data and re-saved `settings.json`,
+  `mcp_servers.json`, `providers.json` (same sizes) and `tools.json` (grew by the four preview
+  tools, which a normal launch adds anyway). Sessions, agents, automations and workspaces were not
+  written.
+- The three failing tests: `testTemplatedListsAreAlsoFlagged` asserted a false positive the
+  detector no longer has (flipped, plus a test that real repetition is still caught);
+  `testTheBuiltBundleMatchesAppIdentity` now skips outside the app host (its guard missed
+  `com.apple.dt.xctest.tool`).
+- The "SwiftOpenWork Local Signing" certificate exists in the login keychain now; Debug builds sign.
+
+### Smoke-testing the UI safely
+
+```bash
+SWIFTOPENWORK_DATA_DIRECTORY=/path/to/throwaway XCTestBundlePath=/dev/null \
+  build/DerivedData/Build/Products/Debug/SwiftOpenWork.app/Contents/MacOS/SwiftOpenWork
+```
+
+The first variable points the data folder somewhere disposable; the second blocks startup
+automations and the update check. UserDefaults (window layout) is still the real domain — export it
+with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afterwards.
+
+### Not done, on purpose or for later
+
+- **AI inline (ghost-text) completion.** Tab completion is lexical. A model-backed one needs
+  fill-in-the-middle prompting and a latency budget a 35B local model does not meet per keystroke.
+- **One preview at a time** in the pane; several servers can run, the pane follows the latest.
+- **Highlighting is whole-document** on a background queue, debounced. Fine to ~1MB; files beyond
+  1.5MB UTF-16 are shown uncoloured.
+- `preview_start` asks for approval even when detection picks the built-in static server.
+
+---
+
 ## What is left
 
 ### Settings still dead
 
-Four cloud fields — `cloudSyncEnabled`, `cloudControlPlaneUrl`, `cloudAccountEmail`,
-`cloudOrganizationName` — plus `autoCheckForUpdates`. Every other field in `AppSettings` now has
-both a control and a reader, pinned by tests.
+None. `startOnLogin` is vestigial by design: the toggle reads `SMAppService` directly, because
+macOS is the only authority on whether a login item is registered.
 
-These five are **not** an oversight, they are an unanswered product question. The cloud fields are
-two whole settings pages for a feature that does not exist; `autoCheckForUpdates` is a switch for
-an update feed that does not exist. Deleting them is a decision, not a cleanup, so they are left
-with honest UI instead: the auto-check toggle is now disabled and says why, next to the Check
-button that already did. `RemovedSettingsTests` shows how to delete a stored field safely when
-the call is made.
+### Needs you
 
-`startOnLogin` is vestigial by design: the toggle reads `SMAppService` directly, because macOS is
-the only authority on whether a login item is registered. The stored copy is written and never
-read, which is correct.
+- **Re-grant Accessibility and Screen Recording** to SwiftOpenWork, and remove the old OpenWork
+  entries.
+- **Release 1.2.0 under the new name:** bump `MARKETING_VERSION`, run the notarise script, and
+  publish `SwiftOpenWork.zip`.
 
+- **Notarisation works; publish nothing built before the rename.** On 2026-09-16 the Developer ID
+  certificate (`Developer ID Application: Edward Griswold (5XKHL47YG3)`, login keychain) and an
+  App Store Connect key (ID `J9TT53PZQ4`, file `~/.appstoreconnect/AuthKey_J9TT53PZQ4.p8`) were set
+  up, and a build was notarised and stapled. That build was still `OpenWork.app`, so its zip was
+  deleted. The issuer ID is on the App Store Connect Integrations page. Run:
+  `DEVELOPER_ID_APP="Developer ID Application: Edward Griswold (5XKHL47YG3)" APPLE_API_KEY_ID=J9TT53PZQ4 APPLE_API_ISSUER=<issuer> APPLE_API_KEY_PATH=~/.appstoreconnect/AuthKey_J9TT53PZQ4.p8 Scripts/notarize-release.sh`
+- **The six stray `MorningBrief` sessions** from test runs (see the sixth pass). Delete them in
+  the app if you do not want them.
+- **GrizzyBot's project file.** `xcodegen generate` has been run in
+  `/Volumes/Storage/Projects/GrokBot/GrizzyBot`. It added `McpSessionPool.swift` and also
+  `McpSessionPoolTests.swift` and `McpTimeoutTests.swift`, which were missing too. Not yet
+  committed.
 
 ### Worth building next
 
-- **Local Models could still surface the search roots.** Settings › Debug now lists them, behind
-  `developerMode`. A user whose library sits somewhere unusual has to find that page; the Local
-  Models view itself is where they would look first.
-- **Symbol-aware *rename*** on top of `SymbolIndex` — the index now knows where things are
-  declared; the next hop is finding references safely.
-- **Narrowed re-runs for more runners.** Only SwiftPM, `go test` and pytest can be narrowed.
-  cargo and npm return nil, correctly, and stay whole-suite.
-- **Notarised releases.** `OpenWork.zip` on the GitHub releases is ad-hoc signed, so macOS blocks
-  it on first launch and users need right-click → Open. Local development builds are now signed
-  (see the TCC note in Environment gotchas), but that self-signed certificate does nothing for
-  distribution: this still needs your Developer ID Application certificate and an App Store
-  Connect key for notarytool before the release workflow can be automated.
+- **Compiler rename for Xcode projects** would need `xcode-build-server` or a generated
+  `buildServer.json`. Until then, `auto` uses text replacement there and says so.
+- **Rename progress.** A compiler rename in a large package can spend minutes indexing, and the
+  card shows only a spinner. `LiveToolOutput` could show indexing progress.
+- **Test host UserDefaults and Keychain are still real.** The data folder is isolated (seventh
+  pass); preferences and Keychain items written under test are not.
 
 ### Explicitly decided against — with reasons, so they are not re-proposed
 
@@ -476,16 +1070,20 @@ approval gate and no revocation. A plugin that needs speed can be a local MCP se
 **Desktop widgets.** New extension target plus a shared App Group container, and a widget can only
 display state, not run agents.
 
-**Session-wide undo.** `FileCheckpointStore.beginTurn` discards the prior window on purpose. An
-agent that can silently revert ten turns of your work is worse than one that cannot revert at all.
-The session-wide *review* exists; it deliberately offers no revert.
+**Session-wide undo *for the agent*.** `FileCheckpointStore.beginTurn` still discards the prior
+window on purpose, and `revert_changes` still reaches no further than the turn it is running in.
+An agent that can silently revert ten turns of your work is worse than one that cannot revert at
+all.
+
+> Amended in the fifth pass: this was over-applied. The argument is about the *agent*, and a
+> person picking a point in their own transcript and being shown every file that will change
+> first is doing something else. That is `SessionCheckpointStore`, and it is user-initiated,
+> previewed and durable. The line to hold is *who* triggers the rewind and whether they see the
+> blast radius before it happens — not whether the history exists.
 
 ---
 
 ## Known issues not fixed
-
-**GrizzyBot's committed `project.pbxproj` omits `McpSessionPool.swift`.** CI hides it by running
-`xcodegen generate` first. Run `xcodegen generate` there and commit.
 
 **GrizzyBot's four `GrizzyBotUITests` fail environmentally, not from code.** A bare
 `WindowGroup { Text("…") }` with none of GrizzyBot's code fails identically under XCUITest, while
@@ -513,9 +1111,15 @@ button's full declared frame. Use it for any borderless control; keep `.plain` o
 label genuinely fills its frame.
 
 This was reported twice as separate bugs — the inspector tabs, then every icon in the left
-sidebar — before it was recognised as one rule. 79 call sites still use bare `.plain` with no
-`contentShape` nearby; they have not been swept, because a blanket change would enlarge some
-icon buttons that sit inside oversized frames and could start eating their neighbours' clicks.
+sidebar — before it was recognised as one rule.
+
+**The sweep is done.** 70 sites moved to `.hitTestable`; 15 keep `.plain` on purpose — six declare
+their own `contentShape`, and nine fill their row or sit in a fixed-width panel, where a wider hit
+area would eat a neighbour's clicks, which is the regression the previous version of this note
+predicted a blanket change would cause. `HitTestableButtonSweepTests` enforces the rule and names
+every exemption, so a new borderless button fails the suite rather than waiting to be reported as
+a bug.
+
 Find them with:
 
 ```bash
@@ -630,7 +1234,7 @@ perception tools fail with a permission error you can see is already granted.
 
 Fixed by signing local builds with a self-signed certificate — `Scripts/create-local-signing-cert.sh`,
 run once. TCC then keys on the certificate, so grants survive rebuilds. `codesign -dvvv` should
-report `Authority=OpenWork Local Signing`; if it says `Signature=adhoc`, the certificate is gone
+report `Authority=SwiftOpenWork Local Signing` (`OpenWork Local Signing` before the rename); if it says `Signature=adhoc`, the certificate is gone
 and permissions will start decaying again.
 
 **Changing to a stable certificate does not repair the existing entry** — the old grant points at
@@ -687,8 +1291,13 @@ interpolating a `String` parameter is a halting error there and invisible to Swi
 touching `Sources/App/Intents`, run:
 
 ```bash
-xcodegen generate && xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build
+xcodegen generate && xcodebuild -project SwiftOpenWork.xcodeproj -scheme SwiftOpenWork build
 ```
+
+**The test host is the real app on your real data.** `xcodebuild test` launches SwiftOpenWork.app
+against `~/Library/Application Support/SwiftOpenWork`. Anything started at launch must check
+`AutomationScheduler.isHostedByTests`. To smoke-test a build without firing startup automations,
+launch the binary directly with `XCTestBundlePath=/dev/null` in its environment.
 
 **CI cancels superseded runs** (`cancel-in-progress: true`), which hides per-commit verification if
 you are bisecting.
@@ -729,10 +1338,19 @@ The model library on this machine is `/Volumes/Models/Models` (13 loadable bundl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 437 tests
+$SWIFT test                    # 741 tests, 2 skipped outside the app host
 xcodegen generate              # after adding files — the .xcodeproj is tracked
-xcodebuild -project OpenWorkSwift.xcodeproj -scheme OpenWorkSwift build   # App Intents metadata
+xcodebuild -project SwiftOpenWork.xcodeproj -scheme SwiftOpenWork build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list
+```
+
+The fifth pass ran the suite through Xcode rather than SwiftPM, because several of its tests are
+`@MainActor` and touch AppKit:
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcodebuild -scheme SwiftOpenWork -destination 'platform=macOS,arch=arm64' \
+  CODE_SIGN_IDENTITY="-" CODE_SIGNING_ALLOWED=YES test
 ```
 
 That last one is a script rather than a test because it asks a remote host what exists, and CI

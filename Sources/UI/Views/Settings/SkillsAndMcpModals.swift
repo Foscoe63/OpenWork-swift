@@ -31,7 +31,7 @@ public struct AddSkillModalView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(16)
 
@@ -135,7 +135,7 @@ public struct AddSkillModalView: View {
                     .stroke(isSelected ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.border(for: appState.settings.theme).opacity(0.7), lineWidth: 1)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hitTestable)
     }
 
     // Manual Form
@@ -186,7 +186,7 @@ public struct AddSkillModalView: View {
             TextField("Leave blank to auto-detect from URL", text: $name)
                 .textFieldStyle(.roundedBorder)
 
-            Text("OpenWork will fetch the remote markdown file and convert it into an active agent skill.")
+            Text("SwiftOpenWork will fetch the remote markdown file and convert it into an active agent skill.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
         }
@@ -347,7 +347,7 @@ public struct McpServerEditModalView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(16)
 
@@ -557,7 +557,7 @@ public struct McpServerEditModalView: View {
                                     .foregroundColor(.red)
                                     .font(.system(size: 11))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.hitTestable)
                         }
                         .padding(6)
                         .background(ThemeColors.cardBg(for: appState.settings.theme))
@@ -633,7 +633,7 @@ public struct SkillDetailModalView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(16)
 

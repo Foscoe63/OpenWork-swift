@@ -62,7 +62,7 @@ public struct SubAgentExecutionCardView: View {
                 )
                 .cornerRadius(6)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hitTestable)
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 4) {

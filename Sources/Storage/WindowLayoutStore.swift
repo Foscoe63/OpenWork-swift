@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Persists main-window chrome: nav destination, inspector, split widths, and window frame.
 public enum WindowLayoutStore {
-    private static let prefix = "openwork.windowLayout.v1."
+    private static let prefix = "swiftopenwork.windowLayout.v1."
 
     private enum Key {
         static let navigation = prefix + "navigation"
@@ -25,7 +25,8 @@ public enum WindowLayoutStore {
     public static let minSidebarWidth: Double = 200
     public static let maxSidebarWidth: Double = 450
     public static let minInspectorWidth: Double = 260
-    public static let maxInspectorWidth: Double = 650
+    /// Wide enough for the editor and the web preview to be worth using side by side with the chat.
+    public static let maxInspectorWidth: Double = 1100
     public static let minWindowWidth: CGFloat = 920
     public static let minWindowHeight: CGFloat = 620
 
@@ -47,14 +48,20 @@ public enum WindowLayoutStore {
 
     public static var inspectorTab: InspectorTab {
         get {
-            let raw = UserDefaults.standard.string(forKey: Key.inspectorTab) ?? InspectorTab.subagents.rawValue
-            return InspectorTab(rawValue: raw) ?? .subagents
+            let raw = UserDefaults.standard.string(forKey: Key.inspectorTab) ?? InspectorTab.tools.rawValue
+            return InspectorTab(rawValue: raw) ?? .tools
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.inspectorTab) }
     }
 
+    static let removedSettingsTabs: Set<String> = ["cloud", "connect"]
+
     public static var settingsTab: String {
-        get { UserDefaults.standard.string(forKey: Key.settingsTab) ?? "general" }
+        get {
+            let stored = UserDefaults.standard.string(forKey: Key.settingsTab) ?? "general"
+            // Pages that were removed. Restoring onto one would highlight nothing in the sidebar.
+            return removedSettingsTabs.contains(stored) ? "general" : stored
+        }
         set { UserDefaults.standard.set(newValue, forKey: Key.settingsTab) }
     }
 
@@ -147,7 +154,7 @@ public enum WindowLayoutStore {
         NSScreen.screens.first { $0.frame.intersects(frame) }
     }
 
-    public static let mainWindowAutosaveName = "OpenWorkMainWindow"
+    public static let mainWindowAutosaveName = "SwiftOpenWorkMainWindow"
 
     private static var didObserve = false
 

@@ -68,7 +68,7 @@ public struct LocalModelsView: View {
     @State private var typeFilter: LocalModelTypeFilter = .all
     @State private var showingImportModal: Bool = false
     @State private var importRepoId: String = ""
-    @State private var showingFolderPicker: Bool = false
+    @State private var showingSearchRoots: Bool = false
 
     public init(appState: AppState) {
         self.appState = appState
@@ -187,7 +187,7 @@ public struct LocalModelsView: View {
                                     .stroke(Color.orange.opacity(0.45), lineWidth: 1)
                             )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                         .help("Free Metal/RAM used by in-process MLX models so you can load a different one")
                     }
 
@@ -217,7 +217,7 @@ public struct LocalModelsView: View {
                                 .stroke(Color(hex: "#2E2C44"), lineWidth: 1)
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .disabled(appState.isScanningMLX)
 
                     // 🤗 Import Button
@@ -240,7 +240,7 @@ public struct LocalModelsView: View {
                                 .stroke(Color(hex: "#2E2C44"), lineWidth: 1)
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                 }
             }
 
@@ -305,7 +305,7 @@ public struct LocalModelsView: View {
             )
             .shadow(color: isSelected ? Color(hex: "#A855F7").opacity(0.4) : Color.clear, radius: 4)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hitTestable)
     }
 
     // MARK: - System Hardware Status Bar
@@ -415,7 +415,7 @@ public struct LocalModelsView: View {
                             .font(.system(size: 12))
                             .foregroundColor(Color.white.opacity(0.45))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                 }
             }
             .padding(.horizontal, 10)
@@ -464,6 +464,34 @@ public struct LocalModelsView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+
+            // Where the scan looked. This lived only under Settings › Debug behind developer mode,
+            // while this view is where someone whose models are missing actually looks.
+            Button {
+                showingSearchRoots = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 11))
+                    Text("Folders")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color(hex: "#151422"))
+                .foregroundColor(Color.white.opacity(0.85))
+                .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(hex: "#28263C"), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.hitTestable)
+            .fixedSize()
+            .help("Show every folder scanned for model weights")
+            .popover(isPresented: $showingSearchRoots, arrowEdge: .bottom) {
+                SearchRootsPopover(appState: appState)
+            }
 
             // Filter Menu
             Menu {
@@ -558,7 +586,7 @@ public struct LocalModelsView: View {
                 .font(.system(size: 16, weight: .bold))
                 .foregroundColor(.white)
 
-            Text(selectedTab == .onDevice ? "Switch to the Catalog tab to download Apple Silicon MLX models or import existing folders." : "Try adjusting your search query or filter options.")
+            Text(selectedTab == .onDevice ? "Switch to the Catalog tab to download Apple Silicon MLX models, or use Folders above to point at a library you already have." : "Try adjusting your search query or filter options.")
                 .font(.system(size: 12))
                 .foregroundColor(Color.white.opacity(0.6))
                 .multilineTextAlignment(.center)
@@ -828,7 +856,7 @@ public struct LocalModelCardView: View {
                                 .foregroundColor(Color.orange)
                                 .cornerRadius(5)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.hitTestable)
                             .help("Unload this model from Metal/RAM")
                         }
 
@@ -851,7 +879,7 @@ public struct LocalModelCardView: View {
                                 .background(Color.red.opacity(0.12))
                                 .cornerRadius(5)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                     } else {
                         Button {
                             appState.pullMLXModel(model)
@@ -944,5 +972,74 @@ public struct LocalModelCardView: View {
         } else {
             return [Color(hex: "#06B6D4"), Color(hex: "#4338CA")]
         }
+    }
+}
+
+/// Every folder the model scan looks in, with a way to add one.
+private struct SearchRootsPopover: View {
+    @ObservedObject var appState: AppState
+    @State private var searchRoots: [URL] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Folders scanned for models")
+                .font(.system(size: 13, weight: .semibold))
+            Text("Only folders that exist are listed. A model elsewhere will not be found until its folder is added.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ForEach(searchRoots, id: \.self) { root in
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    Text(root.path)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    Button("Reveal") {
+                        NSWorkspace.shared.activateFileViewerSelecting([root])
+                    }
+                    .controlSize(.small)
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Button("Add Models Folder…") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseFiles = false
+                    panel.canChooseDirectories = true
+                    panel.prompt = "Use Folder"
+                    if panel.runModal() == .OK, let url = panel.url {
+                        appState.settings.customMLXModelsDirectory = url.path
+                        appState.updateSettings(appState.settings)
+                        appState.rescanMLXModels()
+                        reload()
+                    }
+                }
+                .help("Sets the custom models directory, replacing any previous one")
+                Spacer()
+                Button("Rescan") {
+                    appState.rescanMLXModels()
+                }
+                .disabled(appState.isScanningMLX)
+            }
+            .controlSize(.small)
+        }
+        .padding(14)
+        .frame(width: 460)
+        // Read when the popover opens, not when the button is pressed: popover content is hosted
+        // in its own window and did not see state the button set in the same action, so the
+        // list rendered empty.
+        .onAppear { reload() }
+    }
+
+    private func reload() {
+        searchRoots = LocalMLXEngine.knownMLXSearchRoots(settings: appState.settings)
     }
 }

@@ -52,6 +52,9 @@ public enum NavigationDestination: String, CaseIterable, Identifiable {
 }
 
 public enum InspectorTab: String, CaseIterable, Identifiable {
+    /// First, because reading and fixing what the agent wrote is the loop the rest supports.
+    case editor = "editor"
+    case preview = "preview"
     case subagents = "subagents"
     case comms = "comms"
     case artifacts = "artifacts"
@@ -62,6 +65,8 @@ public enum InspectorTab: String, CaseIterable, Identifiable {
 
     public var title: String {
         switch self {
+        case .editor: return "Editor"
+        case .preview: return "Preview"
         case .subagents: return "Sub-Agent Tree"
         // "Agent Messages" was the only title wide enough to need shrinking in the tab bar,
         // which made it the smallest text in a row of equal-width tabs.
@@ -74,12 +79,44 @@ public enum InspectorTab: String, CaseIterable, Identifiable {
 
     public var icon: String {
         switch self {
+        case .editor: return "chevron.left.forwardslash.chevron.right"
+        case .preview: return "safari"
         case .subagents: return "point.3.connected.trianglepath.dotted"
         case .comms: return "bubble.left.and.exclamationmark.bubble.right.fill"
         case .artifacts: return "doc.text.fill"
         case .tools: return "wrench.and.screwdriver.fill"
         case .terminal: return "terminal.fill"
         }
+    }
+}
+
+/// An agent run in progress that the chat window did not start.
+public struct BackgroundRun: Equatable, Sendable, Identifiable {
+    public var sessionId: String
+    public var title: String
+    public var id: String { sessionId }
+
+    public init(sessionId: String, title: String) {
+        self.sessionId = sessionId
+        self.title = title
+    }
+
+    /// The header's status line. Pure, for tests.
+    public static func statusLine(chatIsGenerating: Bool, runs: [BackgroundRun]) -> String {
+        let chat = chatIsGenerating ? "Agent executing..." : "Agent ready"
+        guard let first = runs.first else { return chat }
+        let others = runs.count > 1 ? " +\(runs.count - 1) more" : ""
+        return "\(chat) · “\(first.title)”\(others) running in background"
+    }
+}
+
+public struct QueuedComposerMessage: Equatable, Sendable {
+    public var text: String
+    public var attachments: [MessageAttachment]
+
+    public init(text: String, attachments: [MessageAttachment] = []) {
+        self.text = text
+        self.attachments = attachments
     }
 }
 
@@ -129,7 +166,7 @@ public final class AppState: ObservableObject {
             // inspector on a tab that is no longer in the tab bar. Corrected here rather than in
             // the view, so nothing publishes a change during a view update.
             if !settings.showInterAgentCommunicationLogs, inspectorTab == .comms {
-                inspectorTab = .subagents
+                inspectorTab = .tools
             }
         }
     }
@@ -141,11 +178,32 @@ public final class AppState: ObservableObject {
     @Published public var loadedMLXModelIds: [String] = []
 
     // MARK: - Runtime
-    @Published public var isGenerating: Bool = false
+    @Published public var isGenerating: Bool = false {
+        // The turn may have rewritten files open in the editor. The poll would notice within a
+        // second and a half; checking now means the tab is current the moment the reply lands.
+        didSet { if oldValue && !isGenerating { EditorWorkspace.shared.checkAllAgainstDisk() } }
+    }
+    /// A width the inspector should grow to, set when something opens that needs room (the editor
+    /// or the preview in a narrow inspector). MainView consumes and clears it.
+    @Published public var inspectorWidthRequest: Double?
+    /// Agent runs with no window driving them — automations, Shortcuts, Siri — in start order.
+    /// `isGenerating` describes only the chat turn on screen.
+    @Published public var backgroundRuns: [BackgroundRun] = []
     @Published public var composerText: String = ""
+    /// Follow-up typed while a turn is running — sent automatically when the turn finishes.
+    @Published public var queuedFollowUp: QueuedComposerMessage?
+    /// Set by tool cards when the user wants the turn-change sheet; ChatView observes it.
+    @Published public var presentTurnChangeReview: Bool = false
+    /// Messages in the current session whose turn can be rewound. Held as a set so the transcript
+    /// can decorate every row without an actor hop per message.
+    @Published public var restorableMessageIds: Set<String> = []
+    /// A restore the user has asked for but not yet confirmed. Nothing is written until they do.
+    @Published public var pendingRestore: PendingRestore?
     @Published public var selectedAgentId: String = "lead-assistant"
     @Published public var selectedProviderId: String = "builtin-mlx-local"
     @Published public var selectedModelId: String = "llama3:latest"
+    /// When the current turn began, so a finished one can say how long it took.
+    private var turnStartedAt: Date?
     @Published public var isReasoningEnabled: Bool = true
     @Published public var pullModelProgress: Double = 0.0
     @Published public var pullModelStatusText: String = ""
@@ -156,7 +214,10 @@ public final class AppState: ObservableObject {
     private let persistence = PersistenceManager.shared
 
     public init() {
+        // Before anything reads preferences or the Keychain: 1.1 stored them under another name.
+        LegacyIdentityMigration.runIfNeeded()
         loadAll()
+        recoverInterruptedAutomationRuns()
         mlxLoadedObserver = NotificationCenter.default.addObserver(
             forName: .mlxLoadedModelsDidChange,
             object: nil,
@@ -495,6 +556,10 @@ public final class AppState: ObservableObject {
         activeSubAgentTasks.removeAll()
         persistence.saveSessions(sessions)
         navigationDestination = .chat
+
+        // `.onSessionCreated` automations fire here. `HeadlessAgentTurn` builds its session
+        // directly rather than calling this method, so an automation cannot trigger itself.
+        AutomationScheduler.shared.sessionWasCreated()
     }
 
     /// Branch the current session at `messageId` into a new one, and switch to it.
@@ -524,6 +589,7 @@ public final class AppState: ObservableObject {
 
     public func selectSession(_ session: Session) {
         currentSessionId = session.id
+        refreshRestorePoints()
         selectedAgentId = session.agentId
         if !session.providerId.isEmpty { selectedProviderId = session.providerId }
         if !session.modelId.isEmpty { selectedModelId = session.modelId }
@@ -572,6 +638,93 @@ public final class AppState: ObservableObject {
             currentSessionId = sessions.first?.id
         }
         persistence.saveSessions(sessions)
+        // Snapshots of a transcript nobody can open are just disk use.
+        let id = session.id
+        Task { await SessionCheckpointStore.shared.deleteAll(forSession: id) }
+        refreshRestorePoints()
+    }
+
+    // MARK: - Restore points
+
+    /// A restore the user has been shown but not yet agreed to.
+    public struct PendingRestore: Identifiable, Sendable {
+        public var id: String { checkpointId }
+        public var checkpointId: String
+        public var messageId: String
+        public var label: String
+        public var plan: SessionCheckpointStore.RestorePlan
+    }
+
+    public func refreshRestorePoints() {
+        guard let id = currentSessionId else {
+            restorableMessageIds = []
+            return
+        }
+        Task { @MainActor in
+            let ids = await SessionCheckpointStore.shared.restorableMessageIds(forSession: id)
+            // The session can change while the actor call is in flight.
+            if self.currentSessionId == id { self.restorableMessageIds = ids }
+        }
+    }
+
+    /// Work out what rewinding to a message would do, and show it. Writes nothing.
+    public func prepareRestore(toMessageId messageId: String) {
+        guard let sessionId = currentSessionId else { return }
+        Task { @MainActor in
+            guard let checkpoint = await SessionCheckpointStore.shared.checkpoint(
+                forSession: sessionId, messageId: messageId
+            ) else {
+                self.showToast("No file snapshot was kept for that turn")
+                return
+            }
+            let plan = await SessionCheckpointStore.shared.plan(
+                sessionId: sessionId, checkpointId: checkpoint.id
+            )
+            guard !plan.isEmpty else {
+                self.showToast("Nothing to restore — those turns changed no files")
+                return
+            }
+            self.pendingRestore = PendingRestore(
+                checkpointId: checkpoint.id,
+                messageId: messageId,
+                label: checkpoint.label,
+                plan: plan
+            )
+        }
+    }
+
+    public func cancelPendingRestore() {
+        pendingRestore = nil
+    }
+
+    public func confirmPendingRestore() {
+        guard let pending = pendingRestore, let sessionId = currentSessionId else { return }
+        pendingRestore = nil
+        Task { @MainActor in
+            let outcome = await SessionCheckpointStore.shared.restore(
+                sessionId: sessionId, checkpointId: pending.checkpointId
+            )
+            self.refreshRestorePoints()
+            self.showToast(Self.describeRestore(outcome))
+        }
+    }
+
+    /// Say what actually happened, including what could not be put back. A restore that quietly
+    /// skipped a file would leave the user believing in a state their disk is not in.
+    static func describeRestore(_ outcome: SessionCheckpointStore.RestoreOutcome) -> String {
+        var parts: [String] = []
+        let changed = outcome.restored.count + outcome.deleted.count
+        parts.append("Restored \(changed) file(s) across \(outcome.turnsUndone) turn(s)")
+        if !outcome.deleted.isEmpty {
+            parts.append("\(outcome.deleted.count) created file(s) removed")
+        }
+        if !outcome.unrecoverable.isEmpty {
+            parts.append("\(outcome.unrecoverable.count) could not be snapshotted and were left alone")
+        }
+        if !outcome.failed.isEmpty {
+            parts.append("\(outcome.failed.count) failed to write")
+        }
+        return parts.joined(separator: " · ")
     }
 
     public func togglePinSession(_ session: Session) {
@@ -628,7 +781,7 @@ public final class AppState: ObservableObject {
                 switch format {
                 case .markdown:
                     var md = "# \(session.title)\n\n"
-                    md += "*Exported from OpenWork-Swift on \(Date().formatted())*\n\n---\n\n"
+                    md += "*Exported from SwiftOpenWork on \(Date().formatted())*\n\n---\n\n"
                     for m in session.messages {
                         let sender = m.role == .user ? "**User**" : "**\(m.agentName ?? "Agent")** (\(m.modelId ?? "LLM"))"
                         md += "### \(sender) - \(m.timestamp.formatted())\n\n"
@@ -682,7 +835,7 @@ public final class AppState: ObservableObject {
                     </head>
                     <body>
                     <h1>\(session.title)</h1>
-                    <p style="color: #64748b; font-size: 0.9em;">Exported from OpenWork-Swift on \(Date().formatted())</p>
+                    <p style="color: #64748b; font-size: 0.9em;">Exported from SwiftOpenWork on \(Date().formatted())</p>
                     <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;">
                     """
                     for m in session.messages {
@@ -712,12 +865,33 @@ public final class AppState: ObservableObject {
     }
 
     // MARK: - Chat & Execution
-    public func sendMessage(text: String, attachments: [MessageAttachment] = []) {
+    /// Send a chat turn.
+    ///
+    /// `onFinished` reports whether the turn actually ran. It exists because callers that record
+    /// an outcome cannot otherwise tell: this method returns immediately, and returns *early*
+    /// when a turn is already generating. "Run now" on an automation used to write
+    /// `lastStatus = "Completed"` on the line after calling this, so a run rejected by the
+    /// `isGenerating` guard was filed as a success without a single token being generated.
+    public func sendMessage(
+        text: String,
+        attachments: [MessageAttachment] = [],
+        onFinished: ((Bool) -> Void)? = nil
+    ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isGenerating else { return }
+        guard !trimmed.isEmpty else { onFinished?(false); return }
+
+        // Queue a follow-up instead of dropping the message when a turn is already running.
+        if isGenerating {
+            queuedFollowUp = QueuedComposerMessage(text: trimmed, attachments: attachments)
+            composerText = ""
+            showToast("Queued — sends when this turn finishes")
+            onFinished?(false)
+            return
+        }
+
         guard var session = currentSession else {
             createNewSession()
-            sendMessage(text: text, attachments: attachments)
+            sendMessage(text: text, attachments: attachments, onFinished: onFinished)
             return
         }
 
@@ -725,14 +899,21 @@ public final class AppState: ObservableObject {
         if trimmed.hasPrefix("/") {
             if handleSlashCommand(trimmed) {
                 composerText = ""
+                onFinished?(false)
                 return
             }
         }
 
+        let enriched = ComposerContextMentions.enrich(
+            text: trimmed,
+            workspacePath: currentWorkspace.folderPath
+        )
+        let modelContent = enriched.modelText
+
         let userMsg = ChatMessage(
             sessionId: session.id,
             role: .user,
-            content: trimmed,
+            content: modelContent,
             timestamp: Date(),
             attachments: attachments
         )
@@ -768,10 +949,13 @@ public final class AppState: ObservableObject {
                 sessions[idx] = session
             }
             persistence.saveSessions(sessions)
+            onFinished?(false)
+            flushQueuedFollowUp()
             return
         }
 
         isGenerating = true
+        turnStartedAt = Date()
 
         let agent = currentAgent
         let provider = currentProvider
@@ -830,17 +1014,53 @@ public final class AppState: ObservableObject {
                     if let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) {
                         self.sessions[sIdx].interAgentMessages.append(msg)
                     }
+                },
+                onSessionTodosUpdated: { [weak self] todos in
+                    guard let self = self else { return }
+                    self.updateSessionTodos(todos, sessionId: session.id)
                 }
+            )
+
+            // Seal the turn's baseline before anything can call beginTurn again. The in-memory
+            // window still dies with the next turn; this is the copy that outlives a relaunch.
+            await SessionCheckpointStore.sealCurrentTurn(
+                sessionId: session.id, messageId: userMsg.id, label: trimmed
             )
 
             await MainActor.run {
                 self.isGenerating = false
                 self.currentExecutionTask = nil
                 self.persistence.saveSessions(self.sessions)
+                onFinished?(true)
                 self.refreshLoadedMLXModels()
                 self.announceTurnFinished()
+                self.refreshRestorePoints()
+                self.flushQueuedFollowUp()
             }
         }
+    }
+
+
+    public func updateSessionTodos(_ todos: [SessionTodoItem], sessionId: String? = nil) {
+        let id = sessionId ?? currentSessionId
+        guard let id, let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[idx].todos = todos
+        persistence.saveSessions(sessions)
+    }
+
+    public func clearQueuedFollowUp() {
+        queuedFollowUp = nil
+    }
+
+    /// Stop deliberately keeps the queue, so the user needs an explicit way to release it.
+    public func sendQueuedFollowUpNow() {
+        flushQueuedFollowUp()
+    }
+
+    private func flushQueuedFollowUp() {
+        guard let queued = queuedFollowUp else { return }
+        queuedFollowUp = nil
+        sendMessage(text: queued.text, attachments: queued.attachments)
     }
 
     public func cancelCurrentGeneration() {
@@ -849,11 +1069,52 @@ public final class AppState: ObservableObject {
         isGenerating = false
         ToolApprovalManager.shared.rejectAllPending()
         UserChoiceManager.shared.cancelAll()
-        showToast("Generation cancelled")
+        // Keep any queued follow-up — auto-sending after Stop felt like Stop was ignored.
+        if queuedFollowUp != nil {
+            showToast("Stopped — queued message kept")
+        } else {
+            showToast("Generation cancelled")
+        }
     }
 
     public func continueAfterHalt() {
         sendMessage(text: "Continue from where you stopped. Do not repeat completed work.")
+    }
+
+    /// Jump to a `file:line` from a build or test failure.
+    ///
+    /// This used to reveal the file in Finder and paste an `@file:line` mention into the composer,
+    /// so the only way to look at the failing line was another app. It opens in the editor now; the
+    /// editor's @ button is there for when you do want to ask the agent about it.
+    public func revealDiagnostic(file: String, line: Int?) {
+        openInEditor(path: file, line: line)
+    }
+
+    /// Open a workspace file in the editor, at a 1-based line when given.
+    ///
+    /// Shows it where the user already is: Artifacts & Files has its own editor; anywhere else the
+    /// inspector opens on its Editor tab, widened when it is too narrow to read code in.
+    public func openInEditor(path: String, line: Int? = nil) {
+        do {
+            try EditorWorkspace.shared.open(path: path, line: line, workspaceRoot: currentWorkspace.folderPath)
+        } catch {
+            showToast(error.localizedDescription)
+            return
+        }
+        guard navigationDestination != .artifacts else { return }
+        if navigationDestination != .chat && navigationDestination != .tools {
+            navigationDestination = .chat
+        }
+        revealInspector(tab: .editor, minimumWidth: 560)
+    }
+
+    /// Open the inspector on `tab`, asking for at least `minimumWidth`.
+    public func revealInspector(tab: InspectorTab, minimumWidth: Double) {
+        inspectorTab = tab
+        isInspectorOpen = true
+        if WindowLayoutStore.inspectorWidth < minimumWidth {
+            inspectorWidthRequest = minimumWidth
+        }
     }
 
     private func handleSlashCommand(_ command: String) -> Bool {
@@ -866,6 +1127,7 @@ public final class AppState: ObservableObject {
                 session.messages.removeAll()
                 session.activeSubAgentTasks.removeAll()
                 session.interAgentMessages.removeAll()
+                session.todos.removeAll()
                 if let idx = sessions.firstIndex(where: { $0.id == session.id }) {
                     sessions[idx] = session
                 }
@@ -874,6 +1136,13 @@ public final class AppState: ObservableObject {
                 persistence.saveSessions(sessions)
                 showToast("Session cleared")
             }
+            return true
+
+        case "/plan":
+            settings.planModeEnabled.toggle()
+            showToast(settings.planModeEnabled
+                      ? "Plan mode on — writes blocked until exit_plan_mode"
+                      : "Plan mode off")
             return true
 
         case "/agent":
@@ -909,14 +1178,17 @@ public final class AppState: ObservableObject {
                     sessionId: session.id,
                     role: .assistant,
                     content: """
-                    ### OpenWork-Swift Available Slash Commands:
+                    ### SwiftOpenWork Available Slash Commands:
                     - `/agent <name>` - Switch current active agent or open Agents hub
                     - `/model <name>` - Switch active model provider or open Providers catalog
+                    - `/plan` - Toggle plan mode (read-only until exit_plan_mode)
                     - `/clear` - Clear messages in this session
                     - `/settings` - Jump to App Settings
                     - `/tools` - Inspect MCP & built-in tools
                     - `/memory` - Search or view long-term memory
                     - `/help` - Show this command reference
+
+                    Tip: type `@` then a path to attach file/folder context to your prompt.
                     """,
                     agentName: "System Help",
                     agentAvatar: "questionmark.circle.fill",
@@ -1448,7 +1720,7 @@ public final class AppState: ObservableObject {
 
     public func duplicateWorkspace(_ workspace: Workspace) {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let baseWs = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces")
+        let baseWs = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath)
         let cleanName = "\(workspace.name) (Copy)"
         let newFolderPath = (baseWs as NSString).appendingPathComponent(cleanName.replacingOccurrences(of: " ", with: "-"))
         
@@ -1469,7 +1741,7 @@ public final class AppState: ObservableObject {
 
     public func generateWorkspacesForAgents() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let baseWs = (home as NSString).appendingPathComponent("Documents/OpenWork/Workspaces")
+        let baseWs = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath)
         var createdCount = 0
 
         for agent in agents {
@@ -1693,15 +1965,94 @@ public final class AppState: ObservableObject {
         persistence.saveAutomations(automations)
     }
 
+    /// Record that a run has started. Status is "running", not "success".
+    ///
+    /// Every trigger used to record `succeeded: true` with "Started by…" at the start, to claim
+    /// `lastRunAt` so a crashing run cannot re-fire every tick. The claim is right; the status was
+    /// not. A run that never finished — the app quit, the process was a test host that exited in
+    /// a second — stayed "success" forever, and its session was a prompt with no reply. On this
+    /// machine that was 25 sessions, each one filed as a success.
+    public func recordAutomationRunStarted(id: String, summary: String, sessionId: String? = nil) {
+        guard let idx = automations.firstIndex(where: { $0.id == id }) else { return }
+        var updated = automations[idx]
+        updated.lastRunAt = Date()
+        updated.lastStatus = "running"
+        updated.lastResultSummary = summary
+        if let sessionId { updated.lastSessionId = sessionId }
+        automations[idx] = updated
+        persistence.saveAutomations(automations)
+    }
+
+    public func recordAutomationSession(id: String, sessionId: String) {
+        guard let idx = automations.firstIndex(where: { $0.id == id }) else { return }
+        automations[idx].lastSessionId = sessionId
+        persistence.saveAutomations(automations)
+    }
+
+    /// At launch nothing is running, so a run still marked "running" is one the app quit during.
+    /// Say so on the card and on its session, instead of leaving a prompt with no reply that
+    /// looks like a run which answered nothing.
+    ///
+    /// Launch only — `loadAll` is also called by Settings while a run may be in flight.
+    func recoverInterruptedAutomationRuns() {
+        let recovered = Self.recoveringInterruptedRuns(automations: automations, sessions: sessions)
+        if recovered.automations != automations {
+            automations = recovered.automations
+            persistence.saveAutomations(automations)
+        }
+        if recovered.sessions != sessions {
+            sessions = recovered.sessions
+            persistence.saveSessions(sessions)
+        }
+    }
+
+    /// Pure, so the rule is testable without the real data directory the test host runs on.
+    nonisolated static func recoveringInterruptedRuns(
+        automations: [Automation],
+        sessions: [Session]
+    ) -> (automations: [Automation], sessions: [Session]) {
+        var automations = automations
+        var sessions = sessions
+        for index in automations.indices where automations[index].lastStatus == "running" {
+            automations[index].lastStatus = "interrupted"
+            automations[index].lastResultSummary = "Did not finish: the app quit while this run was in progress."
+            if let sessionId = automations[index].lastSessionId,
+               let sIdx = sessions.firstIndex(where: { $0.id == sessionId }),
+               !sessions[sIdx].title.hasSuffix(interruptedTitleSuffix) {
+                sessions[sIdx].title += interruptedTitleSuffix
+            }
+        }
+        return (automations, sessions)
+    }
+
+    nonisolated static let interruptedTitleSuffix = " (interrupted)"
+
     /// Sound the end of a turn, if the user asked for it.
     ///
     /// The setting existed and nothing read it. Only when the app is in the background: a chime
     /// for something the user is already watching happen is noise, and the reason to want one is
     /// that a local model can take minutes.
     private func announceTurnFinished() {
+        let duration = turnStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        turnStartedAt = nil
+
         guard settings.playNotificationSounds else { return }
         guard !NSApplication.shared.isActive else { return }
         NSSound(named: "Glass")?.play()
+
+        // A chime says "something happened"; it cannot say which session, and it is gone the
+        // moment it ends. The banner is what survives ten minutes away from the desk.
+        let last = currentSession?.messages.last { $0.role == .assistant }
+        if let notice = TurnCompletionNotifier.notice(
+            enabled: settings.playNotificationSounds,
+            appIsActive: NSApplication.shared.isActive,
+            failed: last?.isError ?? false,
+            duration: duration,
+            sessionTitle: currentSession?.title ?? "",
+            summary: last?.content
+        ) {
+            TurnCompletionNotifier.post(notice)
+        }
     }
 
     // MARK: - Settings

@@ -69,7 +69,7 @@ public actor MCPSDKSession {
         let inputFD = FileDescriptor(rawValue: outPipe.fileHandleForReading.fileDescriptor)
         let outputFD = FileDescriptor(rawValue: inPipe.fileHandleForWriting.fileDescriptor)
         let transport = StdioTransport(input: inputFD, output: outputFD)
-        let client = Client(name: "OpenWorkSwift", version: "1.0.0")
+        let client = Client(name: "SwiftOpenWork", version: "1.0.0")
         do {
             _ = try await client.connect(transport: transport)
         } catch {

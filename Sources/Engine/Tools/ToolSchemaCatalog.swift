@@ -19,7 +19,7 @@ public enum ToolSchemaCatalog {
                 }
             }
             // Ensure Radiant-parity requiresApproval defaults for mutating tools
-            if ["file_write", "file_delete", "file_move", "file_copy", "edit_file", "file_edit", "multi_edit", "edit_file_multi"].contains(name),
+            if ["file_write", "file_delete", "file_move", "file_copy", "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol"].contains(name),
                !tools[i].requiresApproval {
                 tools[i].requiresApproval = true
                 changed = true
@@ -111,6 +111,39 @@ public enum ToolSchemaCatalog {
                 requiresApproval: true
             ),
             Tool(
+                id: "preview_start",
+                name: "preview_start",
+                displayName: "Start Preview",
+                description: "Run the web project's dev server (detected from package.json, a framework, or a static index.html — or pass `command`) and open it in the live preview. Waits until the server answers, then reports the page: HTTP status, console errors, failed requests, visible text, and a screenshot you can see. The server keeps running across turns; do NOT use terminal_command for dev servers, it kills them after two minutes. Pass `url` instead to attach to a server that is already running.",
+                category: .system,
+                parametersJsonSchema: schemas["preview_start"]!,
+                requiresApproval: true
+            ),
+            Tool(
+                id: "preview_check",
+                name: "preview_check",
+                displayName: "Check Preview",
+                description: "Reload the live preview (or open a local url / path on the running server) and report what the page actually did: HTTP status, console errors and uncaught exceptions, failed network requests, visible text, and a screenshot you can see. Use it after every change to a web UI — a build that passes can still render a blank page or throw on load.",
+                category: .mediaVision,
+                parametersJsonSchema: schemas["preview_check"]!
+            ),
+            Tool(
+                id: "preview_logs",
+                name: "preview_logs",
+                displayName: "Preview Logs",
+                description: "Read the dev server's output (compile errors, HMR failures, request logs) and the page's browser console, without reloading.",
+                category: .system,
+                parametersJsonSchema: schemas["preview_logs"]!
+            ),
+            Tool(
+                id: "preview_stop",
+                name: "preview_stop",
+                displayName: "Stop Preview Server",
+                description: "Stop the dev servers started with preview_start, and every process they started.",
+                category: .system,
+                parametersJsonSchema: schemas["preview_stop"]!
+            ),
+            Tool(
                 id: "edit_file",
                 name: "edit_file",
                 displayName: "Edit File",
@@ -143,6 +176,15 @@ public enum ToolSchemaCatalog {
                 description: "Find where a type, function, property or alias is declared, by name. Use this for \"where is X defined\" — it returns declarations only, not call sites. It is a declaration scan, not a compiler: finding nothing is not proof of absence, so fall back to grep.",
                 category: .files,
                 parametersJsonSchema: schemas["find_symbol"]!
+            ),
+            Tool(
+                id: "rename_symbol",
+                name: "rename_symbol",
+                displayName: "Rename Symbol",
+                description: "Rename a symbol across the workspace. In a Swift package it uses the compiler index, so only references to that declaration change; elsewhere it falls back to whole-word replacement and says so. Prefer dry_run=true first; pass path (and line) when find_symbol shows more than one declaration.",
+                category: .files,
+                parametersJsonSchema: schemas["rename_symbol"]!,
+                requiresApproval: true
             ),
             Tool(
                 id: "glob",
@@ -249,16 +291,22 @@ public enum ToolSchemaCatalog {
 
         // Isolation. A worktree is where an agent may commit, because history added on a branch
         // of its own cannot rewrite anything you wrote.
-        "worktree_create": #"{"type":"object","properties":{"name":{"type":"string","description":"Short name for the task being isolated, e.g. 'dark-mode-fix'. Becomes branch openwork/<name>."}},"required":["name"]}"#,
+        "worktree_create": #"{"type":"object","properties":{"name":{"type":"string","description":"Short name for the task being isolated, e.g. 'dark-mode-fix'. Becomes branch swiftopenwork/<name>."}},"required":["name"]}"#,
         "worktree_list": #"{"type":"object","properties":{}}"#,
         "worktree_remove": #"{"type":"object","properties":{"name":{"type":"string"},"force":{"type":"boolean","description":"Discard uncommitted changes. Refused without this if the worktree is dirty."}},"required":["name"]}"#,
         "git_commit": #"{"type":"object","properties":{"worktree_path":{"type":"string","description":"Absolute path of the agent worktree to commit in. Committing anywhere else is refused."},"message":{"type":"string","description":"Commit message."}},"required":["worktree_path","message"]}"#,
 
         // Perception. The agent could write a view and never look at it; these are the eyes.
-        "screenshot_window": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name, e.g. 'OpenWork' or 'ai.openwork.OpenWorkSwift'. The app must already be running - use run_app first."}},"required":["app"]}"#,
+        "screenshot_window": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name, e.g. 'SwiftOpenWork' or 'io.github.foscoe63.SwiftOpenWork'. The app must already be running - use run_app first."}},"required":["app"]}"#,
         "accessibility_tree": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name. The app must already be running."},"max_depth":{"type":"integer","description":"Tree depth budget, default 14."}},"required":["app"]}"#,
         "run_app": #"{"type":"object","properties":{"app_path":{"type":"string","description":"Path to the built .app bundle or executable."},"observe_seconds":{"type":"number","description":"How long to watch before reporting, 1-60. Default 8."},"keep_running":{"type":"boolean","description":"Leave the app running so accessibility_tree and screenshot_window can inspect it. Default true. Call quit_app when finished."},"arguments":{"type":"array","items":{"type":"string"},"description":"Launch arguments."}},"required":["app_path"]}"#,
         "quit_app": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name to quit."}},"required":["app"]}"#,
+
+        // Live preview. The web equivalent of run_app + screenshot_window.
+        "preview_start": #"{"type":"object","properties":{"command":{"type":"string","description":"Command that runs the dev server, e.g. 'npm run dev'. Omit to detect it from the project."},"url":{"type":"string","description":"Instead of starting anything, open a server that is already running, e.g. 'http://localhost:3000' or '3000'."},"new_tab":{"type":"boolean","description":"Open in a new preview tab even if the current one could be reused, e.g. to keep a frontend and an API docs page side by side. A second server always gets its own tab."}}}"#,
+        "preview_check": #"{"type":"object","properties":{"tab":{"type":"string","description":"Which preview tab to check: its number (1, 2, …) or text in its title or URL. Default: the active tab."},"path":{"type":"string","description":"Path on the running server to open, e.g. '/settings'. Omit to reload the current page."},"url":{"type":"string","description":"A full local URL to open instead."},"reload":{"type":"boolean","description":"Reload before checking. Default true."},"wait_seconds":{"type":"number","description":"Time to let the page settle after it loads, default 1.5. Raise it for pages that fetch data."},"viewport_width":{"type":"integer","description":"Lay the page out at this width, e.g. 390 for a phone. Default: the pane's width."},"screenshot":{"type":"boolean","description":"Attach a screenshot. Default true."}}}"#,
+        "preview_logs": #"{"type":"object","properties":{"lines":{"type":"integer","description":"Server log lines to return, default 80."},"clear_console":{"type":"boolean","description":"Clear the browser console after reading it."}}}"#,
+        "preview_stop": #"{"type":"object","properties":{}}"#,
 
         "file_read": #"{"type":"object","properties":{"path":{"type":"string","description":"File path"},"offset":{"type":"integer","description":"First line (1-indexed, optional)"},"limit":{"type":"integer","description":"Max lines (optional)"}},"required":["path"]}"#,
         "read_file": #"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}"#,
@@ -271,6 +319,7 @@ public enum ToolSchemaCatalog {
         "glob": #"{"type":"object","properties":{"pattern":{"type":"string","description":"Path glob, e.g. **/*.swift or Sources/**/Tool*.swift"},"path":{"type":"string","description":"Directory to search (default: workspace root)"},"limit":{"type":"integer","description":"Max paths (default 200)"}},"required":["pattern"]}"#,
         "build_project": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred build command"}},"required":[]}"#,
         "find_symbol": #"{"type":"object","properties":{"name":{"type":"string","description":"Symbol name to locate."},"path":{"type":"string","description":"Directory to search; defaults to the workspace."},"limit":{"type":"integer"}},"required":["name"]}"#,
+        "rename_symbol": #"{"type":"object","properties":{"old_name":{"type":"string"},"new_name":{"type":"string"},"path":{"type":"string","description":"File of the declaration to rename, when find_symbol shows more than one."},"line":{"type":"integer","description":"Line of the declaration, when one file declares the name more than once."},"mode":{"type":"string","enum":["auto","semantic","text"],"description":"auto (default): compiler rename in Swift packages, otherwise whole-word text replacement, and the result says which ran. semantic: compiler only, fail rather than fall back. text: whole-word replacement everywhere."},"dry_run":{"type":"boolean","description":"Report matches without writing."}},"required":["old_name","new_name"]}"#,
         "run_tests": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred test command"},"only_failing":{"type":"boolean","description":"Re-run only the tests that failed in the previous run. Falls back to the whole suite, and says so, when there is nothing recorded or the runner cannot be narrowed."}},"required":[]}"#,
         "git_status": #"{"type":"object","properties":{}}"#,
         "git_diff": #"{"type":"object","properties":{"path":{"type":"string","description":"Limit the diff to this path"},"staged":{"type":"boolean","description":"Show staged changes instead of the working tree"}},"required":[]}"#,
@@ -290,7 +339,6 @@ public enum ToolSchemaCatalog {
         "document_extract": #"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
         "workspace_semantic_search": #"{"type":"object","properties":{"query":{"type":"string","description":"Natural-language or keyword description of the code you are looking for"},"top_k":{"type":"integer"}},"required":["query"]}"#,
         "search_workspace": #"{"type":"object","properties":{"query":{"type":"string","description":"Natural-language or keyword description of the code you are looking for"},"top_k":{"type":"integer"}},"required":["query"]}"#,
-        "generate_image": #"{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]}"#,
         "mlx_vision_describe": #"{"type":"object","properties":{"path":{"type":"string"},"prompt":{"type":"string"}},"required":["path"]}"#,
         "image_analyze": #"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
         "agent_message": #"{"type":"object","properties":{"to_agent_id":{"type":"string"},"to_agent_name":{"type":"string"},"content":{"type":"string"},"message_type":{"type":"string"}},"required":["content"]}"#,

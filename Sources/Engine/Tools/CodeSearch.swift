@@ -211,12 +211,14 @@ public enum CodeSearch {
         let options: NSRegularExpression.Options = caseInsensitive ? [.caseInsensitive] : []
         let regex = try NSRegularExpression(pattern: pattern, options: options)
 
-        let candidates = include.map { glob(pattern: $0, root: root, limit: 5_000, fileManager: fileManager).paths }
-            ?? glob(pattern: "**", root: root, limit: 5_000, fileManager: fileManager).paths
+        let listing = glob(pattern: include ?? "**", root: root, limit: 5_000, fileManager: fileManager)
+        let candidates = listing.paths
 
         var matches: [Match] = []
         var filesSearched = 0
-        var truncated = false
+        // A capped file list is a partial search too. Without this, a workspace past the cap
+        // reported "no more matches" for files it never opened.
+        var truncated = listing.truncated
         // Same symlink resolution as `glob`, so the paths it returns can be reopened here.
         let rootPath = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
         let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"

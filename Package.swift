@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "OpenWorkSwift",
+    name: "SwiftOpenWork",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .executable(
-            name: "OpenWorkSwift",
-            targets: ["OpenWorkSwift"]
+            name: "SwiftOpenWork",
+            targets: ["SwiftOpenWork"]
         )
     ],
     dependencies: [
@@ -22,7 +22,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "OpenWorkSwift",
+            name: "SwiftOpenWork",
             dependencies: [
                 .product(name: "Yams", package: "yams"),
                 .product(name: "MCP", package: "swift-sdk"),
@@ -50,9 +50,9 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "OpenWorkSwiftTests",
+            name: "SwiftOpenWorkTests",
             dependencies: [
-                .target(name: "OpenWorkSwift")
+                .target(name: "SwiftOpenWork")
             ]
         )
     ]

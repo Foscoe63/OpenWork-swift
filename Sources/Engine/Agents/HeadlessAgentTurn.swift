@@ -39,12 +39,20 @@ public enum HeadlessAgentTurn {
     }
 
     /// Run `prompt` to completion and return what it said and what it could not do.
+    ///
+    /// `agentId` names the agent to run. It matters for automations: an automation stores a
+    /// `targetAgentId`, and running whichever agent the user last had selected in the window would
+    /// quietly execute a scheduled prompt against the wrong system prompt and the wrong tool
+    /// allowlist. An unknown or empty id falls back to the current agent, which is what a
+    /// Shortcut with no agent named should do.
     public static func run(
         prompt: String,
         title: String,
-        appState: AppState
+        appState: AppState,
+        agentId: String? = nil,
+        onSessionStarted: ((String) -> Void)? = nil
     ) async -> Result {
-        let agent = appState.currentAgent
+        let agent = appState.agents.first { $0.id == agentId } ?? appState.currentAgent
         let provider = appState.currentProvider
         let model = appState.currentModel
         let workspace = appState.currentWorkspace
@@ -71,9 +79,17 @@ public enum HeadlessAgentTurn {
         PersistenceManager.shared.saveSessions(appState.sessions)
 
         let sessionId = session.id
+        onSessionStarted?(sessionId)
         var reply = ""
 
+        // Visible in the chat header, and named on the local engine's queue. A run nobody started
+        // from the window used to leave the header reading "Agent ready" while it held the model,
+        // so a chat turn that then sat waiting looked like a hang.
+        appState.backgroundRuns.append(BackgroundRun(sessionId: sessionId, title: title))
+        defer { appState.backgroundRuns.removeAll { $0.sessionId == sessionId } }
+
         await ToolApprovalManager.shared.withUnattendedApprovals {
+            await LocalGenerationGate.$claimLabel.withValue("background run “\(title)”") {
             await AgentRunner.shared.run(
                 session: session,
                 agent: agent,
@@ -89,12 +105,23 @@ public enum HeadlessAgentTurn {
                     } else {
                         appState.sessions[sIdx].messages.append(updated)
                     }
+                    // Saved as it goes, as a chat turn is. This path saved only at the start and
+                    // the end, so a run the app quit during was left on disk as a prompt with no
+                    // reply, however much it had done.
+                    PersistenceManager.shared.saveSessions(appState.sessions)
                 },
                 onSubAgentTaskCreated: { _ in },
                 onSubAgentTaskUpdated: { _ in },
                 onInterAgentMessage: { _ in }
             )
+            }
         }
+
+        // An unattended run is the one nobody watched, so it is the one most worth being able
+        // to undo afterwards.
+        await SessionCheckpointStore.sealCurrentTurn(
+            sessionId: sessionId, messageId: userMsg.id, label: title
+        )
 
         let skipped = ToolApprovalManager.shared.refusedWhileUnattended.map {
             "\($0.toolName) — \($0.reason)"

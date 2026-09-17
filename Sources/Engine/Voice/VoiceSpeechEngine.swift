@@ -11,6 +11,8 @@ public final class VoiceSpeechEngine: NSObject, ObservableObject, AVSpeechSynthe
     @Published public var isSpeaking: Bool = false
     @Published public var transcript: String = ""
     @Published public var audioLevels: Float = 0.0
+    /// Why the last dictation attempt did not start, for the composer to show. Cleared on read.
+    @Published public var lastError: String?
 
     private var audioEngine = AVAudioEngine()
     private var speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -36,7 +38,10 @@ public final class VoiceSpeechEngine: NSObject, ObservableObject, AVSpeechSynthe
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             DispatchQueue.main.async {
                 guard status == .authorized else {
-                    print("[VoiceEngine] Speech recognition not authorized.")
+                    // Was a `print`, so a denied permission made the mic button do nothing at all.
+                    self?.lastError = status == .restricted
+                        ? "Speech recognition is restricted on this Mac."
+                        : "Dictation needs Speech Recognition access — allow SwiftOpenWork in System Settings › Privacy & Security."
                     return
                 }
                 self?.beginAudioCapture(onResult: onResult)
@@ -76,7 +81,7 @@ public final class VoiceSpeechEngine: NSObject, ObservableObject, AVSpeechSynthe
             try audioEngine.start()
             isRecording = true
         } catch {
-            print("[VoiceEngine] AudioEngine start failed: \(error.localizedDescription)")
+            lastError = "Could not start the microphone: \(error.localizedDescription)"
             stopRecording()
         }
     }

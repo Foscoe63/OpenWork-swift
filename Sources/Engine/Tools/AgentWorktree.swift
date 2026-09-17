@@ -48,11 +48,44 @@ public enum AgentWorktree {
     /// by the parent's own status, build, or file search.
     public static func container(for repoRoot: URL) -> URL {
         repoRoot.deletingLastPathComponent()
-            .appendingPathComponent(".openwork-worktrees/\(repoRoot.lastPathComponent)", isDirectory: true)
+            .appendingPathComponent("\(AppIdentity.worktreeContainerName)/\(repoRoot.lastPathComponent)", isDirectory: true)
     }
 
+    /// Where 1.1, before the rename, put them. Still listed, removable and committable.
+    static func legacyContainer(for repoRoot: URL) -> URL {
+        repoRoot.deletingLastPathComponent()
+            .appendingPathComponent("\(AppIdentity.legacyWorktreeContainerName)/\(repoRoot.lastPathComponent)", isDirectory: true)
+    }
+
+    /// Branches this app created, under either name.
+    static func isAgentBranch(_ branch: String) -> Bool {
+        branch.hasPrefix(AppIdentity.worktreeBranchPrefix) || branch.hasPrefix(AppIdentity.legacyWorktreeBranchPrefix)
+    }
+
+    /// Serial queue every git subprocess runs on.
+    ///
+    /// `Process.waitUntilExit()` spins the run loop when called on the main thread, so a git call
+    /// from a `@MainActor` context both freezes the UI for the length of the command and lets
+    /// unrelated main-thread work re-enter in the middle of it. Keeping the wait on this queue
+    /// means callers suspend instead of blocking. Serial, because parallel sub-agents otherwise
+    /// race each other for the repository's `index.lock`.
+    private static let gitQueue = DispatchQueue(label: AppIdentity.bundleIdentifier + ".agent-worktree.git")
+
+    /// Exposed so a test can assert the queue is not the main thread.
+    static var gitQueueForTesting: DispatchQueue { gitQueue }
+
     @discardableResult
-    public static func git(_ arguments: [String], in directory: URL) throws -> String {
+    public static func git(_ arguments: [String], in directory: URL) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            gitQueue.async {
+                continuation.resume(with: Result { try gitSync(arguments, in: directory) })
+            }
+        }
+    }
+
+    /// The blocking implementation. Only ever reached from `gitQueue`, never the main thread.
+    @discardableResult
+    static func gitSync(_ arguments: [String], in directory: URL) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + arguments
@@ -70,10 +103,10 @@ public enum AgentWorktree {
         return output
     }
 
-    public static func repositoryRoot(containing path: String) throws -> URL {
+    public static func repositoryRoot(containing path: String) async throws -> URL {
         let directory = URL(fileURLWithPath: path)
         do {
-            let out = try git(["rev-parse", "--show-toplevel"], in: directory)
+            let out = try await git(["rev-parse", "--show-toplevel"], in: directory)
             return URL(fileURLWithPath: out.trimmingCharacters(in: .whitespacesAndNewlines))
         } catch {
             throw WorktreeError.notARepository(path)
@@ -81,10 +114,10 @@ public enum AgentWorktree {
     }
 
     /// Create a worktree on a new branch. Returns the worktree directory.
-    public static func create(workspacePath: String, name: String) throws -> Info {
-        let root = try repositoryRoot(containing: workspacePath)
+    public static func create(workspacePath: String, name: String) async throws -> Info {
+        let root = try await repositoryRoot(containing: workspacePath)
         let slug = sanitize(name)
-        let branch = "openwork/\(slug)"
+        let branch = AppIdentity.worktreeBranchPrefix + slug
         let dir = container(for: root).appendingPathComponent(slug, isDirectory: true)
 
         try FileManager.default.createDirectory(
@@ -93,19 +126,19 @@ public enum AgentWorktree {
 
         if FileManager.default.fileExists(atPath: dir.path) {
             // Reuse rather than fail: re-running the same task should land in the same place.
-            let head = (try? git(["rev-parse", "--short", "HEAD"], in: dir)) ?? ""
+            let head = (try? await git(["rev-parse", "--short", "HEAD"], in: dir)) ?? ""
             return Info(path: dir.path, branch: branch, head: head.trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
         // `-B` so an abandoned branch from a previous run is reset rather than colliding.
-        try git(["worktree", "add", "-B", branch, dir.path], in: root)
-        let head = try git(["rev-parse", "--short", "HEAD"], in: dir)
+        try await git(["worktree", "add", "-B", branch, dir.path], in: root)
+        let head = try await git(["rev-parse", "--short", "HEAD"], in: dir)
         return Info(path: dir.path, branch: branch, head: head.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    public static func list(workspacePath: String) throws -> [Info] {
-        let root = try repositoryRoot(containing: workspacePath)
-        let output = try git(["worktree", "list", "--porcelain"], in: root)
+    public static func list(workspacePath: String) async throws -> [Info] {
+        let root = try await repositoryRoot(containing: workspacePath)
+        let output = try await git(["worktree", "list", "--porcelain"], in: root)
         var result: [Info] = []
         var path = "", branch = "", head = ""
         for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -113,26 +146,29 @@ public enum AgentWorktree {
             else if line.hasPrefix("HEAD ") { head = String(line.dropFirst(5)).prefix(7).description }
             else if line.hasPrefix("branch ") { branch = String(line.dropFirst(7)).replacingOccurrences(of: "refs/heads/", with: "") }
             else if line.isEmpty, !path.isEmpty {
-                if branch.hasPrefix("openwork/") { result.append(Info(path: path, branch: branch, head: head)) }
+                if isAgentBranch(branch) { result.append(Info(path: path, branch: branch, head: head)) }
                 path = ""; branch = ""; head = ""
             }
         }
-        if !path.isEmpty, branch.hasPrefix("openwork/") {
+        if !path.isEmpty, isAgentBranch(branch) {
             result.append(Info(path: path, branch: branch, head: head))
         }
         return result
     }
 
-    public static func remove(workspacePath: String, name: String, force: Bool) throws -> String {
-        let root = try repositoryRoot(containing: workspacePath)
+    public static func remove(workspacePath: String, name: String, force: Bool) async throws -> String {
+        let root = try await repositoryRoot(containing: workspacePath)
         let slug = sanitize(name)
-        let dir = container(for: root).appendingPathComponent(slug, isDirectory: true)
-        guard FileManager.default.fileExists(atPath: dir.path) else {
+        let current = container(for: root).appendingPathComponent(slug, isDirectory: true)
+        let legacy = legacyContainer(for: root).appendingPathComponent(slug, isDirectory: true)
+        guard let dir = [current, legacy].first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
             return "No worktree named '\(slug)'."
         }
+        let branchName = (try? await git(["rev-parse", "--abbrev-ref", "HEAD"], in: dir))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? AppIdentity.worktreeBranchPrefix + slug
         // Refuse to discard uncommitted work unless told twice: the worktree is where the agent's
         // output lives, and removing it is the one irreversible thing here.
-        let dirty = try git(["status", "--porcelain"], in: dir).trimmingCharacters(in: .whitespacesAndNewlines)
+        let dirty = try await git(["status", "--porcelain"], in: dir).trimmingCharacters(in: .whitespacesAndNewlines)
         if !dirty.isEmpty && !force {
             throw WorktreeError.gitFailed("""
             '\(slug)' has uncommitted changes:
@@ -140,43 +176,44 @@ public enum AgentWorktree {
             Commit them, or pass force: true to discard them permanently.
             """)
         }
-        try git(["worktree", "remove", force ? "--force" : "--", force ? dir.path : dir.path], in: root)
-        return "Removed worktree '\(slug)'. Its branch openwork/\(slug) still exists — delete it with git if you do not want it."
+        try await git(["worktree", "remove", force ? "--force" : "--", dir.path], in: root)
+        return "Removed worktree '\(slug)'. Its branch \(branchName) still exists — delete it with git if you do not want it."
     }
 
     /// Whether `path` is inside a worktree this type created.
-    public static func isAgentWorktree(_ path: String) -> Bool {
-        guard let root = try? repositoryRoot(containing: path) else { return false }
-        guard let branch = try? git(["rev-parse", "--abbrev-ref", "HEAD"], in: URL(fileURLWithPath: path)) else {
+    public static func isAgentWorktree(_ path: String) async -> Bool {
+        guard let root = try? await repositoryRoot(containing: path) else { return false }
+        guard let branch = try? await git(["rev-parse", "--abbrev-ref", "HEAD"], in: URL(fileURLWithPath: path)) else {
             return false
         }
         // Both halves must hold: the branch is ours *and* this is not the primary checkout.
-        let isOurBranch = branch.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("openwork/")
+        let isOurBranch = isAgentBranch(branch.trimmingCharacters(in: .whitespacesAndNewlines))
+        let commonDir = try? await git(["rev-parse", "--git-common-dir"], in: URL(fileURLWithPath: path))
         let isLinkedWorktree = root.path != URL(fileURLWithPath: path).path
-            || (try? git(["rev-parse", "--git-common-dir"], in: URL(fileURLWithPath: path)))
+            || commonDir
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(".git") && $0.contains("/") } ?? false
         return isOurBranch && isLinkedWorktree
     }
 
     /// Commit everything in an agent worktree. Refuses anywhere else.
-    public static func commit(worktreePath: String, message: String) throws -> String {
-        guard isAgentWorktree(worktreePath) else {
+    public static func commit(worktreePath: String, message: String) async throws -> String {
+        guard await isAgentWorktree(worktreePath) else {
             throw WorktreeError.notAWorktree(worktreePath)
         }
         let dir = URL(fileURLWithPath: worktreePath)
-        let dirty = try git(["status", "--porcelain"], in: dir).trimmingCharacters(in: .whitespacesAndNewlines)
+        let dirty = try await git(["status", "--porcelain"], in: dir).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !dirty.isEmpty else { throw WorktreeError.nothingToCommit }
 
-        try git(["add", "-A"], in: dir)
+        try await git(["add", "-A"], in: dir)
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        try git(["commit", "-m", trimmed.isEmpty ? "Agent checkpoint" : trimmed], in: dir)
-        let head = try git(["rev-parse", "--short", "HEAD"], in: dir).trimmingCharacters(in: .whitespacesAndNewlines)
-        let stat = try git(["show", "--stat", "--format=%s", "HEAD"], in: dir)
-        return "Committed \(head) on \(try branchName(in: dir)):\n\(stat)"
+        try await git(["commit", "-m", trimmed.isEmpty ? "Agent checkpoint" : trimmed], in: dir)
+        let head = try await git(["rev-parse", "--short", "HEAD"], in: dir).trimmingCharacters(in: .whitespacesAndNewlines)
+        let stat = try await git(["show", "--stat", "--format=%s", "HEAD"], in: dir)
+        return "Committed \(head) on \(try await branchName(in: dir)):\n\(stat)"
     }
 
-    static func branchName(in directory: URL) throws -> String {
-        try git(["rev-parse", "--abbrev-ref", "HEAD"], in: directory)
+    static func branchName(in directory: URL) async throws -> String {
+        try await git(["rev-parse", "--abbrev-ref", "HEAD"], in: directory)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

@@ -3,12 +3,19 @@ import AppKit
 
 public struct ArtifactsView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var editors = EditorWorkspace.shared
     @State private var files: [String] = []
     @State private var selectedFileName: String? = nil
-    @State private var fileContent: String = ""
-    /// What the selected file actually is. Anything other than `.text` means the editor is
-    /// showing a placeholder, and saving must be refused.
+    /// What the selected file actually is. Anything other than `.text` is shown as a notice, never
+    /// opened in the editor, so nothing can save a placeholder over a binary file.
     @State private var selectedContent: WorkspaceFileScanner.Content = .text("")
+    @State private var rightPaneMode: RightPaneMode = .editor
+
+    private enum RightPaneMode: String, CaseIterable, Identifiable {
+        case editor = "Editor"
+        case canvas = "Live Canvas"
+        var id: String { rawValue }
+    }
     @State private var newFileName: String = ""
     @State private var showingNewFileSheet: Bool = false
 
@@ -182,22 +189,22 @@ public struct ArtifactsView: View {
                     Spacer()
 
                     if selectedFileName != nil {
+                        if selectedContent.isEditable {
+                            Picker("", selection: $rightPaneMode) {
+                                ForEach(RightPaneMode.allCases) { mode in
+                                    Text(mode.rawValue).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 180)
+                        }
+
                         Button("Reveal in Finder") {
                             guard let sel = selectedFileName else { return }
                             let path = (appState.currentWorkspace.folderPath as NSString).appendingPathComponent(sel)
                             NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: appState.currentWorkspace.folderPath)
                         }
                         .font(.system(size: 11))
-
-                        Button("Save Changes") {
-                            saveCurrentFile()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(!selectedContent.isEditable)
-                        .help(selectedContent.isEditable
-                              ? "Write the editor contents back to disk"
-                              : "This file is not editable text")
                     }
                 }
                 .padding(12)
@@ -207,21 +214,17 @@ public struct ArtifactsView: View {
 
                 if let sel = selectedFileName {
                     if selectedContent.isEditable {
-                        TabView {
-                            // Tab 1: Live Interactive Canvas
-                            LiveArtifactWorkbenchView(appState: appState, fileName: sel, content: fileContent)
-                                .tabItem {
-                                    Label("Live Canvas", systemImage: "sparkles.tv")
-                                }
-
-                            // Tab 2: Raw Code Editor
-                            TextEditor(text: $fileContent)
-                                .font(.system(size: 12, design: .monospaced))
-                                .padding(12)
-                                .background(ThemeColors.bg(for: appState.settings.theme))
-                                .tabItem {
-                                    Label("Source Editor", systemImage: "doc.text")
-                                }
+                        switch rightPaneMode {
+                        case .editor:
+                            // The same editor as the chat inspector: highlighting, undo, unsaved
+                            // marks, and a banner when the agent rewrites the file you have open.
+                            EditorPane(appState: appState, showsTabs: false)
+                        case .canvas:
+                            LiveArtifactWorkbenchView(
+                                appState: appState,
+                                fileName: sel,
+                                content: editors.activeDocument?.text ?? ""
+                            )
                         }
                     } else {
                         unopenableFileNotice(selectedContent)
@@ -268,8 +271,16 @@ public struct ArtifactsView: View {
 
     private func loadFiles() {
         files = WorkspaceFileScanner.listFiles(at: appState.currentWorkspace.folderPath)
-        if selectedFileName == nil, let first = files.first {
-            selectFile(first)
+        selectActiveEditorFileIfListed()
+    }
+
+    /// Show what is already open in the editor rather than opening a tab for whichever file sorts
+    /// first — visiting this page used to put `.gitignore` in front of you.
+    private func selectActiveEditorFileIfListed() {
+        guard selectedFileName == nil, let active = editors.activeDocument else { return }
+        let relative = EditorWorkspace.relativePath(active.path, root: appState.currentWorkspace.folderPath)
+        if files.contains(relative) {
+            selectFile(relative)
         }
     }
 
@@ -295,14 +306,12 @@ public struct ArtifactsView: View {
             guard root == appState.currentWorkspace.folderPath, found != files else { continue }
             files = found
             if let selected = selectedFileName, !files.contains(selected) {
-                // The selected file was deleted or moved underneath us.
+                // Deleted or moved underneath us. An open editor tab keeps its text and says the
+                // file is gone, so unsaved work is not lost with the listing entry.
                 selectedFileName = nil
-                fileContent = ""
                 selectedContent = .text("")
             }
-            if selectedFileName == nil, let first = files.first {
-                selectFile(first)
-            }
+            selectActiveEditorFileIfListed()
         }
     }
 
@@ -310,29 +319,17 @@ public struct ArtifactsView: View {
         selectedFileName = name
         let fullPath = (appState.currentWorkspace.folderPath as NSString).appendingPathComponent(name)
         let content = WorkspaceFileScanner.read(path: fullPath)
-        selectedContent = content
-        // The editor is only ever handed real text. It used to be handed the error message,
-        // which Save Changes then wrote over the file.
-        if case .text(let body) = content {
-            fileContent = body
-        } else {
-            fileContent = ""
-        }
-    }
-
-    private func saveCurrentFile() {
-        guard let name = selectedFileName else { return }
-        guard selectedContent.isEditable else {
-            appState.showToast("\(name) is not a text file — not saved")
+        // Only real text reaches the editor. It used to be handed the error message for a binary
+        // file, which Save Changes then wrote over the file.
+        guard case .text = content else {
+            selectedContent = content
             return
         }
-        let fullPath = (appState.currentWorkspace.folderPath as NSString).appendingPathComponent(name)
         do {
-            try fileContent.write(toFile: fullPath, atomically: true, encoding: .utf8)
-            selectedContent = .text(fileContent)
-            appState.showToast("Saved \(name)")
+            try editors.open(path: fullPath, workspaceRoot: appState.currentWorkspace.folderPath)
+            selectedContent = content
         } catch {
-            appState.showToast("Error saving: \(error.localizedDescription)")
+            selectedContent = .unreadable(reason: error.localizedDescription)
         }
     }
 

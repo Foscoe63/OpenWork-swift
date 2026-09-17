@@ -110,7 +110,7 @@ public struct TurnChangeReviewView: View {
                         )
                         .cornerRadius(5)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .contextMenu {
                         Button("Revert this file", role: .destructive) {
                             Task { await revert(change) }
@@ -131,8 +131,11 @@ public struct TurnChangeReviewView: View {
                 // A created file diffs against nothing; a deleted one against nothing after.
                 originalText: change.before ?? "",
                 modifiedText: change.after ?? "",
-                onAccept: {},
-                onReject: { Task { await revert(change) } }
+                // The agent already wrote this file. There is nothing left to apply, so the only
+                // real action is putting it back — "Apply & Save Changes" here did nothing at all.
+                onAccept: nil,
+                onReject: { Task { await revert(change) } },
+                rejectTitle: "Revert This File"
             )
         } else {
             Color.clear

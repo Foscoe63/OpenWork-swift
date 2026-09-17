@@ -4,7 +4,6 @@ import AppKit
 public struct AutomationsView: View {
     @ObservedObject var appState: AppState
     @State private var showingAddModal = false
-    @State private var showingVisualBuilder = false
     @State private var editingAutomation: Automation? = nil
     @State private var historyAutomation: Automation? = nil
 
@@ -75,9 +74,6 @@ public struct AutomationsView: View {
                 historyAutomation = nil
             }
         }
-        .sheet(isPresented: $showingVisualBuilder) {
-            VisualAgentFlowBuilderView(appState: appState, isPresented: $showingVisualBuilder)
-        }
     }
 
     private var headerBar: some View {
@@ -114,14 +110,6 @@ public struct AutomationsView: View {
             }
             .buttonStyle(.bordered)
             .clipShape(Circle())
-
-            Button {
-                showingVisualBuilder = true
-            } label: {
-                Label("Visual Flow", systemImage: "point.3.filled.connected.trianglepath.dotted")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.bordered)
 
             Button {
                 showingAddModal = true
@@ -162,15 +150,29 @@ public struct AutomationsView: View {
         .padding(.vertical, 60)
     }
 
+    /// "Run now". Interactive on purpose — the user is right there, so approvals can be granted
+    /// rather than refused, which is the one thing the headless path cannot do.
+    ///
+    /// The outcome is recorded when the turn ends, not when it starts, and through
+    /// `recordAutomationRun` like every other trigger. This used to write "Completed" on the line
+    /// after `sendMessage`, which reported success before a token was generated — and reported it
+    /// even when `sendMessage` returned early because another turn was already running.
     private func runAutomation(_ auto: Automation) {
-        appState.showToast("Triggered: \(auto.name)")
+        guard !appState.isGenerating else {
+            appState.showToast("Busy — finish the current turn first")
+            return
+        }
+        appState.showToast("Running: \(auto.name)")
         appState.createNewSession(agentId: auto.targetAgentId)
-        appState.sendMessage(text: auto.promptTemplate)
-        if let idx = appState.automations.firstIndex(where: { $0.id == auto.id }) {
-            appState.automations[idx].lastRunAt = Date()
-            appState.automations[idx].lastStatus = "Completed"
-            appState.automations[idx].updatedAt = Date()
-            PersistenceManager.shared.saveAutomations(appState.automations)
+        appState.recordAutomationRunStarted(
+            id: auto.id, summary: "Started from Run now…", sessionId: appState.currentSessionId
+        )
+        appState.sendMessage(text: auto.promptTemplate) { ran in
+            appState.recordAutomationRun(
+                id: auto.id,
+                succeeded: ran,
+                summary: ran ? "Ran from Run now." : "Run now did not start — a turn was already in flight."
+            )
         }
     }
 
@@ -179,12 +181,14 @@ public struct AutomationsView: View {
         appState.automations[idx].isEnabled = enabled
         appState.automations[idx].updatedAt = Date()
         PersistenceManager.shared.saveAutomations(appState.automations)
+        AutomationScheduler.shared.automationsChanged()
         appState.showToast(enabled ? "Schedule resumed" : "Schedule paused")
     }
 
     private func deleteAutomation(_ auto: Automation) {
         appState.automations.removeAll(where: { $0.id == auto.id })
         PersistenceManager.shared.saveAutomations(appState.automations)
+        AutomationScheduler.shared.automationsChanged()
         appState.showToast("Schedule deleted")
     }
 
@@ -244,7 +248,8 @@ private struct AutomationCardView: View {
 
     private var lastError: String? {
         if let status = automation.lastStatus?.lowercased(),
-           status.contains("error") || status.contains("fail") || status.contains("cannot") {
+           status.contains("error") || status.contains("fail") || status.contains("cannot")
+            || status.contains("interrupted") {
             return automation.lastResultSummary ?? automation.lastStatus
         }
         if let summary = automation.lastResultSummary,
@@ -519,6 +524,7 @@ private struct AutomationCardView: View {
     private func statusIcon(for status: String) -> String {
         let lower = status.lowercased()
         if lower.contains("fail") || lower.contains("error") { return "xmark.circle" }
+        if lower.contains("interrupted") { return "exclamationmark.circle" }
         if lower.contains("run") { return "arrow.triangle.2.circlepath" }
         return "checkmark.circle"
     }
@@ -544,6 +550,12 @@ private struct AutomationCardView: View {
 
 // MARK: - Next-run helpers
 
+/// What the card says about when this automation runs next.
+///
+/// Every string here comes from `AutomationSchedule`, which is the same code `AutomationScheduler`
+/// uses to decide what to fire. That is the whole design: this screen used to compute its own
+/// next-run text from a display heuristic that echoed unparseable schedules back as if they were
+/// times, above a scheduler that did not exist. A card may not promise a run the app will not make.
 private struct AutomationSchedulePreview {
     let description: String
     let icon: String
@@ -551,108 +563,43 @@ private struct AutomationSchedulePreview {
 
     static func make(from automation: Automation) -> AutomationSchedulePreview {
         if !automation.isEnabled {
-            return AutomationSchedulePreview(
-                description: "Paused",
-                icon: "pause.circle",
-                color: .orange
-            )
+            return AutomationSchedulePreview(description: "Paused", icon: "pause.circle", color: .orange)
         }
-        if automation.triggerType == .manual {
+        switch automation.triggerType {
+        case .manual:
+            return AutomationSchedulePreview(description: "Manual only", icon: "hand.tap", color: .secondary)
+        case .onStartup:
+            return AutomationSchedulePreview(description: "Next app launch", icon: "bolt.fill", color: .secondary)
+        case .onSessionCreated:
+            return AutomationSchedulePreview(description: "Next new session", icon: "plus.message.fill", color: .secondary)
+        case .fileWatch:
+            guard let path = automation.watchPath, !path.isEmpty else {
+                return AutomationSchedulePreview(
+                    description: "No folder chosen — will not run",
+                    icon: "exclamationmark.triangle",
+                    color: .orange
+                )
+            }
             return AutomationSchedulePreview(
-                description: "Manual only",
-                icon: "hand.tap",
+                description: "On changes in \((path as NSString).lastPathComponent)",
+                icon: "eye.circle",
                 color: .secondary
             )
+        case .scheduled:
+            let preview = AutomationSchedule.describeNextRun(
+                schedule: automation.cronSchedule,
+                after: automation.lastRunAt ?? automation.createdAt
+            )
+            return AutomationSchedulePreview(
+                description: preview.text,
+                icon: preview.willRun ? "clock" : "exclamationmark.triangle",
+                color: preview.willRun ? Color(red: 0.55, green: 0.35, blue: 0.95) : .orange
+            )
         }
-        let next = nextRunDescription(for: automation.cronSchedule)
-        return AutomationSchedulePreview(
-            description: next,
-            icon: "clock",
-            color: Color(red: 0.55, green: 0.35, blue: 0.95)
-        )
     }
 
     static func shortFrequency(_ schedule: String) -> String {
-        let lower = schedule.lowercased()
-        if lower.contains("daily") { return "Daily" }
-        if lower.contains("weekly") { return "Weekly" }
-        if lower.contains("hourly") || lower.contains("hour") { return "Hourly" }
-        if lower.contains("month") { return "Monthly" }
-        if lower.contains("minute") { return "Minutes" }
-        if lower.contains("cron") { return "Cron" }
-        if schedule.isEmpty { return "Manual" }
-        return String(schedule.prefix(12))
-    }
-
-    static func nextRunDescription(for schedule: String) -> String {
-        let lower = schedule.lowercased()
-        let calendar = Calendar.current
-        let now = Date()
-
-        if let time = extractTime(from: schedule), lower.contains("daily") {
-            var components = calendar.dateComponents([.year, .month, .day], from: now)
-            components.hour = time.hour
-            components.minute = time.minute
-            guard var candidate = calendar.date(from: components) else {
-                return schedule
-            }
-            if candidate <= now {
-                candidate = calendar.date(byAdding: .day, value: 1, to: candidate) ?? candidate
-            }
-            if calendar.isDateInTomorrow(candidate) {
-                return "Tomorrow at \(formatTime(time.hour, time.minute))"
-            }
-            if calendar.isDateInToday(candidate) {
-                return "Today at \(formatTime(time.hour, time.minute))"
-            }
-            let formatter = DateFormatter()
-            formatter.dateFormat = "EEE 'at' h:mm a"
-            return formatter.string(from: candidate)
-        }
-
-        if lower.contains("hourly") || lower.contains("every hour") {
-            return "Within the next hour"
-        }
-        if lower.contains("every") && lower.contains("min") {
-            return "Soon (\(schedule))"
-        }
-        return schedule.isEmpty ? "Not scheduled" : schedule
-    }
-
-    private static func extractTime(from schedule: String) -> (hour: Int, minute: Int)? {
-        // Matches "6:00 AM", "18:30", "9am"
-        let pattern = #"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
-            return nil
-        }
-        let ns = schedule as NSString
-        guard let match = regex.firstMatch(in: schedule, options: [], range: NSRange(location: 0, length: ns.length)),
-              match.numberOfRanges >= 2 else {
-            return nil
-        }
-        var hour = Int(ns.substring(with: match.range(at: 1))) ?? 0
-        let minute: Int = {
-            if match.numberOfRanges > 2, match.range(at: 2).location != NSNotFound {
-                return Int(ns.substring(with: match.range(at: 2))) ?? 0
-            }
-            return 0
-        }()
-        if match.numberOfRanges > 3, match.range(at: 3).location != NSNotFound {
-            let meridiem = ns.substring(with: match.range(at: 3)).lowercased()
-            if meridiem == "pm", hour < 12 { hour += 12 }
-            if meridiem == "am", hour == 12 { hour = 0 }
-        }
-        return (hour, minute)
-    }
-
-    private static func formatTime(_ hour: Int, _ minute: Int) -> String {
-        var comps = DateComponents()
-        comps.hour = hour
-        comps.minute = minute
-        let date = Calendar.current.date(from: comps) ?? Date()
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: date)
+        AutomationSchedule.shortFrequency(schedule)
     }
 }
 
@@ -672,6 +619,7 @@ public struct AutomationEditorSheet: View {
     @State private var description: String = ""
     @State private var triggerType: AutomationTriggerType = .scheduled
     @State private var schedule: String = "Daily at 9:00 AM"
+    @State private var watchPath: String = ""
     @State private var targetAgentId: String = "lead-assistant"
     @State private var promptTemplate: String = "Scan workspace files and provide a status update."
     @State private var isEnabled: Bool = true
@@ -689,7 +637,7 @@ public struct AutomationEditorSheet: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(16)
 
@@ -723,14 +671,56 @@ public struct AutomationEditorSheet: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Frequency / Schedule")
-                            .font(.system(size: 11.5, weight: .semibold))
-                        TextField("e.g. Daily at 6:00 AM", text: $schedule)
-                            .textFieldStyle(.roundedBorder)
-                        Text("Examples: Daily at 6:00 AM · Every 2 hours · Weekly on Monday")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
+                    if triggerType == .scheduled {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Frequency / Schedule")
+                                .font(.system(size: 11.5, weight: .semibold))
+                            TextField("e.g. Daily at 6:00 AM", text: $schedule)
+                                .textFieldStyle(.roundedBorder)
+                            // Validated live against the parser the scheduler uses, so an
+                            // unrecognised schedule is caught here rather than silently never
+                            // firing after the sheet closes.
+                            if AutomationSchedule.parse(schedule) == nil {
+                                Label(
+                                    "Not a schedule this app can run — it will never fire.",
+                                    systemImage: "exclamationmark.triangle.fill"
+                                )
+                                .font(.system(size: 10))
+                                .foregroundColor(.orange)
+                            } else {
+                                Text("Next run: \(AutomationSchedule.describeNextRun(schedule: schedule, after: Date()).text)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                            Text("Daily at 6:00 AM · Every 2 hours · Weekly on Monday · 0 9 * * 1-5")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    if triggerType == .fileWatch {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Watched Folder")
+                                .font(.system(size: 11.5, weight: .semibold))
+                            HStack(spacing: 8) {
+                                TextField("Choose a folder to watch", text: $watchPath)
+                                    .textFieldStyle(.roundedBorder)
+                                Button("Choose…") { chooseWatchFolder() }
+                                    .buttonStyle(.bordered)
+                            }
+                            if watchPath.trimmingCharacters(in: .whitespaces).isEmpty {
+                                Label(
+                                    "No folder chosen — this automation will never fire.",
+                                    systemImage: "exclamationmark.triangle.fill"
+                                )
+                                .font(.system(size: 10))
+                                .foregroundColor(.orange)
+                            } else {
+                                Text("Runs a few seconds after changes settle, not per keystroke.")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                     }
 
                     sectionLabel("Agent")
@@ -822,6 +812,7 @@ public struct AutomationEditorSheet: View {
             description = auto.description
             triggerType = auto.triggerType
             schedule = auto.cronSchedule
+            watchPath = auto.watchPath ?? ""
             targetAgentId = auto.targetAgentId
             promptTemplate = auto.promptTemplate
             isEnabled = auto.isEnabled
@@ -840,6 +831,7 @@ public struct AutomationEditorSheet: View {
                 description: description,
                 triggerType: triggerType,
                 cronSchedule: schedule,
+                watchPath: watchPath.isEmpty ? nil : watchPath,
                 targetAgentId: targetAgentId,
                 promptTemplate: promptTemplate,
                 isEnabled: isEnabled
@@ -853,6 +845,7 @@ public struct AutomationEditorSheet: View {
             appState.automations[idx].description = description
             appState.automations[idx].triggerType = triggerType
             appState.automations[idx].cronSchedule = schedule
+            appState.automations[idx].watchPath = watchPath.isEmpty ? nil : watchPath
             appState.automations[idx].targetAgentId = targetAgentId
             appState.automations[idx].promptTemplate = promptTemplate
             appState.automations[idx].isEnabled = isEnabled
@@ -861,7 +854,21 @@ public struct AutomationEditorSheet: View {
             appState.showToast("Schedule '\(trimmed)' updated")
         }
 
+        // File watches are held open against the saved list, so an edit that changes a path or
+        // switches a trigger has to rebuild them or the old watch keeps firing.
+        AutomationScheduler.shared.automationsChanged()
         isPresented = false
+    }
+
+    private func chooseWatchFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Watch"
+        if panel.runModal() == .OK, let url = panel.url {
+            watchPath = url.path
+        }
     }
 }
 
@@ -897,7 +904,7 @@ private struct AutomationHistorySheet: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             .padding(16)
 

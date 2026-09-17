@@ -101,6 +101,7 @@ public final class WatchFolderEngine: ObservableObject {
         """
 
         let subAccumulator = SubAgentAccumulator()
+        var failureReason: String?
 
         do {
             try await ProviderRouter.shared.stream(
@@ -122,34 +123,52 @@ public final class WatchFolderEngine: ObservableObject {
                 }
             }
         } catch {
-            subAccumulator.append("""
-            # 📋 \(item.name) - Generated Artifact
-            *Execution Timestamp: \(Date().formatted())*
-
-            ### 📁 Monitored Target
-            `\(path)`
-
-            ### 📑 Scanned Files:
-            - \(fileListSnippet)
-
-            ### 💡 Automated Assessment
-            All monitored items verified. No syntax regressions or permission errors detected.
-            """)
+            // Say the run failed. This used to write "All monitored items verified. No syntax
+            // regressions or permission errors detected." into the artifact whenever the provider
+            // threw — a finding nothing had checked, filed under the agent's name, in the place
+            // the user goes to read what the agent found. A fabricated clean bill of health is
+            // worse than an empty one.
+            failureReason = error.localizedDescription
         }
 
-        let synthesizedContent = subAccumulator.text.isEmpty ? """
-        # 📋 \(item.name) - Generated Artifact
-        *Execution Timestamp: \(Date().formatted())*
+        let generated = subAccumulator.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let synthesizedContent: String
+        if let failureReason {
+            synthesizedContent = """
+            # ⚠️ \(item.name) — run failed
+            *\(Date().formatted())*
 
-        ### 📁 Monitored Target
-        `\(path)`
+            The agent could not produce this artifact.
 
-        ### 📑 Scanned Files:
-        - \(fileListSnippet)
-        """ : subAccumulator.text
+            **Reason:** \(failureReason)
+
+            ### Monitored target
+            `\(path)`
+
+            ### Files that would have been examined
+            - \(fileListSnippet)
+            """
+        } else if generated.isEmpty {
+            synthesizedContent = """
+            # ⚠️ \(item.name) — no content produced
+            *\(Date().formatted())*
+
+            The model returned nothing for this run. Nothing was analysed.
+
+            ### Monitored target
+            `\(path)`
+
+            ### Files that would have been examined
+            - \(fileListSnippet)
+            """
+        } else {
+            synthesizedContent = generated
+        }
 
         let title = "\(item.name) - \(Date().formatted(date: .abbreviated, time: .shortened))"
-        let subtitle = "\(item.artifactTemplate.displayName) via \(agent.name)"
+        let subtitle = failureReason == nil
+            ? "\(item.artifactTemplate.displayName) via \(agent.name)"
+            : "Failed — \(agent.name) could not complete this run"
 
         // Determine category
         let category: ArtifactCategory

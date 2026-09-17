@@ -48,6 +48,16 @@ public struct MessageBubbleView: View {
                 Label("Fork Conversation From Here", systemImage: "arrow.triangle.branch")
             }
         }
+
+        // Forking branches the transcript and leaves the disk alone; this is the other half.
+        if canRestoreHere {
+            if !canForkHere { Divider() }
+            Button {
+                appState.prepareRestore(toMessageId: message.id)
+            } label: {
+                Label("Restore Files to Before This Turn…", systemImage: "clock.arrow.circlepath")
+            }
+        }
     }
 
     /// What "Copy Message" should actually put on the pasteboard.
@@ -61,6 +71,11 @@ public struct MessageBubbleView: View {
             return reasoning
         }
         return message.content
+    }
+
+    /// Only turns that actually wrote something have a snapshot to go back to.
+    private var canRestoreHere: Bool {
+        appState.restorableMessageIds.contains(message.id)
     }
 
     /// Forking at the last message would copy the session rather than branch it.
@@ -142,7 +157,7 @@ public struct MessageBubbleView: View {
             VStack(alignment: .leading, spacing: 8) {
                 // Header (Agent Name & Model Pill)
                 HStack(spacing: 8) {
-                    Text(message.agentName ?? "OpenWork Agent")
+                    Text(message.agentName ?? "SwiftOpenWork Agent")
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
 
@@ -160,6 +175,13 @@ public struct MessageBubbleView: View {
                         .font(.system(size: 10))
                         .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.6))
 
+                    if let speed = MessageBubbleView.speedLabel(message) {
+                        Text(speed)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.6))
+                            .help("Decode speed measured by the model engine for this reply")
+                    }
+
                     Spacer()
 
                     // Speak Text (TTS) Action. Gated on the Settings toggle, which was stored
@@ -172,7 +194,7 @@ public struct MessageBubbleView: View {
                                 .font(.system(size: 11))
                                 .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.hitTestable)
                         .help("Read Aloud (macOS Speech Synthesizer)")
                     }
 
@@ -186,7 +208,7 @@ public struct MessageBubbleView: View {
                             .font(.system(size: 11))
                             .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hitTestable)
                     .help("Copy Message")
                 }
 
@@ -271,7 +293,12 @@ public struct MessageBubbleView: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(.orange)
                         ForEach(pendingApprovals) { toolCall in
-                            ToolCallCardView(toolCall: toolCall, preferExpanded: true)
+                            ToolCallCardView(
+                                toolCall: toolCall,
+                                preferExpanded: true,
+                                appState: appState,
+                                onReviewTurn: { appState.presentTurnChangeReview = true }
+                            )
                         }
                     }
                     .padding(10)
@@ -295,7 +322,11 @@ public struct MessageBubbleView: View {
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(calls) { toolCall in
-                        ToolCallCardView(toolCall: toolCall)
+                        ToolCallCardView(
+                            toolCall: toolCall,
+                            appState: appState,
+                            onReviewTurn: { appState.presentTurnChangeReview = true }
+                        )
                     }
                 }
             } label: {
@@ -311,7 +342,11 @@ public struct MessageBubbleView: View {
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(calls) { toolCall in
-                    ToolCallCardView(toolCall: toolCall)
+                    ToolCallCardView(
+                        toolCall: toolCall,
+                        appState: appState,
+                        onReviewTurn: { appState.presentTurnChangeReview = true }
+                    )
                 }
             }
         }
@@ -334,5 +369,16 @@ private struct FlowNoticeChipsView: View {
                     .cornerRadius(10)
             }
         }
+    }
+}
+
+extension MessageBubbleView {
+    /// "38 tok/s" for a reply whose provider measured its speed; nothing while streaming or when
+    /// no measurement exists, so an estimate never passes for one.
+    static func speedLabel(_ message: ChatMessage) -> String? {
+        guard !message.isStreaming,
+              let speed = message.generationTokensPerSecond,
+              speed.isFinite, speed > 0 else { return nil }
+        return speed >= 10 ? "\(Int(speed.rounded())) tok/s" : String(format: "%.1f tok/s", speed)
     }
 }

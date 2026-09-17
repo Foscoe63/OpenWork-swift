@@ -8,7 +8,7 @@ import os
 /// eleven `print` calls in the codebase are all error-level and unconditional.
 ///
 /// Verbose output goes to the unified log rather than stdout, so it survives a crash, can be read
-/// with `log stream --predicate 'subsystem == "ai.openwork"'` while the app runs, and does not
+/// with `log stream --predicate 'subsystem == "io.github.foscoe63.SwiftOpenWork"'` while the app runs, and does not
 /// interleave with test output. The setting is cached rather than read per line: this is called
 /// once per streamed chunk, and `loadSettings()` is two file reads.
 public enum AppLog {
@@ -20,7 +20,7 @@ public enum AppLog {
         case models = "models"
     }
 
-    private static let subsystem = "ai.openwork"
+    private static let subsystem = AppIdentity.logSubsystem
     private static let lock = NSLock()
     private static var cachedVerbose: Bool?
 
