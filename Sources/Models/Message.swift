@@ -53,6 +53,8 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var isError: Bool
     public var promptTokens: Int
     public var completionTokens: Int
+    /// Measured decode speed of the reply, when the provider reports one.
+    public var generationTokensPerSecond: Double?
     /// Durable harness notices (compaction, tools-unsupported) — Radiant `notice` parts.
     public var notices: [String]
     /// Durable halt reason when a turn was stopped by budget / stuck breaker / round cap.
@@ -113,7 +115,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         case id, sessionId, role, content, reasoning, thinkingTimeMs
         case agentId, agentName, agentAvatar, agentColor, modelId, providerId
         case timestamp, toolCalls, subAgentTasks, attachments
-        case isStreaming, isError, promptTokens, completionTokens
+        case isStreaming, isError, promptTokens, completionTokens, generationTokensPerSecond
         case notices, haltReason, haltText
     }
 
@@ -138,6 +140,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.isStreaming = try container.decodeIfPresent(Bool.self, forKey: .isStreaming) ?? false
         self.isError = try container.decodeIfPresent(Bool.self, forKey: .isError) ?? false
         self.promptTokens = try container.decodeIfPresent(Int.self, forKey: .promptTokens) ?? 0
+        self.generationTokensPerSecond = try container.decodeIfPresent(Double.self, forKey: .generationTokensPerSecond)
         self.completionTokens = try container.decodeIfPresent(Int.self, forKey: .completionTokens) ?? 0
         self.notices = try container.decodeIfPresent([String].self, forKey: .notices) ?? []
         self.haltReason = try container.decodeIfPresent(String.self, forKey: .haltReason)
@@ -166,6 +169,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         try container.encode(isError, forKey: .isError)
         try container.encode(promptTokens, forKey: .promptTokens)
         try container.encode(completionTokens, forKey: .completionTokens)
+        try container.encodeIfPresent(generationTokensPerSecond, forKey: .generationTokensPerSecond)
         try container.encode(notices, forKey: .notices)
         try container.encodeIfPresent(haltReason, forKey: .haltReason)
         try container.encodeIfPresent(haltText, forKey: .haltText)

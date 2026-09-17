@@ -191,6 +191,12 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var theme: AppTheme
     public var accentColor: AccentColorChoice
     public var editorFontSize: Int
+    /// Ghost-text suggestions in the code editor while you type.
+    public var inlineSuggestionsEnabled: Bool
+    /// The provider and model that write them. Empty means automatic: the chat model, but only
+    /// when it runs on this Mac — code is sent to a cloud model only when one is chosen here.
+    public var inlineSuggestionProviderId: String
+    public var inlineSuggestionModelId: String
     public var useTranslucentBackground: Bool
     public var compactSidebar: Bool
 
@@ -327,6 +333,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         theme: AppTheme = .dark,
         accentColor: AccentColorChoice = .purple,
         editorFontSize: Int = 14,
+        inlineSuggestionsEnabled: Bool = true,
+        inlineSuggestionProviderId: String = "",
+        inlineSuggestionModelId: String = "",
         useTranslucentBackground: Bool = true,
         compactSidebar: Bool = false,
         allowSubAgentCreation: Bool = true,
@@ -398,6 +407,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.theme = theme
         self.accentColor = accentColor
         self.editorFontSize = editorFontSize
+        self.inlineSuggestionsEnabled = inlineSuggestionsEnabled
+        self.inlineSuggestionProviderId = inlineSuggestionProviderId
+        self.inlineSuggestionModelId = inlineSuggestionModelId
         self.useTranslucentBackground = useTranslucentBackground
         self.compactSidebar = compactSidebar
         self.allowSubAgentCreation = allowSubAgentCreation
@@ -463,6 +475,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? def.theme
         self.accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? def.accentColor
         self.editorFontSize = try container.decodeIfPresent(Int.self, forKey: .editorFontSize) ?? def.editorFontSize
+        self.inlineSuggestionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .inlineSuggestionsEnabled) ?? def.inlineSuggestionsEnabled
+        self.inlineSuggestionProviderId = try container.decodeIfPresent(String.self, forKey: .inlineSuggestionProviderId) ?? def.inlineSuggestionProviderId
+        self.inlineSuggestionModelId = try container.decodeIfPresent(String.self, forKey: .inlineSuggestionModelId) ?? def.inlineSuggestionModelId
         self.useTranslucentBackground = try container.decodeIfPresent(Bool.self, forKey: .useTranslucentBackground) ?? def.useTranslucentBackground
         self.compactSidebar = try container.decodeIfPresent(Bool.self, forKey: .compactSidebar) ?? def.compactSidebar
 

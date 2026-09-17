@@ -2159,6 +2159,23 @@ public struct SettingsView: View {
                     Stepper("", value: $appState.settings.editorFontSize, in: 10...22)
                 }
 
+                SettingsRow(title: "Inline AI Suggestions", subtitle: "Ghost text in the code editor when you pause typing. Tab accepts, Esc dismisses. The local model is used only when idle.", icon: "sparkles") {
+                    Toggle("", isOn: $appState.settings.inlineSuggestionsEnabled)
+                        .toggleStyle(.switch)
+                }
+
+                // Stored as settings.inlineSuggestionProviderId and settings.inlineSuggestionModelId.
+                SettingsRow(title: "Suggestion Model", subtitle: "Automatic uses your chat model only when it runs on this Mac. Code is sent to a cloud model only if you choose one here.", icon: "cpu") {
+                    Picker("", selection: SuggestionModelOption.binding(appState)) {
+                        Text("Automatic").tag(SuggestionModelOption.automatic)
+                        ForEach(SuggestionModelOption.options(from: appState.providers), id: \.self) { option in
+                            Text(option.label(in: appState.providers)).tag(option)
+                        }
+                    }
+                    .frame(width: 260)
+                    .disabled(!appState.settings.inlineSuggestionsEnabled)
+                }
+
                 SettingsRow(title: "Translucent Window Background", subtitle: "Show macOS vibrancy behind the sidebar and inspector", icon: "macwindow") {
                     Toggle("", isOn: $appState.settings.useTranslucentBackground)
                         .toggleStyle(.switch)

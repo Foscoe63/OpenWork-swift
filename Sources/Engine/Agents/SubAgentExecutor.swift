@@ -174,18 +174,22 @@ public enum SubAgentExecutor {
                 let box = ConcurrentTextBox()
                 let calls = ToolCallBox()
                 do {
-                    try await ProviderRouter.shared.stream(
-                        provider: provider,
-                        model: model,
-                        systemPrompt: systemPrompt,
-                        messages: messages,
-                        temperature: subAgent.temperature,
-                        maxTokens: subAgent.maxTokens,
-                        reasoningEffort: .off,
-                        tools: tools
-                    ) { chunk in
-                        if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
-                        if !chunk.toolCalls.isEmpty { calls.add(chunk.toolCalls) }
+                    // Named, so a turn queued behind this one on the local engine can say who
+                    // it is waiting for.
+                    try await LocalGenerationGate.$claimLabel.withValue("sub-agent \(subAgent.name)") {
+                        try await ProviderRouter.shared.stream(
+                            provider: provider,
+                            model: model,
+                            systemPrompt: systemPrompt,
+                            messages: messages,
+                            temperature: subAgent.temperature,
+                            maxTokens: subAgent.maxTokens,
+                            reasoningEffort: .off,
+                            tools: tools
+                        ) { chunk in
+                            if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
+                            if !chunk.toolCalls.isEmpty { calls.add(chunk.toolCalls) }
+                        }
                     }
                 } catch {
                     stoppedBecause = "the model call failed: \(error.localizedDescription)"

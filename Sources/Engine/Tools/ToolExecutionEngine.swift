@@ -1480,6 +1480,30 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 return Self.failure(error.localizedDescription, startTime)
             }
 
+        case "preview_start":
+            let hasCommand = !((dict["command"] as? String) ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+            if hasCommand || (dict["url"] as? String ?? "").isEmpty {
+                // It runs a shell command in the workspace, so it answers to the same rules as
+                // terminal_command: the folder must be allowed, and a read-only safety level
+                // cannot start a server.
+                if let denial = sandboxDenial(for: workspace.folderPath, workspace: workspace, settings: settings, startTime: startTime) {
+                    return denial
+                }
+                if settings.terminalSafetyLevel == .safeOnly, hasCommand {
+                    return Self.failure("Blocked by Terminal Safety Level (\"Allow Safe Read-Only Commands\"): starting a dev server runs a command that is not read-only. Switch to \"Always Ask\" or \"Unrestricted\" under Settings → Advanced.", startTime)
+                }
+            }
+            return await PreviewTools.start(arguments: dict, workspace: workspace, settings: settings, startTime: startTime)
+
+        case "preview_check":
+            return await PreviewTools.check(arguments: dict, workspace: workspace, startTime: startTime)
+
+        case "preview_logs":
+            return await PreviewTools.logs(arguments: dict, startTime: startTime)
+
+        case "preview_stop":
+            return await PreviewTools.stop(startTime: startTime)
+
         case "agent_spawn":
             // This used to build a `SubAgentTask` record, return "Spawned sub-agent […] to
             // execute task", and run nothing whatsoever. The task appeared in the Sub-Agent Tree

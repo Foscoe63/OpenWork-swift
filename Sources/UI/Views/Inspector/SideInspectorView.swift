@@ -17,6 +17,10 @@ public struct SideInspectorView: View {
 
             // Tab Content
             switch appState.inspectorTab {
+            case .editor:
+                EditorPane(appState: appState)
+            case .preview:
+                PreviewPane(appState: appState)
             case .subagents:
                 SubAgentTreeVisualizer(appState: appState)
             case .comms:
@@ -56,7 +60,12 @@ public struct SideInspectorView: View {
             ForEach(visibleTabs) { tab in
                 let isSelected = appState.inspectorTab == tab
                 Button {
-                    appState.inspectorTab = tab
+                    if tab == .editor || tab == .preview {
+                        // Code and web pages are unreadable at the inspector's narrow default.
+                        appState.revealInspector(tab: tab, minimumWidth: 480)
+                    } else {
+                        appState.inspectorTab = tab
+                    }
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: tab.icon)

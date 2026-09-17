@@ -82,7 +82,14 @@ public enum HeadlessAgentTurn {
         onSessionStarted?(sessionId)
         var reply = ""
 
+        // Visible in the chat header, and named on the local engine's queue. A run nobody started
+        // from the window used to leave the header reading "Agent ready" while it held the model,
+        // so a chat turn that then sat waiting looked like a hang.
+        appState.backgroundRuns.append(BackgroundRun(sessionId: sessionId, title: title))
+        defer { appState.backgroundRuns.removeAll { $0.sessionId == sessionId } }
+
         await ToolApprovalManager.shared.withUnattendedApprovals {
+            await LocalGenerationGate.$claimLabel.withValue("background run “\(title)”") {
             await AgentRunner.shared.run(
                 session: session,
                 agent: agent,
@@ -107,6 +114,7 @@ public enum HeadlessAgentTurn {
                 onSubAgentTaskUpdated: { _ in },
                 onInterAgentMessage: { _ in }
             )
+            }
         }
 
         // An unattended run is the one nobody watched, so it is the one most worth being able

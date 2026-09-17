@@ -74,6 +74,9 @@ public final class AgentStreamAccumulator {
         if let compTok = chunk.completionTokens {
             message.completionTokens = compTok
         }
+        if let speed = chunk.generationTokensPerSecond {
+            message.generationTokensPerSecond = speed
+        }
         if chunk.isFinished {
             message.isStreaming = false
         }
@@ -971,6 +974,7 @@ public final class AgentRunner {
             file_copy, file_move, file_delete,
             terminal_command/run_command, fetch_url, web_search, ask_user, exit_plan_mode,
             todo_write, calculator, get_current_date, document_extract,
+            preview_start, preview_check, preview_logs, preview_stop,
             gmail_list, gmail_search, google_calendar_list, google_calendar_upcoming.
             \(mcpPromptSummary)
             \(skillsSection)
@@ -980,9 +984,12 @@ public final class AgentRunner {
             0. When you change code: locate it with grep/glob rather than guessing, then verify with
                build_project (and run_tests when behaviour changed) before saying it is done. A
                compiler error is yours to fix, not to report. If an edit goes wrong, revert_changes
-               undoes everything this turn touched. Before changing a function's signature or
-               behaviour, find_references shows every caller; code_diagnostics checks one edited
-               file in seconds.
+               undoes everything this turn touched.
+               For a web UI, compiling is not seeing: start it once with preview_start, then run
+               preview_check after each change and fix what its console errors and screenshot show.
+               Never start a dev server with terminal_command — it is killed after two minutes.
+               Before changing a function's signature or behaviour, find_references shows every
+               caller; code_diagnostics checks one edited file in seconds.
             1. Do not narrate ("I will check…" / "Let me…"). Call the tool immediately, then answer.
             2. Prefer native tool calls. Markdown fallback only if needed:
             ```tool_call
@@ -1734,6 +1741,7 @@ public final class AgentRunner {
             "file_move", "move_file", "mv",
             "file_copy", "copy_file", "cp",
             "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol",
+            "preview_start", "run_app", "launch_app", "git_commit", "worktree_create", "worktree_remove",
             "setup_xcode_language_server",
             "terminal_command", "run_command"
         ]
@@ -1800,6 +1808,16 @@ public final class AgentRunner {
         case "revert_changes":
             // Undo is itself destructive: it discards everything the turn produced.
             return "This discards every file change made during this turn."
+        case "preview_start":
+            return PreviewTools.approvalReason(argumentsJson: argumentsJson)
+        case "run_app", "launch_app":
+            // `requiresApproval` was set on these in the catalog and read by nothing, so they ran
+            // without asking. Launching an arbitrary binary is exactly what should ask.
+            return "Launches an app or executable on your Mac."
+        case "git_commit":
+            return "Commits changes in an agent worktree."
+        case "worktree_remove":
+            return "Removes an agent worktree and its branch."
         case "terminal_command", "run_command":
             if settings.terminalSafetyLevel == .alwaysAsk {
                 return "Runs a shell command on your Mac (Terminal Safety Level: Always Ask Confirmation)."

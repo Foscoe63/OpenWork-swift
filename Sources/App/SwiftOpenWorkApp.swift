@@ -26,6 +26,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        // A dev server outliving the app would hold its port with nothing left to stop it.
+        MainActor.assumeIsolated { DevServerManager.shared.terminateAllNow() }
         for window in NSApp.windows where window.styleMask.contains(.titled) && window.styleMask.contains(.resizable) {
             WindowLayoutStore.saveWindowFrame(from: window)
         }
@@ -71,6 +73,28 @@ public struct SwiftOpenWorkApp: App {
         .commands {
             SidebarCommands()
 
+            // Find (⌘F), Find Next and Use Selection for Find, which reach the editor's find bar.
+            TextEditingCommands()
+
+            CommandGroup(replacing: .saveItem) {
+                Button("Save") {
+                    guard let document = EditorWorkspace.shared.activeDocument else { return }
+                    do {
+                        try document.save()
+                    } catch {
+                        appState.showToast(error.localizedDescription)
+                    }
+                }
+                .keyboardShortcut("s", modifiers: .command)
+
+                Button("Save All") {
+                    if let failure = EditorWorkspace.shared.saveAll().first {
+                        appState.showToast("\(failure.fileName): \(failure.reason)")
+                    }
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+            }
+
             CommandGroup(replacing: .newItem) {
                 Button("New Session") {
                     appState.createNewSession()
@@ -81,6 +105,54 @@ public struct SwiftOpenWorkApp: App {
                     appState.isSearchDialogOpen.toggle()
                 }
                 .keyboardShortcut("k", modifiers: .command)
+
+                Button("Show Editor") {
+                    if appState.navigationDestination != .chat && appState.navigationDestination != .tools {
+                        appState.navigationDestination = .chat
+                    }
+                    appState.revealInspector(tab: .editor, minimumWidth: 560)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                Button("Show Preview") {
+                    if appState.navigationDestination != .chat && appState.navigationDestination != .tools {
+                        appState.navigationDestination = .chat
+                    }
+                    appState.revealInspector(tab: .preview, minimumWidth: 560)
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+            }
+
+            // The preview's tabs and layout, reachable from the keyboard as well as the pane.
+            CommandMenu("Preview") {
+                Button("New Preview Tab") {
+                    PreviewSessions.shared.newTab(workspaceRoot: appState.currentWorkspace.folderPath)
+                    appState.revealInspector(tab: .preview, minimumWidth: 560)
+                }
+                .keyboardShortcut("t", modifiers: [.command, .option])
+
+                Button("Duplicate Preview Tab") {
+                    let sessions = PreviewSessions.shared
+                    sessions.duplicate(sessions.active.id)
+                    appState.revealInspector(tab: .preview, minimumWidth: 560)
+                }
+
+                Button("Close Preview Tab") {
+                    let sessions = PreviewSessions.shared
+                    sessions.close(sessions.active.id)
+                }
+
+                Divider()
+
+                Button("One Preview at a Time") { PreviewSessions.shared.layout = .single }
+                Button("Previews Side by Side") {
+                    PreviewSessions.shared.layout = .sideBySide
+                    appState.revealInspector(tab: .preview, minimumWidth: 900)
+                }
+                Button("Previews Stacked") {
+                    PreviewSessions.shared.layout = .stacked
+                    appState.revealInspector(tab: .preview, minimumWidth: 560)
+                }
             }
 
             CommandMenu("Navigation") {

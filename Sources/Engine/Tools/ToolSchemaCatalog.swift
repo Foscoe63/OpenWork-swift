@@ -111,6 +111,39 @@ public enum ToolSchemaCatalog {
                 requiresApproval: true
             ),
             Tool(
+                id: "preview_start",
+                name: "preview_start",
+                displayName: "Start Preview",
+                description: "Run the web project's dev server (detected from package.json, a framework, or a static index.html — or pass `command`) and open it in the live preview. Waits until the server answers, then reports the page: HTTP status, console errors, failed requests, visible text, and a screenshot you can see. The server keeps running across turns; do NOT use terminal_command for dev servers, it kills them after two minutes. Pass `url` instead to attach to a server that is already running.",
+                category: .system,
+                parametersJsonSchema: schemas["preview_start"]!,
+                requiresApproval: true
+            ),
+            Tool(
+                id: "preview_check",
+                name: "preview_check",
+                displayName: "Check Preview",
+                description: "Reload the live preview (or open a local url / path on the running server) and report what the page actually did: HTTP status, console errors and uncaught exceptions, failed network requests, visible text, and a screenshot you can see. Use it after every change to a web UI — a build that passes can still render a blank page or throw on load.",
+                category: .mediaVision,
+                parametersJsonSchema: schemas["preview_check"]!
+            ),
+            Tool(
+                id: "preview_logs",
+                name: "preview_logs",
+                displayName: "Preview Logs",
+                description: "Read the dev server's output (compile errors, HMR failures, request logs) and the page's browser console, without reloading.",
+                category: .system,
+                parametersJsonSchema: schemas["preview_logs"]!
+            ),
+            Tool(
+                id: "preview_stop",
+                name: "preview_stop",
+                displayName: "Stop Preview Server",
+                description: "Stop the dev servers started with preview_start, and every process they started.",
+                category: .system,
+                parametersJsonSchema: schemas["preview_stop"]!
+            ),
+            Tool(
                 id: "edit_file",
                 name: "edit_file",
                 displayName: "Edit File",
@@ -325,6 +358,12 @@ public enum ToolSchemaCatalog {
         "accessibility_tree": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name. The app must already be running."},"max_depth":{"type":"integer","description":"Tree depth budget, default 14."}},"required":["app"]}"#,
         "run_app": #"{"type":"object","properties":{"app_path":{"type":"string","description":"Path to the built .app bundle or executable."},"observe_seconds":{"type":"number","description":"How long to watch before reporting, 1-60. Default 8."},"keep_running":{"type":"boolean","description":"Leave the app running so accessibility_tree and screenshot_window can inspect it. Default true. Call quit_app when finished."},"arguments":{"type":"array","items":{"type":"string"},"description":"Launch arguments."}},"required":["app_path"]}"#,
         "quit_app": #"{"type":"object","properties":{"app":{"type":"string","description":"Bundle id or app name to quit."}},"required":["app"]}"#,
+
+        // Live preview. The web equivalent of run_app + screenshot_window.
+        "preview_start": #"{"type":"object","properties":{"command":{"type":"string","description":"Command that runs the dev server, e.g. 'npm run dev'. Omit to detect it from the project."},"url":{"type":"string","description":"Instead of starting anything, open a server that is already running, e.g. 'http://localhost:3000' or '3000'."},"new_tab":{"type":"boolean","description":"Open in a new preview tab even if the current one could be reused, e.g. to keep a frontend and an API docs page side by side. A second server always gets its own tab."}}}"#,
+        "preview_check": #"{"type":"object","properties":{"tab":{"type":"string","description":"Which preview tab to check: its number (1, 2, …) or text in its title or URL. Default: the active tab."},"path":{"type":"string","description":"Path on the running server to open, e.g. '/settings'. Omit to reload the current page."},"url":{"type":"string","description":"A full local URL to open instead."},"reload":{"type":"boolean","description":"Reload before checking. Default true."},"wait_seconds":{"type":"number","description":"Time to let the page settle after it loads, default 1.5. Raise it for pages that fetch data."},"viewport_width":{"type":"integer","description":"Lay the page out at this width, e.g. 390 for a phone. Default: the pane's width."},"screenshot":{"type":"boolean","description":"Attach a screenshot. Default true."}}}"#,
+        "preview_logs": #"{"type":"object","properties":{"lines":{"type":"integer","description":"Server log lines to return, default 80."},"clear_console":{"type":"boolean","description":"Clear the browser console after reading it."}}}"#,
+        "preview_stop": #"{"type":"object","properties":{}}"#,
 
         "file_read": #"{"type":"object","properties":{"path":{"type":"string","description":"File path"},"offset":{"type":"integer","description":"First line (1-indexed, optional)"},"limit":{"type":"integer","description":"Max lines (optional)"}},"required":["path"]}"#,
         "read_file": #"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}"#,

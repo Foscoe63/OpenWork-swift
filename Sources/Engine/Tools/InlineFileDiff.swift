@@ -44,6 +44,24 @@ public struct InlineFileDiff: Codable, Hashable, Sendable {
 
     public var isEmpty: Bool { added == 0 && removed == 0 }
 
+    /// The line in the new file where the change starts, for jumping to it. An added line is the
+    /// change itself; for a pure removal, the line that now sits where the removed text was.
+    public var firstChangedLine: Int? {
+        for (index, line) in lines.enumerated() {
+            switch line.kind {
+            case .added:
+                return line.newNumber
+            case .removed:
+                let following = lines[(index + 1)...].first { $0.newNumber != nil }
+                let preceding = lines[..<index].last { $0.newNumber != nil }
+                return following?.newNumber ?? preceding.map { ($0.newNumber ?? 0) + 1 } ?? 1
+            case .context, .gap:
+                continue
+            }
+        }
+        return nil
+    }
+
     /// Past this a file is being generated, not edited, and a line-by-line diff is noise.
     static let maxRenderedLines = 60
     /// The LCS table is O(old × new); beyond this the counts are reported without the body.

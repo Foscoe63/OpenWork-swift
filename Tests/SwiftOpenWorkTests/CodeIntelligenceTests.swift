@@ -23,6 +23,32 @@ final class CodeIntelligenceTests: XCTestCase {
 
     private let xcodeLSP = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/sourcekit-lsp"
 
+    /// rustup's `rust-analyzer` proxy exists whether or not the component does. Found on the CI
+    /// runner: the proxy was chosen, launched, and exited with "Unknown binary 'rust-analyzer'".
+    func testAnInertRustupProxyIsNotAnInstalledServer() {
+        let cargoBin = "/Users/test/.cargo/bin"
+        func locator(componentInstalled: Bool) -> ExecutableLocator {
+            ExecutableLocator(
+                environment: ["PATH": "/usr/bin"],
+                home: "/Users/test",
+                isExecutable: { [cargoBin + "/rust-analyzer", cargoBin + "/rustup"].contains($0) },
+                fileExists: { $0 == "/w/Cargo.toml" },
+                succeeds: { executable, arguments in
+                    executable == cargoBin + "/rustup" && arguments == ["which", "rust-analyzer"] && componentInstalled
+                }
+            )
+        }
+        let missing = LanguageServerCatalog.resolve(file: "/w/src/main.rs", workspaceRoot: "/w", locator: locator(componentInstalled: false))
+        guard case .failure(.notInstalled(let server, let hint)) = missing else {
+            return XCTFail("expected notInstalled, got \(missing)")
+        }
+        XCTAssertEqual(server, "rust-analyzer")
+        XCTAssertTrue(hint.contains("rustup component add rust-analyzer"))
+
+        let installed = LanguageServerCatalog.resolve(file: "/w/src/main.rs", workspaceRoot: "/w", locator: locator(componentInstalled: true))
+        XCTAssertEqual(try? installed.get().executable, cargoBin + "/rust-analyzer")
+    }
+
     /// Nested packages get their own server: the root is the nearest marker, not the workspace.
     func testTheNearestProjectRootWins() throws {
         let located = locator(files: ["/w/Package.swift", "/w/Packages/Core/Package.swift"], executables: [xcodeLSP], apps: ["Xcode.app"])

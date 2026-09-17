@@ -64,13 +64,14 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 | 🌐 | Network — `fetch_url`, `web_search` |
 | 💬 | Interaction — `ask_user`, `exit_plan_mode`, `todo_write` |
 | 👁️ | **Perception** — `screenshot_window` (see any running app's window), `accessibility_tree` (read it as text — cheap, and works with text-only models), `run_app` (launch it and report what happened) |
+| 🌍 | **Live preview** — `preview_start` (detect and run the dev server, or serve a static site), `preview_check` (reload and report console errors, failed requests, visible text and a screenshot — for any preview tab), `preview_logs`, `preview_stop` |
 | 🌿 | Isolation — `worktree_create`, `worktree_list`, `worktree_remove`, `git_commit` (confined to agent worktrees) |
 | 🧮 | Utilities — `calculator`, `get_current_date`, `document_extract` |
 | 📧 | Optional Google — `gmail_*`, `google_calendar_*` |
 
 - Full JSON parameter schemas via `ToolSchemaCatalog` (critical for local-model tool use)
 - **Workspace context** in the system prompt — path, project type, layout, git branch and dirty count
-- **Per-repo instructions** — `OPENWORK.md` / `AGENTS.md` / `CLAUDE.md` at the workspace root
+- **Per-repo instructions** — `SWIFTOPENWORK.md` / `AGENTS.md` / `CLAUDE.md` at the workspace root (`OPENWORK.md` from 1.1 is still read)
 - **Inline diffs on the tool card** — an edit shows `+N/−N` where it claims to have edited something, and the changed lines with context when you expand it. Stored with the transcript, so it is still there after a relaunch
 - **Turn-change review** — a footer appears when a turn touched files; per-file diffs (side-by-side or unified), revert one or all. A session-wide view lists everything the session touched, with git's diff
 - **Restore files to any point in the conversation** — right-click a message → *Restore Files to Before This Turn*. Checkpoints are sealed on disk per turn, survive quit/relaunch, and the sheet names every file it will rewrite or delete before it touches anything. The agent's own `revert_changes` stays scoped to the current turn: a person choosing a point in their own transcript is doing something different from an agent silently rewinding ten turns of work
@@ -106,6 +107,9 @@ The code-intelligence tools run real language servers, started on first use and 
 
 - **Local Models** tab (On Device / Catalog) for MLX discovery and selection
 - Built-in Apple Silicon path (`NativeMLXService` / `LocalMLXEngine`) with real `ToolSpec` + `streamDetails` tool calls
+- **The system prompt is in the context once.** `ChatSession` re-sends its `instructions` on every call, so a reused session used to append the whole system prompt — tool schemas, workspace context — again on every turn and every tool round. Measured on Ornith-1.5-35B, turn two of a chat prefilled 499 tokens to add a six-word message; it now prefills 14
+- **Shared fairly** — chat turns, automations, Shortcuts and parallel sub-agents take turns on the one in-process model, first come first served. A queued turn says what it is waiting for, and the chat header names any background run. Two conversations keep their own KV caches, so taking turns does not re-prefill both
+- **Honest numbers** — the context meter shows the real window in use for local models (cached prefix included), each reply shows its measured decode speed, and multimodal checkpoints report the context window they actually declare (262k for Ornith and Qwen3.6, not a 131k fallback). Unloading a model now actually frees its memory
 - **KV cache reuse** — a continued conversation is appended to the live `ChatSession` rather than re-prefilled. Measured on a 48B model, time-to-first-token goes from 1.5s at three messages and climbing ~0.67s per exchange, to a flat 0.9s. Any rewrite of earlier history (compaction, a fork) rebuilds instead, because a cache describing text no longer in the conversation would keep steering the model invisibly
 - Optional servers: oMLX, mlx_lm, Osaurus, Ollama, LM Studio
 - Cloud & remote: OpenAI-compatible, Anthropic, Groq, OpenRouter, DeepSeek, Mistral, Gemini, custom endpoints
@@ -125,7 +129,17 @@ The code-intelligence tools run real language servers, started on first use and 
   can open and audit, and approvals are refused rather than awaited when nobody is watching
 - Create / edit / Run Now / History / Export / Pause / Resume / Delete
 - Watch folders with filesystem triggers and artifact synthesis
-- Visual agent flow builder for multi-agent pipelines
+
+### Editor and live preview
+
+- **Code editor** in the inspector (⇧⌘E) and in Artifacts & Files — tabs, syntax highlighting for 20+ languages (strings and comments are lexed properly, so a `//` inside a string stays a string), line numbers, current-line highlight, find (⌘F), go to line (⌘L), toggle comment (⌘/), indent and outdent (⌘] / ⌘[), auto-indent that opens `{}` pairs, and **Tab completion** from the file's own words, the workspace's declarations and the language's keywords. After a typing pause, **ghost-text** from the idle local model (never queued behind an agent turn, never swapping the resident checkpoint). **⌘-click** a name to jump to its declaration; ⇧⌘O opens any workspace file
+- **Inline AI suggestions** — pause typing and the model proposes the rest of the line (or the block it opens) as grey ghost text; ⇥ accepts it as one undo step, esc or moving the cursor dismisses it, and typing what it says keeps the rest. Measured on Ornith-1.5-35B: about 0.8–1.1s per suggestion once the model is loaded. It never waits in line: when an agent turn or automation holds the local model, no suggestion is made. By default it uses your chat model only when that runs on this Mac; a cloud model is used only if you pick one (editor status bar or Settings)
+- **Built for an agent editing the same files.** A clean tab follows the agent's writes and says it reloaded. A tab with unsaved edits is never overwritten: a banner offers Compare, Take Disk Version or Keep Mine, and Save refuses until you choose. Line endings (LF/CRLF) and indentation are kept as the file had them. The composer warns when a file has unsaved edits, because the agent reads what is on disk
+- **Everything opens where you are** — build and test errors, `+N/−N` diffs on tool cards, and console errors from the preview open the file at the line
+- **Live preview** (⇧⌘P) — detects how to run the project (`package.json` dev script with npm/pnpm/yarn/bun, Django, Rails, Hugo, Jekyll, or a static `index.html`, which the app serves itself with no toolchain), starts it with your login shell's PATH so nvm and Homebrew Node are found, waits until it answers, and shows it. Address bar, back/forward, phone/tablet/laptop widths, reload on file change for static sites (dev servers keep their own hot reload)
+- **Several previews at once** — up to six tabs, each with its own page, history, console and viewport, shown one at a time, side by side or stacked (Preview menu, ⌥⌘T for a new tab). Starting a second server opens a new tab instead of replacing the first page; Duplicate Tab puts the same page beside itself to compare a phone and a desktop width
+- **Console that reaches you** — console output, uncaught exceptions, unhandled rejections, failed `fetch`/XHR requests and missing scripts are captured per page load, with a badge, links from stack traces into the editor, and **Ask Agent to Fix**. The server log sits beside it. Stopping a server stops every process it started, and quitting the app stops them all
+- **The agent sees the same page**: `preview_check` reloads, waits for the page to settle and returns what went wrong plus a screenshot, even when the pane is not on screen. Starting a server asks for approval like any shell command; checking a page does not
 
 ### Workspace, skills & desktop UX
 
@@ -134,7 +148,7 @@ The code-intelligence tools run real language servers, started on first use and 
 - Extensions, prompt templates, slash commands (`/clear`, `/agent`, `/model`, …)
 - Local RAG (Accelerate), PDF/Vision extract, live canvas, diffs, terminal, voice STT/TTS
 - **Window state persistence** — frame, sidebar & inspector widths, open/closed inspector, navigation destination, settings tab, last workspace & session survive quit/relaunch
-- **Vibe coding loop** — sticky plan todos from `todo_write`, Plan mode chip / `/plan`, queue a follow-up while the agent is still generating (Stop keeps what you typed), live turn-change review, clickable `file:line` diagnostics, and a project Rules editor for `OPENWORK.md`
+- **Vibe coding loop** — sticky plan todos from `todo_write`, Plan mode chip / `/plan`, queue a follow-up while the agent is still generating (Stop keeps what you typed), live turn-change review, clickable `file:line` diagnostics, and a project Rules editor for `SWIFTOPENWORK.md`
 - **Composer input** — `@file` and `@folder` completion, `@path:line` to paste a focused, numbered excerpt around a line, and drag-and-drop or paste of files and images straight into the box
 - **Context meter** — the last turn's real prompt-token count against the model's window, shown beside the composer once it passes half full, amber and then red as compaction gets close. The provider's own number, never an estimate
 - **Finished-turn notifications** — a chime plus a banner naming the session, only when the app is in the background and only for turns long enough to have walked away from. A turn that *failed* is announced however short it was
@@ -208,6 +222,8 @@ SwiftOpenWork/
     │   │                    # TurnCompletionNotifier
     │   ├── Automations/     # AutomationSchedule, CronExpression,
     │   │                    # AutomationScheduler
+    │   ├── Editor/          # EditorWorkspace, syntax highlighter, ghost-text
+    │   ├── Preview/         # DevServerManager, PreviewController, StaticFileServer
     │   ├── Providers/       # OpenAI, Anthropic, Ollama, NativeMLX, LocalMLXEngine
     │   ├── LSP/             # LSPConnection (JSON-RPC), LanguageServerCatalog,
     │   │                    # LanguageServerSession/Pool, FileChangeWatcher,
@@ -225,7 +241,7 @@ SwiftOpenWork/
         ├── Navigation/      # Sidebar, Spotlight
         ├── Theme/ · Components/
         └── Views/           # Chat, LocalModels, Agents, Automations,
-                             # Settings, Inspector, Dashboard, …
+                             # Editor, Preview, Settings, Inspector, Dashboard, …
 ```
 
 ### Sidebar destinations
@@ -289,7 +305,7 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 swift build
 swift run SwiftOpenWork
-swift test                      # 707 tests
+swift test                      # 818 tests
 ```
 
 Tests never touch your real data: under XCTest the app stores settings and sessions in a

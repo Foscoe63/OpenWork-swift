@@ -75,6 +75,97 @@ public enum MLXSessionReuse {
         case rebuild(reason: String)
     }
 
+    /// A cached session as the decision sees it.
+    public struct Candidate: Sendable {
+        public var key: Key
+        public var consumed: [Fingerprint]
+
+        public init(key: Key, consumed: [Fingerprint]) {
+            self.key = key
+            self.consumed = consumed
+        }
+    }
+
+    /// Which of several cached sessions `incoming` continues, if any.
+    ///
+    /// More than one is kept so two conversations taking turns on the engine — a chat and a
+    /// scheduled automation, a lead and its sub-agent — do not each throw the other's cache away
+    /// on every switch, which re-prefilled both transcripts from scratch every time. `candidates`
+    /// is most recently used first; the first one the incoming transcript extends wins. When none
+    /// does, the reason reported is the most recent one's, since that is the conversation the
+    /// user most likely expected to continue.
+    public static func select(
+        candidates: [Candidate],
+        incomingKey: Key,
+        incoming: [Fingerprint]
+    ) -> (index: Int?, decision: Decision) {
+        // A conversation none of the cached sessions belongs to is simply new. Reporting that as
+        // "Context cache reset" told the user something had been lost when nothing had.
+        let sameConversation = candidates.contains {
+            $0.key.modelId == incomingKey.modelId && $0.key.instructions == incomingKey.instructions
+        }
+        guard sameConversation else {
+            return (nil, .rebuild(reason: "no cached session"))
+        }
+        var firstRebuild: Decision?
+        for (index, candidate) in candidates.enumerated() {
+            let decision = decide(
+                cachedKey: candidate.key,
+                cachedConsumed: candidate.consumed,
+                incomingKey: incomingKey,
+                incoming: incoming
+            )
+            if case .advance = decision { return (index, decision) }
+            let isThisConversation = candidate.key.modelId == incomingKey.modelId
+                && candidate.key.instructions == incomingKey.instructions
+            if firstRebuild == nil, isThisConversation { firstRebuild = decision }
+        }
+        return (nil, firstRebuild ?? .rebuild(reason: "no cached session"))
+    }
+
+    /// Insert `entry` as most recently used, dropping any stale session for the same conversation
+    /// and capping the list at `maxCount`.
+    ///
+    /// A rebuild used to push a new `ChatSession` without removing the one it replaced, so a chat
+    /// that diverged (compaction, tool-set change) pinned two KV caches until LRU evicted one —
+    /// unified memory held a cache that would never be hit again.
+    public static func remember<T>(
+        _ entry: T,
+        in list: inout [T],
+        maxCount: Int,
+        droppingStale: (T) -> Bool
+    ) {
+        list.removeAll(where: droppingStale)
+        list.insert(entry, at: 0)
+        if maxCount > 0, list.count > maxCount {
+            list.removeLast(list.count - maxCount)
+        }
+    }
+
+    /// The system prompt goes into the session's *history*, never its `instructions`.
+    ///
+    /// `ChatSession` prepends `instructions` to every call, including calls that continue a live
+    /// KV cache — its own documentation says they are "re-tokenized on each call". So a reused
+    /// session appended the entire system prompt again on every turn and on every tool round.
+    /// Measured on Ornith-1.5-35B: turn one prefilled 498 tokens, and turn two, which added one
+    /// six-word message, prefilled 499. In an agent run whose system prompt carries the tool
+    /// schemas and workspace context, twenty tool calls meant twenty extra copies in the context,
+    /// each one displacing real conversation and slowing every step. As history it is rendered
+    /// once, when the session is built.
+    public static func sessionHistory<M>(system: M?, earlierMessages: [M]) -> [M] {
+        guard let system else { return earlierMessages }
+        return [system] + earlierMessages
+    }
+
+    /// Tokens the model had in view for a generation.
+    ///
+    /// MLX reports only the tokens it prefilled on this call. Continuing a session prefills just
+    /// the new messages, so that number alone would tell the context meter a long conversation
+    /// was nearly empty. What is in view is what the cache already held plus what was added.
+    public static func contextTokens(cachedBefore: Int, prefilled: Int) -> Int {
+        max(0, cachedBefore) + max(0, prefilled)
+    }
+
     /// Whether `incoming` can continue a session that has already consumed `consumed`.
     public static func decide(
         cachedKey: Key?,

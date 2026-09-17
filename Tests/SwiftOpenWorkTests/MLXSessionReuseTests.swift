@@ -240,3 +240,34 @@ extension MLXSessionReuseTests {
         ) { XCTFail("a rewritten caller message must rebuild") }
     }
 }
+
+/// LRU + drop-stale is how NativeMLXService keeps two KV caches, not three.
+extension MLXSessionReuseTests {
+
+    private struct Slot: Equatable {
+        var id: String
+        var conversation: String
+    }
+
+    func testRememberDropsTheStaleSessionForTheSameConversation() {
+        var list = [Slot(id: "old", conversation: "chat"), Slot(id: "other", conversation: "auto")]
+        MLXSessionReuse.remember(
+            Slot(id: "rebuilt", conversation: "chat"),
+            in: &list,
+            maxCount: 2,
+            droppingStale: { $0.conversation == "chat" }
+        )
+        XCTAssertEqual(list.map(\.id), ["rebuilt", "other"])
+    }
+
+    func testRememberEvictsTheLeastRecentlyUsedPastTheCap() {
+        var list = [Slot(id: "1", conversation: "a"), Slot(id: "2", conversation: "b")]
+        MLXSessionReuse.remember(
+            Slot(id: "3", conversation: "c"),
+            in: &list,
+            maxCount: 2,
+            droppingStale: { $0.conversation == "c" }
+        )
+        XCTAssertEqual(list.map(\.id), ["3", "1"], "the oldest slot must go, not the one just used")
+    }
+}

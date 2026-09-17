@@ -275,6 +275,22 @@ public actor SymbolIndex {
         return a.line < b.line
     }
 
+    /// Every declared name in `root`, types and functions first, for editor completion.
+    ///
+    /// Builds the index if it has not been, and refreshes files whose modification date moved —
+    /// `build` reuses unchanged files, so calling this after edits is cheap.
+    public func declaredNames(root: String, limit: Int = 5_000) -> [String] {
+        build(root: root)
+        guard let index = cache[root] else { return [] }
+        var seen = Set<String>()
+        var names: [String] = []
+        for symbol in index.symbols.sorted(by: Self.declarationOrder) where seen.insert(symbol.name).inserted {
+            names.append(symbol.name)
+            if names.count >= limit { break }
+        }
+        return names
+    }
+
     public func invalidate(root: String) {
         cache.removeValue(forKey: root)
     }

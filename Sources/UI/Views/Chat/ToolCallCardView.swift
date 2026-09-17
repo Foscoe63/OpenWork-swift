@@ -146,11 +146,19 @@ public struct ToolCallCardView: View {
     private func inlineDiff(_ diff: InlineFileDiff) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text(diffFileName(diff.path))
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
+                Button {
+                    appState?.openInEditor(path: diff.path, line: diff.firstChangedLine)
+                } label: {
+                    Text(diffFileName(diff.path))
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.primary)
+                        .underline(appState != nil && diff.kind != .deleted, color: .secondary.opacity(0.5))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                .buttonStyle(.hitTestable)
+                .disabled(appState == nil || diff.kind == .deleted)
+                .help("Open in the editor at the change")
                 if diff.added > 0 {
                     Text("+\(diff.added)")
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))

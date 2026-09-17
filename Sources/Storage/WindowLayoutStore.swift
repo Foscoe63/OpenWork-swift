@@ -25,7 +25,8 @@ public enum WindowLayoutStore {
     public static let minSidebarWidth: Double = 200
     public static let maxSidebarWidth: Double = 450
     public static let minInspectorWidth: Double = 260
-    public static let maxInspectorWidth: Double = 650
+    /// Wide enough for the editor and the web preview to be worth using side by side with the chat.
+    public static let maxInspectorWidth: Double = 1100
     public static let minWindowWidth: CGFloat = 920
     public static let minWindowHeight: CGFloat = 620
 

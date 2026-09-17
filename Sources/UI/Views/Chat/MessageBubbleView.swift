@@ -175,6 +175,13 @@ public struct MessageBubbleView: View {
                         .font(.system(size: 10))
                         .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.6))
 
+                    if let speed = MessageBubbleView.speedLabel(message) {
+                        Text(speed)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.6))
+                            .help("Decode speed measured by the model engine for this reply")
+                    }
+
                     Spacer()
 
                     // Speak Text (TTS) Action. Gated on the Settings toggle, which was stored
@@ -362,5 +369,16 @@ private struct FlowNoticeChipsView: View {
                     .cornerRadius(10)
             }
         }
+    }
+}
+
+extension MessageBubbleView {
+    /// "38 tok/s" for a reply whose provider measured its speed; nothing while streaming or when
+    /// no measurement exists, so an estimate never passes for one.
+    static func speedLabel(_ message: ChatMessage) -> String? {
+        guard !message.isStreaming,
+              let speed = message.generationTokensPerSecond,
+              speed.isFinite, speed > 0 else { return nil }
+        return speed >= 10 ? "\(Int(speed.rounded())) tok/s" : String(format: "%.1f tok/s", speed)
     }
 }

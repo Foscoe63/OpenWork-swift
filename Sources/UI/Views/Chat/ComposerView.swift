@@ -228,6 +228,8 @@ public struct ComposerView: View {
 
     public var body: some View {
         VStack(spacing: 8) {
+            UnsavedEditorFilesBanner(appState: appState)
+
             if let queued = appState.queuedFollowUp {
                 HStack(spacing: 8) {
                     Image(systemName: "tray.and.arrow.down.fill")
@@ -734,6 +736,59 @@ public struct ComposerView: View {
         panel.canChooseFiles = true
         if panel.runModal() == .OK {
             addAttachments(panel.urls.compactMap(ComposerAttachmentIntake.attachment(fromFileURL:)))
+        }
+    }
+}
+
+
+/// Unsaved editor changes are invisible to the agent: its tools read the file on disk. Asking it
+/// to "fix the function I just edited" while the edit is unsaved gets a fix to the old code, which
+/// then collides with the edit. Saying so beside the send button is cheaper than that argument.
+struct UnsavedEditorFilesBanner: View {
+    @ObservedObject var appState: AppState
+    @ObservedObject var editors = EditorWorkspace.shared
+
+    var body: some View {
+        let unsaved = editors.unsavedDocuments
+        if !unsaved.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "square.and.pencil")
+                    .foregroundColor(.orange)
+                Text(Self.message(for: unsaved.map(\.fileName)))
+                    .font(.system(size: 11.5))
+                    .lineLimit(2)
+                    .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                Spacer()
+                Button("Save All") {
+                    let failures = editors.saveAll()
+                    if let first = failures.first {
+                        appState.showToast("\(first.fileName): \(first.reason)")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button("Show") {
+                    if let first = unsaved.first {
+                        appState.openInEditor(path: first.path)
+                    }
+                }
+                .buttonStyle(.hitTestable)
+                .font(.system(size: 11, weight: .medium))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Color.orange.opacity(0.1))
+            .cornerRadius(8)
+            .padding(.horizontal, 16)
+        }
+    }
+
+    static func message(for names: [String]) -> String {
+        switch names.count {
+        case 0: return ""
+        case 1: return "\(names[0]) has unsaved edits — the agent reads the saved version."
+        case 2: return "\(names[0]) and \(names[1]) have unsaved edits — the agent reads the saved versions."
+        default: return "\(names.count) files have unsaved edits — the agent reads the saved versions."
         }
     }
 }

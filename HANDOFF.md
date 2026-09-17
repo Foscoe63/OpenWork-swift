@@ -1,16 +1,16 @@
 # Handoff
 
-Written 2026-09-14, extended 2026-09-15. Everything below is verified against the code and
+Written 2026-09-14, extended through 2026-09-17. Everything below is verified against the code and
 against this machine, not remembered.
 
 ## Where things stand
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| SwiftOpenWork | yes, `e1f6afe`; release `1.2.0` at `51abca3` | 707 |
+| SwiftOpenWork | `origin/main` is `e1f6afe` (release `1.2.0` at `51abca3`); this branch merges the local editor/preview/ghost-text work onto that | see *Verifying a change* |
 | GrizzyBot | yes, `ecce520` | 538 |
 
-SwiftOpenWork went from 13 tests to 707 over this work. Latest release: 1.2.0, the first under the SwiftOpenWork name (signed, not notarised).
+Latest **released** build: 1.2.0, the first under the SwiftOpenWork name (signed, not notarised). This working tree is an unreleased integration of 1.2.0's language-server stack with the local seventh-pass editor, live preview, ghost-text and local-engine sharing. It is **not** on `origin/main` until this branch is reviewed and pushed.
 
 > **The app was renamed SwiftOpenWork on 2026-09-16** (bundle ID `io.github.foscoe63.SwiftOpenWork`,
 > was `ai.openwork.OpenWorkSwift`). Sections written before that say "OpenWork" and use the old
@@ -1071,6 +1071,175 @@ for exit stops a running generation. It needs the Ornith model and skips without
 cover definition, references and diagnostics, and passed four runs in a row. Every server in the
 catalog has now been run through the app's own code.
 
+## What landed 2026-09-17 (seventh pass): local engine, editor, live preview
+
+Asked for: make local models, seeing the result, editing code yourself, and polish "very good".
+Every claim below was checked live — a real 35B model, a real `npm run dev`, a real web view, and
+the built app driven through its UI on throwaway data.
+
+### Local models
+
+- **The system prompt was re-prefilled on every continued turn.** `ChatSession` prepends its
+  `instructions` on *every* call, including calls that continue a live KV cache (its own docs:
+  "re-tokenized on each call"). `NativeMLXService` passed the system prompt as `instructions` and
+  reused sessions, so every turn and every tool round appended the whole prompt — tool schemas and
+  workspace context — to the cache again. Measured on Ornith-1.5-35B with a 490-token system
+  prompt: turn two, adding a six-word message, prefilled **499** tokens. The system prompt is now
+  the first message of the session's `history`; the same turn prefills **14**. In a twenty-step
+  agent run that was twenty extra copies of the prompt displacing real context.
+  `SystemPromptIsRenderedOnceTests` reads the source so `ChatSession(instructions:)` cannot come back.
+- **Concurrent generations corrupted each other's cache bookkeeping.** Chat turns, automations,
+  Shortcuts and parallel sub-agents all shared one `cachedSession`/`cachedConsumed`; an automation
+  arriving mid-turn replaced the session a chat turn was streaming from, and the chat turn's
+  cleanup then recorded its reply against the automation's history. `LocalGenerationGate` (an
+  actor, FIFO, cancellable while queued) now serialises load + generate + bookkeeping, and a
+  queued turn shows "Waiting for the local model — it is busy with background run “Morning
+  Brief”". Labels come from a task-local set in `HeadlessAgentTurn` and `SubAgentExecutor`.
+  Verified live: two simultaneous turns, the second queued with that notice, both answered.
+- **Two cached sessions (`maxCachedChats`), chosen by `MLXSessionReuse.select`**, so a chat and an
+  automation taking turns do not each rebuild the other's cache. A conversation none of them
+  belongs to is new, not a "Context cache reset" — that chip is now only shown for real resets.
+- **The chat header named nothing during background runs.** `AppState.backgroundRuns` →
+  "Agent ready · “Morning Brief” running in background" with a blue dot.
+- **The context meter never appeared for local models** — the MLX path sent no `promptTokens`.
+  It now reports the tokens in view (cached prefix + prefilled), which on a continued session is
+  not the same as MLX's per-call `promptTokenCount`.
+- **Replies show measured decode speed** (`generationTokensPerSecond`, persisted).
+- **Unload did not free memory.** `unload`/`unloadAll` removed the container but the cached
+  `ChatSession` still held it. They now drop matching cached sessions and clear MLX's cache.
+- **Multimodal checkpoints declared half their context.** Ornith, Qwen3.6 and Qwen3.8 keep
+  `max_position_embeddings` under `text_config`; discovery read only the top level and fell back to
+  131,072. `LocalMLXEngine.declaredContextWindow` reads nested configs (262,144).
+
+### Editor (`Sources/Engine/Editor`, `Sources/UI/Views/Editor`)
+
+- `EditorWorkspace` / `EditorDocument`: tabs whose `NSTextStorage` and `UndoManager` live on the
+  document, so switching tabs keeps undo and unsaved edits. Opens from build errors
+  (`revealDiagnostic` no longer reveals in Finder and pastes a mention), tool-card diffs (file name
+  → first changed line), preview console stack traces, Quick Open (⇧⌘O), Artifacts & Files.
+- **Agent-aware disk sync** (`EditorDiskSync.decide`): polled `stat` every 1.5s and after each turn.
+  Clean tab → reload quietly with a notice. Unsaved edits → conflict banner (Compare / Take Disk /
+  Keep Mine); `save()` throws until resolved, so nothing the agent wrote is overwritten unseen.
+  Deleted → banner, Save writes it back. Polling, not vnode watchers, because atomic renames
+  replace the watched inode.
+- CRLF and indentation are detected and preserved. **Trap:** `"\r\n"` is one `Character`, so
+  `text.contains("\r")` is false for CRLF text — check `utf16`.
+- `SyntaxHighlighter`: one left-to-right lexer per language family, UTF-16 ranges, applied as
+  layout-manager temporary attributes off the main thread. Strings/comments first, so `//` in a
+  string stays a string.
+- `CodeTextView`: auto-indent (opens `{|}` pairs), Tab completes a word in progress (document words →
+  workspace declarations via `SymbolIndex.declaredNames` → keywords) and indents otherwise, ⌘/,
+  ⌘] ⌘[, ⌘L, ⌘S, ⌘F (find bar; `TextEditingCommands` added), ⌘-click to definition.
+- Composer banner when editor files are unsaved: the agent reads disk.
+- **AppKit trap found live:** on this macOS a vertical ruler is laid *over* a full-width clip view
+  and the text is inset with a negative bounds origin (x = −ruleThickness). Scrolling the clip view
+  to x = 0 hid the first characters of every line under the line numbers.
+  `Coordinator.leftmostOriginX` derives the real leftmost origin.
+
+### Live preview (`Sources/Engine/Preview`, `Sources/UI/Views/Preview`)
+
+- `DevServerManager`: long-lived servers outside any tool call (`terminal_command` kills after
+  120s). Login-shell PATH resolved once with a timeout (nvm/Homebrew node from a Dock launch),
+  `BROWSER=none`, stdin at EOF, URL detected from output (Vite/Next/Python/Rails banners, ANSI
+  stripped, wildcard binds → localhost), else from `lsof` of the process tree, then confirmed by an
+  HTTP answer. Stop signals the **whole tree** (`ps` parse) then SIGKILLs survivors; quitting the app
+  kills all. Verified: `npm run dev` → npm → sh → node all dead and the port released.
+- `StaticFileServer` (Network.framework, loopback only, traversal and symlink escapes refused) for
+  plain sites — no `python3` stub installer prompt.
+- `PreviewController`: one `WKWebView` that outlives the pane; injected script forwards console,
+  uncaught errors, unhandled rejections, failed fetch/XHR and resource errors; console resets per
+  page load; non-loopback links open in the browser; alerts are logged, not shown (an unattended
+  check would hang). Parked in an offscreen window when the pane is hidden, so checks still render
+  — the live test asserts the screenshot pixels are the page's colour. **Trap:** WebKit's
+  `error.stack` omits the message V8 includes; send `name: message` + stack.
+- Tools: `preview_start` (approval + sandbox + safety level, like `terminal_command`; a `url`-only
+  attach needs none), `preview_check`, `preview_logs` (read-only, allowed in plan mode),
+  `preview_stop`. The system prompt tells the agent to check web UIs rather than trust a build.
+- Reload-on-change is on for static sites and off for dev servers, which hot-reload themselves.
+
+### Found on the way
+
+- **`requiresApproval: true` on `run_app`, `git_commit` and `worktree_remove` was read by nothing**
+  — they ran without asking, and plan mode offered them. `approvalReason` now covers them, plan
+  mode blocks them, and `testEveryCatalogApprovalFlagIsEnforced` fails for any future tool whose
+  flag is not enforced.
+- **The test data isolation recorded on 2026-09-16 was not in the code.** `StorageService.baseDirectory`
+  always returned the real folder; every `swift test` rewrote the real `settings.json` and
+  `mcp_servers.json` (restored by careful tests, which is luck, not isolation). It now uses
+  `$TMPDIR/SwiftOpenWork-tests-<pid>` under XCTest, and `SWIFTOPENWORK_DATA_DIRECTORY` overrides
+  both. Verified by diffing real-data mtimes around a full run. One side effect, reported rather than
+  hidden: a smoke launch made *before* the fix loaded the real data and re-saved `settings.json`,
+  `mcp_servers.json`, `providers.json` (same sizes) and `tools.json` (grew by the four preview
+  tools, which a normal launch adds anyway). Sessions, agents, automations and workspaces were not
+  written.
+- The three failing tests: `testTemplatedListsAreAlsoFlagged` asserted a false positive the
+  detector no longer has (flipped, plus a test that real repetition is still caught);
+  `testTheBuiltBundleMatchesAppIdentity` now skips outside the app host (its guard missed
+  `com.apple.dt.xctest.tool`).
+- The "SwiftOpenWork Local Signing" certificate exists in the login keychain now; Debug builds sign.
+
+### Added the same day: inline AI suggestions and several previews
+
+**Inline suggestions** (`Sources/Engine/Editor/InlineSuggestions.swift`, ghost text in `CodeTextView`):
+
+- Requested 0.5s after typing pauses, only where inserting cannot split a word
+  (`InlineSuggestionPolicy`), cancelled by the next keystroke. ⇥ accepts (one undo step), esc or a
+  cursor move dismisses, typing the suggested characters keeps the rest.
+- **Never queues.** `NativeMLXService.oneShot` uses `LocalGenerationGate.tryAcquire`: if a chat turn,
+  automation or sub-agent holds the model, no suggestion. It never evicts a different resident model,
+  never touches `cachedChats`, and passes `enable_thinking: false` (Ornith's template honours it).
+- **Two measured fixes.** Asked for "only the text at the cursor", Ornith continued `sum +` with
+  ` .amount`, and it ran the full 96 tokens writing new functions (6.9s). The prompt now asks for the
+  line restated then continued; `InlineSuggestionStopper` ends generation when the line (or the block
+  it opens) is complete; `InlineSuggestionCleaner` strips the restated part and short operator
+  overlaps (it once answered `+ item.amount` after `sum +`). Result: correct lines in 0.8–1.1s warm,
+  ~3s cold (`InlineSuggestionLiveTests`, `SOW_LIVE_MLX=1`).
+- **Model choice** (`InlineSuggestionModelChoice`): Automatic = the chat model *only when it is local*;
+  a cloud chat model gives "choose a model" rather than sending code anywhere. Explicit choice in the
+  editor status bar or Settings (`inlineSuggestionsEnabled`, `inlineSuggestionProviderId`,
+  `inlineSuggestionModelId`).
+- Verified in the running app: typing `function formatMoney(value) {` / `  return ` produced ghost
+  text `value.toLocaleString('en-US', { style: 'currency', currency: 'USD' });`. Accepting with ⇥
+  could not be driven from the automation tool (it cannot send raw keys to a background window); it is
+  covered by `GhostTextBehaviourTests` on a real `CodeTextView`.
+
+**Several previews** (`PreviewSessions`): up to six tabs, each a `PreviewController` with its own web
+view, console, viewport and server; layouts One at a Time / Side by Side / Stacked (pane menu and a new
+**Preview** menu). `PreviewLauncher` reuses the tab showing a server, else an idle tab, else opens a new
+one, so a second server never replaces the first page. `preview_start` takes `new_tab`,
+`preview_check` takes `tab` (number or text in title/URL — `"5173"` is a port, not tab 5173, unless
+that tab exists), `preview_logs` reports every tab. There is always at least one tab, so SwiftUI never
+creates one mid-render. Verified live: two static servers in two tabs with separate consoles
+(`PreviewSessionsTests`), and side by side in the running app.
+
+**Smoke-test trap:** copying the real `providers.json` into a throwaway data folder makes the rebuilt
+binary read cloud API keys from the Keychain at launch, on the main thread, before the window exists —
+it hangs behind a Keychain prompt with no window. Copy only `type == "local"` providers.
+
+### Smoke-testing the UI safely
+
+```bash
+SWIFTOPENWORK_DATA_DIRECTORY=/path/to/throwaway XCTestBundlePath=/dev/null \
+  build/DerivedData/Build/Products/Debug/SwiftOpenWork.app/Contents/MacOS/SwiftOpenWork
+```
+
+The first variable points the data folder somewhere disposable; the second blocks startup
+automations and the update check. UserDefaults (window layout) is still the real domain — export it
+with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afterwards.
+
+### Not done, on purpose or for later
+
+- **Ghost-text is pause-based, not per-keystroke.** After typing pauses, the idle local model may
+  suggest a continuation. It never queues behind an agent turn and never swaps the resident
+  checkpoint. Fill-in-the-middle prompting on every keystroke is still refused: a 35B model does
+  not meet that latency budget.
+- ~~One preview at a time~~ — tabs and split layouts were added the same day (see above).
+- **Highlighting is whole-document** on a background queue, debounced. Fine to ~1MB; files beyond
+  1.5MB UTF-16 are shown uncoloured.
+- `preview_start` asks for approval even when detection picks the built-in static server.
+
+---
+
 ## What is left
 
 ### Settings still dead
@@ -1080,6 +1249,8 @@ macOS is the only authority on whether a login item is registered.
 
 ### Needs you
 
+- **Review and land this integration branch** (`integrate/local-on-1.2`) onto `main`. It is not
+  on `origin/main` yet. 1.2.0 stays the last published release until you cut the next one.
 - **Re-grant Accessibility and Screen Recording** to SwiftOpenWork, and remove the old OpenWork
   entries (System Settings → Privacy & Security). An app cannot do this itself. 1.2.0, signed with
   the Developer ID, is installed in `/Applications`; the ad-hoc-signed 1.1.0 copy that was there
@@ -1093,7 +1264,8 @@ macOS is the only authority on whether a login item is registered.
 
 ### Worth building next
 
-- Nothing queued.
+- **Test host UserDefaults and Keychain are still real.** The data folder is isolated; preferences
+  and Keychain items written under test are not.
 
 ### Explicitly decided against — with reasons, so they are not re-proposed
 
@@ -1388,7 +1560,7 @@ The model library on this machine is `/Volumes/Models/Models` (13 loadable bundl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 707 tests; tests needing an uninstalled server or model, and the bundle-identity test, skip
+$SWIFT test                    # 818 tests; tests needing an uninstalled server or model, and the bundle-identity test, skip
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project SwiftOpenWork.xcodeproj -scheme SwiftOpenWork build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list

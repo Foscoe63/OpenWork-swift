@@ -185,11 +185,13 @@ public struct ChatView: View {
 
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(appState.isGenerating ? Color.orange : Color.green)
+                        .fill(appState.isGenerating ? Color.orange : (appState.backgroundRuns.isEmpty ? Color.green : Color.blue))
                         .frame(width: 6, height: 6)
-                    Text(appState.isGenerating ? "Agent executing..." : "Agent ready")
+                    Text(BackgroundRun.statusLine(chatIsGenerating: appState.isGenerating, runs: appState.backgroundRuns))
                         .font(.system(size: 10))
                         .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                        .lineLimit(1)
+                        .help(appState.backgroundRuns.map(\.title).joined(separator: "\n"))
                 }
             }
 
