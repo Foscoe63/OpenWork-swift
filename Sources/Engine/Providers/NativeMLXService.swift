@@ -43,7 +43,38 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// each rebuilding the other's cache. Each entry pins a KV cache in unified memory, which is
     /// why it is not more.
     static let maxCachedChats = 2
+    /// Generations still running, so quitting can stop them first (see `prepareForExit`).
+    private var activeGenerations: [UUID: ActiveGeneration] = [:]
     private let lock = NSLock()
+
+    private struct ActiveGeneration: @unchecked Sendable {
+        let cancel: @Sendable () -> Void
+        let join: @Sendable () async -> Void
+    }
+
+    private struct UncheckedSendable<Value>: @unchecked Sendable {
+        let value: Value
+        init(_ value: Value) { self.value = value }
+    }
+
+    /// What a finished (or stopped) generation produced.
+    private struct ConsumedGeneration: @unchecked Sendable {
+        var tokens = 0
+        var text = ""
+        var toolCalls: [ToolCallInfo] = []
+        var cancelled = false
+        var promptTokenCount: Int?
+        var generationTokenCount: Int?
+        var generateTime: Double?
+        var tokensPerSecond: Double?
+    }
+
+    /// How long returning from a stopped generation waits for MLX to actually stop.
+    ///
+    /// Cancellation is checked once per token, so this is normally a single token's work. A long
+    /// prompt prefill does not check it and can overrun, in which case the call returns anyway,
+    /// as it did before this wait existed.
+    static let generationJoinSeconds: TimeInterval = 15
 
     /// Don't retry a doomed load on every subsequent message.
     private static let failureCooldown: TimeInterval = 300
@@ -319,37 +350,6 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             }
         }
 
-        var totalTokens = 0
-        var completionInfo: GenerateCompletionInfo?
-        var emittedToolCalls: [ToolCallInfo] = []
-        // What the model produced this turn. MLX appends its own reply to the session's cache,
-        // so the reply has to be recorded as consumed too — otherwise the next turn re-sends it
-        // and the conversation gains a duplicate the user never wrote.
-        var assistantText = ""
-        var completedNormally = false
-        defer {
-            lock.withLock {
-                if completedNormally {
-                    entry.consumed.append(
-                        MLXSessionReuse.Fingerprint(
-                            role: "assistant",
-                            content: assistantText,
-                            isGeneratedReply: true
-                        )
-                    )
-                    entry.contextTokens = MLXSessionReuse.contextTokens(
-                        cachedBefore: contextBefore,
-                        prefilled: (completionInfo?.promptTokenCount ?? 0)
-                            + (completionInfo?.generationTokenCount ?? totalTokens)
-                    )
-                } else {
-                    // Cancelled or thrown mid-generation: the session holds a partial reply we
-                    // cannot describe, so the cache can no longer be trusted to match.
-                    cachedChats.removeAll { $0 === entry }
-                }
-            }
-        }
-
         // Ornith-class templates end their generation prompt with a bare `<think>`, so the model
         // generates reasoning with no opening tag and is meant to close with `</think>`. When it
         // forgets, the text carries no tags at all and `AssistantContentSanitizer` — correctly —
@@ -360,13 +360,108 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             .map { ReasoningChannel.templatePreOpensThinking(modelDirectory: $0) } ?? false
         let splitter = ReasoningChannel.StreamSplitter(startsInsideReasoning: preOpensThinking)
 
+        // The stream is read in a task this service owns, and the call does not return until MLX
+        // has stopped. Stopping to read only *asks* the generation to stop; it keeps evaluating on
+        // the GPU for up to a token, or through a whole prefill. A caller that returned first
+        // could quit the process meanwhile, and `exit` then tears down MLX's scheduler and
+        // compiler cache under the running evaluation: SIGSEGV or a Metal assertion.
+        let consumer = Task { () async throws -> ConsumedGeneration in
+            try await Self.consume(stream, splitter: splitter, onChunk: onChunk)
+        }
+        let generationId = UUID()
+        let sessionBox = UncheckedSendable(entry.session)
+        let join: @Sendable () async -> Void = {
+            _ = try? await consumer.value
+            await sessionBox.value.synchronize()
+        }
+        lock.withLock {
+            activeGenerations[generationId] = ActiveGeneration(cancel: { consumer.cancel() }, join: join)
+        }
+
+        let outcome: Result<ConsumedGeneration, Error>
+        do {
+            outcome = .success(try await withTaskCancellationHandler {
+                try await consumer.value
+            } onCancel: {
+                consumer.cancel()
+            })
+        } catch {
+            outcome = .failure(error)
+        }
+        _ = try? await AsyncDeadline.wait(for: Task<Void, Error> { await join() }, seconds: Self.generationJoinSeconds)
+        lock.withLock { activeGenerations[generationId] = nil }
+
+        let consumed: ConsumedGeneration
+        switch outcome {
+        case .failure(let error):
+            lock.withLock { cachedChats.removeAll { $0 === entry } }
+            throw error
+        case .success(let value):
+            consumed = value
+        }
+        let completedNormally = !consumed.cancelled && !Task.isCancelled
+        lock.withLock {
+            if completedNormally {
+                entry.consumed.append(
+                    MLXSessionReuse.Fingerprint(
+                        role: "assistant",
+                        content: consumed.text,
+                        isGeneratedReply: true
+                    )
+                )
+                entry.contextTokens = MLXSessionReuse.contextTokens(
+                    cachedBefore: contextBefore,
+                    prefilled: (consumed.promptTokenCount ?? 0)
+                        + (consumed.generationTokenCount ?? consumed.tokens)
+                )
+            } else {
+                cachedChats.removeAll { $0 === entry }
+            }
+        }
+
+        // A block the model never closed is reasoning, not an answer.
+        let tail = splitter.flush()
+        if !tail.visible.isEmpty || !tail.reasoning.isEmpty {
+            onChunk(LLMStreamChunk(
+                deltaText: tail.visible,
+                deltaReasoning: tail.reasoning.isEmpty ? nil : tail.reasoning
+            ))
+        }
+
+        onChunk(LLMStreamChunk(
+            isFinished: true,
+            promptTokens: consumed.promptTokenCount.map {
+                MLXSessionReuse.contextTokens(cachedBefore: contextBefore, prefilled: $0)
+            },
+            completionTokens: consumed.generationTokenCount ?? consumed.tokens,
+            generationTokensPerSecond: {
+                guard let tps = consumed.tokensPerSecond,
+                      let generateTime = consumed.generateTime,
+                      let count = consumed.generationTokenCount,
+                      generateTime > 0, count > 0 else { return nil }
+                return tps
+            }(),
+            toolCalls: consumed.toolCalls
+        ))
+    }
+
+    /// Read a generation stream to its end, or until the reading task is cancelled.
+    private static func consume(
+        _ stream: AsyncThrowingStream<Generation, Error>,
+        splitter: ReasoningChannel.StreamSplitter,
+        onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
+    ) async throws -> ConsumedGeneration {
+        var result = ConsumedGeneration()
         for try await generation in stream {
-            if Task.isCancelled { break }
+            if Task.isCancelled {
+                result.cancelled = true
+                break
+            }
             switch generation {
             case .chunk(let piece):
                 if !piece.isEmpty {
-                    totalTokens += 1
-                    assistantText += piece
+                    result.tokens += 1
+                    result.text += piece
                     let split = splitter.consume(piece)
                     if !split.visible.isEmpty || !split.reasoning.isEmpty {
                         onChunk(LLMStreamChunk(
@@ -391,38 +486,43 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                     argumentsJson: argsJson,
                     status: .running
                 )
-                emittedToolCalls.append(info)
+                result.toolCalls.append(info)
                 onChunk(LLMStreamChunk(toolCalls: [info]))
             case .info(let info):
-                completionInfo = info
+                result.promptTokenCount = info.promptTokenCount
+                result.generationTokenCount = info.generationTokenCount
+                result.generateTime = info.generateTime
+                result.tokensPerSecond = info.tokensPerSecond
             @unknown default:
                 break
             }
         }
+        if Task.isCancelled { result.cancelled = true }
+        return result
+    }
 
-        // A block the model never closed is reasoning, not an answer.
-        let tail = splitter.flush()
-        if !tail.visible.isEmpty || !tail.reasoning.isEmpty {
-            onChunk(LLMStreamChunk(
-                deltaText: tail.visible,
-                deltaReasoning: tail.reasoning.isEmpty ? nil : tail.reasoning
-            ))
+    /// Stop every running generation and wait, up to `timeout`, for MLX to finish its work.
+    ///
+    /// For `applicationWillTerminate`. `exit` destroys MLX's C++ globals while other threads keep
+    /// running, so a reply still generating at quit crashes the process on its way out. Returns
+    /// false if something was still running when the wait gave up.
+    @discardableResult
+    public func prepareForExit(timeout: TimeInterval = 3) -> Bool {
+        let active = lock.withLock { Array(activeGenerations.values) }
+        guard !active.isEmpty else { return true }
+        active.forEach { $0.cancel() }
+        let finished = DispatchSemaphore(value: 0)
+        Task.detached {
+            for generation in active {
+                await generation.join()
+            }
+            finished.signal()
         }
-        completedNormally = !Task.isCancelled
+        return finished.wait(timeout: .now() + timeout) == .success
+    }
 
-        onChunk(LLMStreamChunk(
-            isFinished: true,
-            // What the model had in view, cached prefix included — not just what this call
-            // prefilled, which on a continued session is only the newest messages.
-            promptTokens: completionInfo.map {
-                MLXSessionReuse.contextTokens(cachedBefore: contextBefore, prefilled: $0.promptTokenCount)
-            },
-            completionTokens: completionInfo?.generationTokenCount ?? totalTokens,
-            generationTokensPerSecond: completionInfo.flatMap {
-                $0.generateTime > 0 && $0.generationTokenCount > 0 ? $0.tokensPerSecond : nil
-            },
-            toolCalls: emittedToolCalls
-        ))
+    var activeGenerationCount: Int {
+        lock.withLock { activeGenerations.count }
     }
 
     public enum OneShotError: LocalizedError {
@@ -995,6 +1095,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     public func isModelLoaded(_ modelId: String) -> Bool { false }
     @discardableResult public func unload(modelId: String) -> Bool { false }
     @discardableResult public func unloadAll() -> Int { 0 }
+    @discardableResult public func prepareForExit(timeout: TimeInterval = 3) -> Bool { true }
     public func preload(modelId: String) {}
 
     public static var downloadCacheRoot: URL {

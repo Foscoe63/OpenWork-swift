@@ -48,7 +48,17 @@ final class VisionDetectionTests: XCTestCase {
 
     /// The real config on this machine, if it is here.
     func testTheInstalledDefaultModelIsDetectedCorrectly() throws {
-        let settings = PersistenceManager.shared.loadSettings()
+        // Tests have their own data folder, so the machine's chosen model is read — only read —
+        // from the real settings file.
+        var settings = PersistenceManager.shared.loadSettings()
+        let realSettings = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(AppIdentity.applicationSupportFolderName)
+            .appendingPathComponent("settings.json")
+        if let data = try? Data(contentsOf: realSettings),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let model = object["defaultModelId"] as? String { settings.defaultModelId = model }
+            if let folder = object["customMLXModelsDirectory"] as? String { settings.customMLXModelsDirectory = folder }
+        }
         guard let dir = LocalMLXEngine.shared.resolveLocalModelDirectory(
             modelId: settings.defaultModelId, settings: settings
         ) else { throw XCTSkip("default model not on this machine") }

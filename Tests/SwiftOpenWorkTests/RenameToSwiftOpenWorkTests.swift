@@ -11,11 +11,9 @@ final class RenameToSwiftOpenWorkTests: XCTestCase {
     /// `AppIdentity` and the built bundle must agree, or the Keychain service, log subsystem and
     /// preferences domain would each quietly name a different app.
     func testTheBuiltBundleMatchesAppIdentity() throws {
-        // Only meaningful inside the app host. Under SwiftPM the main bundle is the xctest runner,
-        // whose identifier is `com.apple.dt.xctest.tool` — the old `hasSuffix("xctest")` guard
-        // missed it, so this failed on every `swift test`.
-        guard Bundle.main.bundlePath.hasSuffix(".app"), let id = Bundle.main.bundleIdentifier else {
-            throw XCTSkip("Not hosted by the app (SwiftPM runs tests in the xctest tool).")
+        // SwiftPM hosts tests in `xctest` (bundle ID `com.apple.dt.xctest.tool`), not the app.
+        guard Bundle.main.bundleURL.pathExtension == "app", let id = Bundle.main.bundleIdentifier else {
+            throw XCTSkip("Not hosted by the app bundle; run under xcodebuild test to check the identity.")
         }
         XCTAssertEqual(id, AppIdentity.bundleIdentifier)
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, AppIdentity.displayName)

@@ -9,39 +9,60 @@ public final class StorageService: @unchecked Sendable {
     private let lock = NSLock()
 
     public var baseDirectory: URL {
-        let directory = Self.resolveBaseDirectory(
-            environment: ProcessInfo.processInfo.environment,
-            isTestProcess: AutomationScheduler.isHostedByTests,
-            applicationSupport: fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!,
-            temporaryDirectory: fileManager.temporaryDirectory,
-            processIdentifier: ProcessInfo.processInfo.processIdentifier
-        )
+        let directory = Self.resolvedBaseDirectory
         if !fileManager.fileExists(atPath: directory.path) {
             try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
         return directory
     }
 
-    /// Where settings, sessions, agents and automations live for this process. Pure, for tests.
+    /// Names a data folder to use instead of Application Support. For a deliberate test run
+    /// against real data, point it at `~/Library/Application Support/SwiftOpenWork`.
+    public static let dataDirectoryEnvironmentKey = "SWIFTOPENWORK_DATA_DIRECTORY"
+
+    /// Where settings, sessions, agents and automations live.
     ///
-    /// A test process gets a folder of its own. The unit tests are hosted by the app, so without
-    /// this every `swift test` and `xcodebuild test` read and rewrote the real `settings.json` and
-    /// `mcp_servers.json` — restoring them afterwards when every test was careful, and not when
-    /// one was not. `SWIFTOPENWORK_DATA_DIRECTORY` overrides both, for a deliberate run against
-    /// real data or a smoke test against a prepared folder.
+    /// Under XCTest this is a folder of its own, one per test process. `xcodebuild test` launches
+    /// the real app as the test host, and tests save settings through the shared store; against
+    /// Application Support, a test that crashed before restoring left the developer's settings
+    /// changed, and anything the app does at launch ran on real data. Resolved once, so every
+    /// store in the process agrees for its whole life.
+    static let resolvedBaseDirectory: URL = resolveBaseDirectory(
+        environment: ProcessInfo.processInfo.environment,
+        hostedByTests: AutomationScheduler.isHostedByTests,
+        applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!,
+        temporaryDirectory: FileManager.default.temporaryDirectory,
+        processIdentifier: ProcessInfo.processInfo.processIdentifier
+    )
+
+    static var testDirectoryPrefix: String { "\(AppIdentity.applicationSupportFolderName)-tests-" }
+
+    /// Delete test data folders whose process has exited, so runs do not pile up.
+    static func removeFinishedTestDirectories(
+        in temporaryDirectory: URL,
+        isRunning: (Int32) -> Bool = { kill($0, 0) == 0 || errno == EPERM }
+    ) {
+        let fileManager = FileManager.default
+        let names = (try? fileManager.contentsOfDirectory(atPath: temporaryDirectory.path)) ?? []
+        for name in names where name.hasPrefix(testDirectoryPrefix) {
+            guard let pid = Int32(name.dropFirst(testDirectoryPrefix.count)), !isRunning(pid) else { continue }
+            try? fileManager.removeItem(at: temporaryDirectory.appendingPathComponent(name))
+        }
+    }
+
     static func resolveBaseDirectory(
         environment: [String: String],
-        isTestProcess: Bool,
+        hostedByTests: Bool,
         applicationSupport: URL,
         temporaryDirectory: URL,
         processIdentifier: Int32
     ) -> URL {
-        if let override = environment["SWIFTOPENWORK_DATA_DIRECTORY"]?.trimmingCharacters(in: .whitespaces),
-           !override.isEmpty {
-            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+        if let explicit = environment[dataDirectoryEnvironmentKey], !explicit.isEmpty {
+            return URL(fileURLWithPath: (explicit as NSString).expandingTildeInPath, isDirectory: true)
         }
-        if isTestProcess {
-            return temporaryDirectory.appendingPathComponent("SwiftOpenWork-tests-\(processIdentifier)", isDirectory: true)
+        if hostedByTests {
+            removeFinishedTestDirectories(in: temporaryDirectory)
+            return temporaryDirectory.appendingPathComponent("\(testDirectoryPrefix)\(processIdentifier)", isDirectory: true)
         }
         return applicationSupport.appendingPathComponent(AppIdentity.applicationSupportFolderName, isDirectory: true)
     }

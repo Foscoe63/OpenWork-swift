@@ -968,6 +968,8 @@ public final class AgentRunner {
             Built-in tools (prefer native function/tool calling):
             file_read (supports offset/limit), file_write, edit_file, multi_edit, file_list, grep, glob,
             find_symbol, rename_symbol, build_project, run_tests,
+            go_to_definition, find_references, symbol_info, code_diagnostics, document_symbols, call_hierarchy,
+            setup_xcode_language_server,
             git_status, git_diff, git_log, changed_files, revert_changes,
             file_copy, file_move, file_delete,
             terminal_command/run_command, fetch_url, web_search, ask_user, exit_plan_mode,
@@ -986,6 +988,8 @@ public final class AgentRunner {
                For a web UI, compiling is not seeing: start it once with preview_start, then run
                preview_check after each change and fix what its console errors and screenshot show.
                Never start a dev server with terminal_command — it is killed after two minutes.
+               Before changing a function's signature or behaviour, find_references shows every
+               caller; code_diagnostics checks one edited file in seconds.
             1. Do not narrate ("I will check…" / "Let me…"). Call the tool immediately, then answer.
             2. Prefer native tool calls. Markdown fallback only if needed:
             ```tool_call
@@ -1737,10 +1741,9 @@ public final class AgentRunner {
             "file_move", "move_file", "mv",
             "file_copy", "copy_file", "cp",
             "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol",
-            "terminal_command", "run_command",
-            // Plan mode promises no side effects. These all had requiresApproval set and were
-            // still offered here, where nothing read the flag.
-            "preview_start", "run_app", "launch_app", "git_commit", "worktree_create", "worktree_remove"
+            "preview_start", "run_app", "launch_app", "git_commit", "worktree_create", "worktree_remove",
+            "setup_xcode_language_server",
+            "terminal_command", "run_command"
         ]
         var filtered = tools.filter { tool in
             if tool.name == "exit_plan_mode" || tool.name == "ask_user" { return true }
@@ -1800,6 +1803,8 @@ public final class AgentRunner {
             return "This modifies files on disk."
         case "file_delete", "delete_file", "rm":
             return "This permanently deletes a file from disk."
+        case "setup_xcode_language_server":
+            return "This writes buildServer.json into the project and may build the scheme with xcodebuild."
         case "revert_changes":
             // Undo is itself destructive: it discards everything the turn produced.
             return "This discards every file change made during this turn."

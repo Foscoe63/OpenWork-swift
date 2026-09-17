@@ -63,6 +63,18 @@ public final class LiveToolOutput: ObservableObject {
         }
     }
 
+    /// A status line for the card only, from work that is not a shell command (such as a
+    /// language server indexing), so it stays out of the terminal panel.
+    nonisolated static func note(_ line: String, callId: String?) {
+        guard let callId, !line.isEmpty else { return }
+        Task { @MainActor in shared.append(callId: callId, chunk: line + "\n") }
+    }
+
+    /// Clear the card's status lines once the call has a result.
+    nonisolated static func conclude(noteFor callId: String) {
+        Task { @MainActor in shared.finish(callId: callId) }
+    }
+
     nonisolated static func announce(command: String, callId: String?) {
         Task { @MainActor in
             if let callId { shared.begin(callId: callId) }

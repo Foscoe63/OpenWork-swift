@@ -7,10 +7,10 @@ against this machine, not remembered.
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| SwiftOpenWork | `main` (`83a7cf2`) + uncommitted fourth to seventh passes | 741 |
-| GrizzyBot | yes, `03eb11e` | 538 |
+| SwiftOpenWork | `origin/main` is `e1f6afe` (release `1.2.0` at `51abca3`); this branch merges the local editor/preview/ghost-text work onto that | see *Verifying a change* |
+| GrizzyBot | yes, `ecce520` | 538 |
 
-SwiftOpenWork went from 13 tests to 741 over this work. Released as 1.1.0, under its old name, OpenWork.
+Latest **released** build: 1.2.0, the first under the SwiftOpenWork name (signed, not notarised). This working tree is an unreleased integration of 1.2.0's language-server stack with the local seventh-pass editor, live preview, ghost-text and local-engine sharing. It is **not** on `origin/main` until this branch is reviewed and pushed.
 
 > **The app was renamed SwiftOpenWork on 2026-09-16** (bundle ID `io.github.foscoe63.SwiftOpenWork`,
 > was `ai.openwork.OpenWorkSwift`). Sections written before that say "OpenWork" and use the old
@@ -725,7 +725,8 @@ four real bugs, two of them serious.
   did not see state set in the same click. It now loads its own state in `onAppear`. Checked
   in the running app: 9 folders listed.
 - **`rename_symbol` uses the compiler in Swift packages** (`SourceKitRename`, an LSP client for
-  `sourcekit-lsp`). In the test, renaming `Alpha.value` changes its call site and leaves
+  `sourcekit-lsp`; since replaced by `SemanticRename` on the shared LSP layer, see *Language
+  servers* below). In the test, renaming `Alpha.value` changes its call site and leaves
   `Beta.value` and a comment alone. `mode` is `auto` (the default), `semantic` or `text`, and
   the output always names the method used. Rules worth keeping:
   1. **Wait for indexing before renaming.** A rename sent early covers only the files already
@@ -888,6 +889,188 @@ scheduled run shares the local model with it, and the header says "Agent ready" 
 
 ---
 
+## Language servers: code intelligence for agents (2026-09-16)
+
+The only LSP client used to be a single-purpose one inside `rename_symbol`: it started
+`sourcekit-lsp`, guessed when indexing was done, renamed, and quit. It is now a general layer in
+`Sources/Engine/LSP/`, and agents have six read-only tools on top of it:
+
+| Tool | Asks the server for |
+|---|---|
+| `go_to_definition` | definition, declaration, type definition or implementation (`kind`) |
+| `find_references` | every use of *that* declaration, not same-named symbols |
+| `symbol_info` | hover text (signature, docs) plus where it is declared |
+| `code_diagnostics` | errors and warnings for one file, as `path:line:col: error:` so the card links them |
+| `document_symbols` | an outline of one file |
+| `call_hierarchy` | call sites (`incoming`) or callees (`outgoing`) |
+
+Agents address a position by file, 1-based line and the symbol name as written; `column` is only
+needed when the name appears twice on the line. None of the tools need approval, and plan mode
+keeps them.
+
+**Layers, bottom up:**
+
+- `LSPConnection`: JSON-RPC framing and request matching. A waiting request always ends: with a
+  response, a timeout, cancellation of the calling task (which sends `$/cancelRequest`), or the
+  server exiting. A malformed header kills the connection instead of being skipped. The last lines
+  of the server's stderr are quoted in the error.
+- `LanguageServerCatalog`: which server handles a file, and its project root. The catalog covers
+  sourcekit-lsp, clangd, TypeScript, pyright/basedpyright, rust-analyzer and gopls.
+  **A server is only used with a root marker** (`Package.swift`, `compile_commands.json`,
+  `tsconfig.json`, `Cargo.toml`, `go.mod`…) found between the file and the workspace folder, never
+  above it. Without one, servers answer from the open file alone, and that looks complete.
+  `ExecutableLocator` searches Homebrew, `~/.cargo/bin`, `~/go/bin`, `~/.swiftly/bin` and the npm
+  directories as well as `PATH`, because an app opened from the Finder gets a minimal `PATH`. It
+  passes that search path on to the server, since Node-based servers need to find `node`.
+  sourcekit-lsp comes from `DEVELOPER_DIR`, then an Xcode that `xcode-select` points at, then the
+  newest Xcode by version number, and only then the Command Line Tools.
+- `LanguageServerSession`: one long-lived server per root. Before every request it re-reads the
+  files it names from disk and forwards file-system events (`FileChangeWatcher`, FSEvents) as
+  `workspace/didChangeWatchedFiles`. Tools that write files also notify the pool directly, because
+  FSEvents arrive a moment late.
+- `LanguageServerPool`: starts servers on first use, restarts a dead one and says so in the
+  answer, gives up after three crashes in five minutes, and stops servers idle for ten minutes.
+  `applicationWillTerminate` kills anything still running.
+- `CodeIntelligence` formats the answers. `SemanticRename` is the compiler half of `rename_symbol`.
+
+**sourcekit-lsp behaviours the tests uncovered:**
+
+1. **`workspace/synchronize` with `{"index": true}` is the readiness signal.** It blocks until
+   background indexing is done, which replaces the old "no progress for three seconds" guess.
+   `_pollIndex` no longer exists. Adding `buildServerUpdates` makes the whole request fail as
+   "an experimental request option". Servers without `synchronize` fall back to waiting until
+   work-done progress stops.
+2. **A new file is only indexed if it is reported as *created*.** Reported as changed, it is
+   silently left out of the package, and references to it are missing. `FileChangeWatcher.classify`
+   maps the FSEvents created and renamed flags to created (an atomic save counts too, at the cost
+   of a package reload). Tool writes use the diff kind the engine already computes.
+3. **Workspace trust.** sourcekit-lsp can ask whether to trust a workspace's configuration. The
+   client declines, because an agent's workspace may be an unvetted repository.
+
+**Rename is stricter than before.** In order: the root must exist, indexing must finish,
+`prepareRename` must accept the position, and every edit's range must currently hold the old
+name. Edits that restate unchanged text, such as argument labels, are skipped rather than
+rejected. On a declaration line such as `func scale(scale: Int)`, the name after the declaration
+keyword is chosen. If a write fails partway, the files already written are restored and the error
+says so. That error (`writeFailed`) never falls back to text replacement.
+
+**Which servers have actually been run.** sourcekit-lsp and clangd are installed here and tested
+on every run. TypeScript 7 (`tsc --lsp`) and pyright were installed temporarily and passed
+`testTypeScriptAnswersThroughTheGenericPath` and `testPyrightAnswersThroughTheGenericPath`. Those
+two tests skip unless a server is on the search path; run them with, for example,
+`PATH=<dir>/node_modules/.bin:$PATH`. typescript-language-server with TypeScript 5 was checked by
+hand against the protocol only. rust-analyzer and gopls have never been run: no Rust or Go
+toolchain was installed then; both have since been installed and tested (see *1.2.0 released*). clangd has neither `synchronize` nor pull diagnostics, so it tests the
+fallbacks. A test gotcha: in `add(1, 2) + missing` clang drops the whole expression, so `add` has
+no definition there. Keep errors on their own line in fixtures.
+
+**TypeScript 7 broke the obvious install.** `npm install typescript typescript-language-server`
+now installs TypeScript 7, which is a native compiler with no `tsserver`. typescript-language-server
+then fails to start ("Could not find a valid TypeScript installation"). TypeScript 7 has its own
+server, `tsc --lsp --stdio`, so the catalog entry (`typescript`) reads the TypeScript version:
+7 or later uses `tsc`, earlier versions use typescript-language-server. The project's own
+`node_modules/.bin` is checked before the search path.
+
+Tests: `LSPConnectionTests` uses pipes with no server, `CodeIntelligenceTests` is pure, and
+`LanguageServerIntegrationTests` runs the real sourcekit-lsp and clangd. One sourcekit test runs
+every query on one package, edits files behind the server's back, adds a file and `SIGKILL`s the
+server. It takes about five seconds, because the toy package indexes quickly.
+
+## Closing the open items (2026-09-16)
+
+- **`LoopBreakerTests` failed on every run because the test was out of date.** The detector had
+  been deliberately loosened (8-word n-grams, and three similar lines in a row rather than two),
+  and its own comment names this test's list as the false positive it fixes. The test now asserts
+  that such a list is *not* flagged, and a new test checks that a repeating sentence still is.
+- **`testTheBuiltBundleMatchesAppIdentity` failed under SwiftPM.** It meant to skip there, but
+  checked for an ID ending in `xctest`, and the real one is `com.apple.dt.xctest.tool`. It now
+  skips unless the host is an `.app`, and passes under `xcodebuild test`.
+- **Indexing progress on the card.** `SessionEvents` keeps each open `$/progress` title, message
+  and percentage. While a language-server tool waits for the index, the card shows lines such as
+  `sourcekit-lsp: Indexing: 12 / 40 (30%)`. This covers `rename_symbol` too.
+- **Tests have their own data folder** (see *Environment gotchas*). `VisionDetectionTests` still
+  checks the model this machine actually uses, reading that one value from the real settings
+  file without writing it.
+- **TypeScript and pyright tried.** See *Language servers*. TypeScript 7 needed a catalog change.
+
+Verified: `swift test` and `xcodebuild test` both pass with no failures (703 tests after the Xcode work below). The
+TypeScript and pyright tests pass when those servers are installed and skip otherwise.
+
+## Code intelligence for Xcode projects (2026-09-16)
+
+Projects with an `.xcodeproj` or `.xcworkspace` and no `Package.swift` used to get a refusal
+from every language-server tool. They now work through `xcode-build-server` (Homebrew), which
+sourcekit-lsp talks to through `buildServer.json`.
+
+**`setup_xcode_language_server`** (needs approval, blocked in plan mode) finds the container
+and scheme with the same rules as `build_project` (`BuildDiagnostics.xcodeContainer`). It runs
+`xcode-build-server config` with Xcode's `DEVELOPER_DIR`, and builds the scheme if it has never
+been built (`build: true` always builds, `false` never does). It then stops any server already
+running for that folder. The card shows the diff of `buildServer.json`, and the output reminds
+the user to gitignore it, since it holds absolute paths. Before setup, the tools say to run it
+(`Unavailable.xcodeProjectNeedsSetup`) instead of the generic "needs Package.swift".
+
+**What was learned by running it by hand first:**
+
+1. **`xcode-build-server` shells out to `xcodebuild`.** On this machine `xcode-select` points at
+   the Command Line Tools, which have no `xcodebuild`, so without `DEVELOPER_DIR` it fails with a
+   Python traceback. The commands pin it.
+2. **It does not index.** Answers come from the index Xcode wrote in its last build. A file added
+   afterwards is missing from references until the next build. After a rebuild, a server that is
+   already running sees the new index immediately, with no restart. So
+   `XcodeBuildServer.freshness` compares source-file modification times with the newest
+   `.xcactivitylog`, and every answer for such a project says how old the index is and which
+   files changed since. **A compiler rename refuses while the index is stale**; `auto` falls back
+   to text and says why, `semantic` fails.
+3. **`workspace/synchronize` returned before build settings arrived.** The first query after
+   opening a file then got single-file answers: definition was `null` on one run and correct on
+   the next. The `buildServerUpdates` option fixes that, but it is refused as experimental unless
+   the server is started with `initializationOptions`
+   `{"experimentalFeatures":["synchronize-for-build-system-updates"]}`. sourcekit-lsp is now always
+   started that way. A server that still refuses the option gets the index-only request.
+
+`XcodeBuildServerTests` covers config parsing, staleness, the refusal message, command quoting and
+gating. It also generates a real framework project with xcodegen and checks: refusal before
+setup; setup and build; references for `Alpha.value` only; a file added afterwards reported as
+changed, with rename refused and nothing written; a rebuild through the tool, after which
+references include the new file. It removes its own `XToy-*` folder from DerivedData.
+
+## 1.2.0 released, and the MLX exit crash fixed (2026-09-16)
+
+**Release.** `MARKETING_VERSION` 1.2.0, build 2, tag `1.2.0`, published as the latest GitHub
+release with `SwiftOpenWork.zip` (sha256 `066e0ed5…df73aa`). Built Release with
+`SIGN_ONLY=1 DEVELOPER_ID_APP="Developer ID Application: Edward Griswold (5XKHL47YG3)"
+Scripts/notarize-release.sh`, zipped with `ditto`, and checked by unzipping and
+`codesign --verify --deep --strict`. **Not notarised:** the issuer ID was not on this machine, so
+Gatekeeper reports "Unnotarized Developer ID", and the release notes say how to open it. A Release
+launch was smoke-tested with `XCTestBundlePath=/dev/null` (isolated data, no startup automations).
+The GitHub `releases/latest` API that `UpdateChecker` reads returns 1.2.0.
+
+**MLX exit crash: a real bug, not a test quirk.** macOS kept eight crash reports from runs that
+passed and then died at exit. In the five read closely, the main thread was inside `exit` →
+`__cxa_finalize` destroying MLX's `Scheduler`, `ThreadPool` or `CompilerCache`, while a Swift
+concurrency thread was still in `mlx_async_eval` or `CompilerCache::find`. Stopping to read a
+generation stream only *asks* mlx-swift-lm's session task to stop, and `streamInProcess` returned
+at once while the GPU work carried on. A user quitting mid-reply would hit the same crash.
+Reproduced by cancelling a real Ornith generation after five tokens and letting the test exit:
+exit 139 once and 134 twice in three runs.
+
+Fixed in `NativeMLXService`:
+- The stream is read in a task the service owns, and `streamChat` does not return until
+  `ChatSession.synchronize()` has waited out the KV-cache lock the generation holds (capped at
+  15s; a long prefill does not check cancellation).
+- Running generations are registered, and `prepareForExit` (called from
+  `applicationWillTerminate`) cancels them and waits up to 3s.
+
+After the fix: five runs of the same repro, all exit 0. `MLXGenerationShutdownTests` checks the
+invariant: no active generation and no further tokens once the call returns, and that preparing
+for exit stops a running generation. It needs the Ornith model and skips without it, as on CI.
+
+**rust-analyzer and gopls tested.** Installed with Homebrew (`rust`, `rust-analyzer`, `go`,
+`gopls`). `testRustAnalyzerAnswersThroughTheGenericPath` and `testGoplsAnswersThroughTheGenericPath`
+cover definition, references and diagnostics, and passed four runs in a row. Every server in the
+catalog has now been run through the app's own code.
+
 ## What landed 2026-09-17 (seventh pass): local engine, editor, live preview
 
 Asked for: make local models, seeing the result, editing code yourself, and polish "very good".
@@ -1008,8 +1191,10 @@ with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afte
 
 ### Not done, on purpose or for later
 
-- **AI inline (ghost-text) completion.** Tab completion is lexical. A model-backed one needs
-  fill-in-the-middle prompting and a latency budget a 35B local model does not meet per keystroke.
+- **Ghost-text is pause-based, not per-keystroke.** After typing pauses, the idle local model may
+  suggest a continuation. It never queues behind an agent turn and never swaps the resident
+  checkpoint. Fill-in-the-middle prompting on every keystroke is still refused: a 35B model does
+  not meet that latency budget.
 - **One preview at a time** in the pane; several servers can run, the pane follows the latest.
 - **Highlighting is whole-document** on a background queue, debounced. Fine to ~1MB; files beyond
   1.5MB UTF-16 are shown uncoloured.
@@ -1026,32 +1211,23 @@ macOS is the only authority on whether a login item is registered.
 
 ### Needs you
 
+- **Review and land this integration branch** (`integrate/local-on-1.2`) onto `main`. It is not
+  on `origin/main` yet. 1.2.0 stays the last published release until you cut the next one.
 - **Re-grant Accessibility and Screen Recording** to SwiftOpenWork, and remove the old OpenWork
-  entries.
-- **Release 1.2.0 under the new name:** bump `MARKETING_VERSION`, run the notarise script, and
-  publish `SwiftOpenWork.zip`.
-
-- **Notarisation works; publish nothing built before the rename.** On 2026-09-16 the Developer ID
-  certificate (`Developer ID Application: Edward Griswold (5XKHL47YG3)`, login keychain) and an
-  App Store Connect key (ID `J9TT53PZQ4`, file `~/.appstoreconnect/AuthKey_J9TT53PZQ4.p8`) were set
-  up, and a build was notarised and stapled. That build was still `OpenWork.app`, so its zip was
-  deleted. The issuer ID is on the App Store Connect Integrations page. Run:
-  `DEVELOPER_ID_APP="Developer ID Application: Edward Griswold (5XKHL47YG3)" APPLE_API_KEY_ID=J9TT53PZQ4 APPLE_API_ISSUER=<issuer> APPLE_API_KEY_PATH=~/.appstoreconnect/AuthKey_J9TT53PZQ4.p8 Scripts/notarize-release.sh`
-- **The six stray `MorningBrief` sessions** from test runs (see the sixth pass). Delete them in
-  the app if you do not want them.
-- **GrizzyBot's project file.** `xcodegen generate` has been run in
-  `/Volumes/Storage/Projects/GrokBot/GrizzyBot`. It added `McpSessionPool.swift` and also
-  `McpSessionPoolTests.swift` and `McpTimeoutTests.swift`, which were missing too. Not yet
-  committed.
+  entries (System Settings → Privacy & Security). An app cannot do this itself. 1.2.0, signed with
+  the Developer ID, is installed in `/Applications`; the ad-hoc-signed 1.1.0 copy that was there
+  is in the Trash. Grant the installed copy: grants follow the code signature, so a grant given to
+  the old copy would not have carried over.
+- **Notarise future releases.** 1.2.0 shipped signed but not notarised because the App Store
+  Connect issuer ID was not available. Once you have it (App Store Connect → Users and Access →
+  Integrations → App Store Connect API), either run the full `Scripts/notarize-release.sh`, or
+  store credentials once with `xcrun notarytool store-credentials` so the next release can use a
+  keychain profile.
 
 ### Worth building next
 
-- **Compiler rename for Xcode projects** would need `xcode-build-server` or a generated
-  `buildServer.json`. Until then, `auto` uses text replacement there and says so.
-- **Rename progress.** A compiler rename in a large package can spend minutes indexing, and the
-  card shows only a spinner. `LiveToolOutput` could show indexing progress.
-- **Test host UserDefaults and Keychain are still real.** The data folder is isolated (seventh
-  pass); preferences and Keychain items written under test are not.
+- **Test host UserDefaults and Keychain are still real.** The data folder is isolated; preferences
+  and Keychain items written under test are not.
 
 ### Explicitly decided against — with reasons, so they are not re-proposed
 
@@ -1085,14 +1261,16 @@ all.
 
 ## Known issues not fixed
 
-**GrizzyBot's four `GrizzyBotUITests` fail environmentally, not from code.** A bare
+**GrizzyBot's four `GrizzyBotUITests` are not simply environmental (corrected 2026-09-16).** Run
+locally from SwiftOpenWork's session, one test passed alone, then two of four and zero of four
+passed on consecutive full runs, all failing with "Missing <id>-overlay" rather than a runner
+connection error. Flaky locally suggests a timing or launch-state bug in GrizzyBot, not only the
+environment. It was not investigated further; the original note follows.
+**Previously recorded: they fail environmentally, not from code.** A bare
 `WindowGroup { Text("…") }` with none of GrizzyBot's code fails identically under XCUITest, while
 the same binary shows its window fine via LaunchServices. CI passes `CODE_SIGNING_ALLOWED=NO`,
 which kills the runner before it connects; locally it looks like missing Accessibility permission
 for the test runner.
-
-**MLX container teardown segfaults at process exit** (signal 11) after tests pass. `print` to a
-pipe is buffered and never flushed, so write benchmark results to a file, not stdout.
 
 ---
 
@@ -1294,10 +1472,16 @@ touching `Sources/App/Intents`, run:
 xcodegen generate && xcodebuild -project SwiftOpenWork.xcodeproj -scheme SwiftOpenWork build
 ```
 
-**The test host is the real app on your real data.** `xcodebuild test` launches SwiftOpenWork.app
-against `~/Library/Application Support/SwiftOpenWork`. Anything started at launch must check
-`AutomationScheduler.isHostedByTests`. To smoke-test a build without firing startup automations,
-launch the binary directly with `XCTestBundlePath=/dev/null` in its environment.
+**The test host is the real app, but no longer on your real data.** `xcodebuild test` launches
+SwiftOpenWork.app. Since 2026-09-16, `StorageService` gives any XCTest process its own folder,
+`$TMPDIR/SwiftOpenWork-tests-<pid>`, and removes folders left by earlier test processes that have
+exited. A full `xcodebuild test` left `settings.json` and `sessions.json` unmodified. What is still
+real under test: `UserDefaults` (window layout, update-check dates), the Keychain, and the home
+folder. Anything started at launch must still check `AutomationScheduler.isHostedByTests`. For a
+deliberate run on real data, such as a real agent turn, set
+`SWIFTOPENWORK_DATA_DIRECTORY=~/Library/Application\ Support/SwiftOpenWork`. To smoke-test a build
+without firing startup automations, launch the binary directly with `XCTestBundlePath=/dev/null`
+in its environment.
 
 **CI cancels superseded runs** (`cancel-in-progress: true`), which hides per-commit verification if
 you are bisecting.
@@ -1338,7 +1522,7 @@ The model library on this machine is `/Volumes/Models/Models` (13 loadable bundl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 741 tests, 2 skipped outside the app host
+$SWIFT test                    # 818 tests; tests needing an uninstalled server or model, and the bundle-identity test, skip
 xcodegen generate              # after adding files — the .xcodeproj is tracked
 xcodebuild -project SwiftOpenWork.xcodeproj -scheme SwiftOpenWork build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list

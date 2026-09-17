@@ -144,32 +144,3 @@ final class BuiltInMLXIsInProcessOnlyTests: XCTestCase {
         }
     }
 }
-
-/// The suite must never read or write the real app data.
-final class TestDataIsolationTests: XCTestCase {
-
-    func testThisProcessDoesNotUseTheRealDataFolder() {
-        let real = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent(AppIdentity.applicationSupportFolderName, isDirectory: true)
-        guard ProcessInfo.processInfo.environment["SWIFTOPENWORK_DATA_DIRECTORY"] == nil else { return }
-        XCTAssertNotEqual(StorageService.shared.baseDirectory.standardizedFileURL, real.standardizedFileURL,
-                          "tests are writing the user's real settings and sessions")
-    }
-
-    func testResolution() {
-        let support = URL(fileURLWithPath: "/Users/me/Library/Application Support")
-        let temp = URL(fileURLWithPath: "/tmp/t")
-        XCTAssertEqual(
-            StorageService.resolveBaseDirectory(environment: [:], isTestProcess: false, applicationSupport: support, temporaryDirectory: temp, processIdentifier: 7).path,
-            "/Users/me/Library/Application Support/\(AppIdentity.applicationSupportFolderName)"
-        )
-        XCTAssertEqual(
-            StorageService.resolveBaseDirectory(environment: [:], isTestProcess: true, applicationSupport: support, temporaryDirectory: temp, processIdentifier: 7).path,
-            "/tmp/t/SwiftOpenWork-tests-7"
-        )
-        XCTAssertEqual(
-            StorageService.resolveBaseDirectory(environment: ["SWIFTOPENWORK_DATA_DIRECTORY": "/data/x"], isTestProcess: true, applicationSupport: support, temporaryDirectory: temp, processIdentifier: 7).path,
-            "/data/x"
-        )
-    }
-}

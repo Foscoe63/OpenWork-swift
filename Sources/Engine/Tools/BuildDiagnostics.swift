@@ -388,6 +388,25 @@ public enum BuildDiagnostics {
         action: Action,
         fileManager: FileManager = .default
     ) -> String? {
+        guard let container = xcodeContainer(at: root, fileManager: fileManager) else { return nil }
+
+        var parts = ["xcodebuild", container.flag, quoted(container.name), "-scheme", quoted(container.scheme)]
+        switch action {
+        case .build:
+            // -quiet drops the per-file compile chatter but keeps warnings, errors and the verdict,
+            // which is the difference between fitting in the output budget and being truncated.
+            parts.append(contentsOf: ["-quiet", "build"])
+        case .test:
+            parts.append("test")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// The Xcode workspace or project directly in `root`, and the scheme to build it with.
+    public static func xcodeContainer(
+        at root: String,
+        fileManager: FileManager = .default
+    ) -> (flag: String, name: String, scheme: String)? {
         guard let entries = try? fileManager.contentsOfDirectory(atPath: root) else { return nil }
 
         let container: (flag: String, name: String)
@@ -398,20 +417,9 @@ public enum BuildDiagnostics {
         } else {
             return nil
         }
-
         let base = (container.name as NSString).deletingPathExtension
         let scheme = sharedScheme(forContainer: container.name, in: root, fileManager: fileManager) ?? base
-
-        var parts = ["xcodebuild", container.flag, quoted(container.name), "-scheme", quoted(scheme)]
-        switch action {
-        case .build:
-            // -quiet drops the per-file compile chatter but keeps warnings, errors and the verdict,
-            // which is the difference between fitting in the output budget and being truncated.
-            parts.append(contentsOf: ["-quiet", "build"])
-        case .test:
-            parts.append("test")
-        }
-        return parts.joined(separator: " ")
+        return (container.flag, container.name, scheme)
     }
 
     /// The first shared scheme of a container, preferring one named after the container itself.
@@ -442,7 +450,7 @@ public enum BuildDiagnostics {
         return found.first { $0 == containerBase } ?? found.sorted().first
     }
 
-    private static func quoted(_ value: String) -> String {
+    static func quoted(_ value: String) -> String {
         value.contains(where: { $0 == " " || $0 == "'" }) ? "'\(value.replacingOccurrences(of: "'", with: #"'\''"#))'" : value
     }
 }

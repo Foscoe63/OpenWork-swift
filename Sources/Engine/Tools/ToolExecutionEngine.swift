@@ -169,6 +169,14 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 path: target
             )
         }
+        if result.success {
+            let changed = Self.changedPaths(toolName: toolName, argumentsJson: argumentsJson, workspace: workspace, result: result)
+            if !changed.paths.isEmpty {
+                // Running language servers would otherwise answer from the old text until the
+                // file-system event arrives, and an agent often edits and then queries at once.
+                await LanguageServerPool.shared.filesChanged(changed.paths, created: changed.created)
+            }
+        }
         AppLog.verbose(
             .tools,
             "result \(toolName) success=\(result.success) ms=\(Int(result.durationMs)) "
@@ -176,6 +184,147 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 + "output=\(AppLog.truncated(result.output))"
         )
         return result
+    }
+
+    /// Write `buildServer.json` for an Xcode project so sourcekit-lsp gets its build settings, and
+    /// build the scheme when there is no build to take settings and an index from.
+    private func setUpXcodeLanguageServer(
+        dict: [String: Any], workspace: Workspace, settings: AppSettings, startTime: Double, callId: String?
+    ) async -> ToolExecutionResult {
+        func failure(_ message: String) -> ToolExecutionResult {
+            ToolExecutionResult(success: false, output: "", error: message, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+        }
+        let raw = (dict["path"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? workspace.folderPath
+        let directory = raw.hasPrefix("/") ? raw : (workspace.folderPath as NSString).appendingPathComponent(raw)
+        if let denial = sandboxDenial(for: directory, workspace: workspace, settings: settings, startTime: startTime) {
+            return denial
+        }
+        guard let container = BuildDiagnostics.xcodeContainer(at: directory) else {
+            return failure("No .xcodeproj or .xcworkspace in \(raw). Pass `path`: the folder that contains it.")
+        }
+        if FileManager.default.fileExists(atPath: (directory as NSString).appendingPathComponent("Package.swift")) {
+            return failure("\(raw) has a Package.swift, which sourcekit-lsp reads directly. No setup is needed; ask the code-intelligence tools directly.")
+        }
+        let locator = ExecutableLocator()
+        guard let buildServer = locator.executable(named: "xcode-build-server") else {
+            return failure("xcode-build-server is not installed. \(XcodeBuildServer.installHint)")
+        }
+        let developerDirectory = locator.sourceKitInXcode()?.1
+        let scheme = (dict["scheme"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? container.scheme
+        let relative = CodeIntelligence.relativePath(directory, workspaceRoot: workspace.folderPath)
+        let configPath = (directory as NSString).appendingPathComponent("buildServer.json")
+        let before = Self.readForDiff(configPath)
+
+        let config = runProcess(
+            command: XcodeBuildServer.configCommand(executable: buildServer, developerDirectory: developerDirectory,
+                                                    flag: container.flag, container: container.name, scheme: scheme),
+            cwd: directory, timeoutSeconds: 180, callId: callId
+        )
+        guard config.exitCode == 0, let configuration = XcodeBuildServer.configuration(at: directory) else {
+            let tail = config.output.split(separator: "\n").suffix(12).joined(separator: "\n")
+            return failure("xcode-build-server could not configure scheme '\(scheme)' (exit \(config.exitCode)). Check the scheme name; xcodebuild -list shows the real ones.\n\(tail)")
+        }
+
+        let shownPath = LanguageServerCatalog.standardized(directory) == LanguageServerCatalog.standardized(workspace.folderPath)
+            ? "buildServer.json" : relative + "/buildServer.json"
+        var lines = ["Wrote \(shownPath) for scheme '\(scheme)' (\(container.name))."]
+        let hasBuild = configuration.buildRoot.flatMap { XcodeBuildServer.latestBuildLog(buildRoot: $0) } != nil
+        let requested = dict["build"] as? Bool
+        var buildFailed = false
+        if requested == true || (requested == nil && !hasBuild) {
+            let build = runProcess(
+                command: XcodeBuildServer.buildCommand(developerDirectory: developerDirectory, flag: container.flag,
+                                                       container: container.name, scheme: scheme),
+                cwd: directory, timeoutSeconds: 1800, callId: callId
+            )
+            if build.exitCode == 0 {
+                lines.append("Built '\(scheme)', so the index is current.")
+            } else {
+                buildFailed = true
+                let tail = build.output.split(separator: "\n").suffix(15).joined(separator: "\n")
+                lines.append("The build failed (exit \(build.exitCode)\(build.timedOut ? ", timed out" : "")). Files that did not compile have no settings or index entries until it succeeds:\n\(tail)")
+            }
+        } else if !hasBuild {
+            lines.append("Not built (build=false). There is no index until the scheme is built.")
+        } else {
+            lines.append("Used the existing build.")
+        }
+
+        // A server already running for this folder started without the build server.
+        await LanguageServerPool.shared.shutdown(under: directory)
+        lines.append(XcodeBuildServer.note(for: XcodeBuildServer.freshness(root: directory, configuration: configuration)))
+        lines.append("buildServer.json holds absolute paths for this machine. Add it to .gitignore rather than committing it.")
+
+        var result = ToolExecutionResult(
+            success: !buildFailed,
+            output: lines.joined(separator: "\n"),
+            error: buildFailed ? "Configured, but the build failed; see the output." : nil,
+            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        )
+        if let diff = InlineFileDiff.between(before: before, after: Self.readForDiff(configPath), path: configPath) {
+            result.fileDiffs = [diff]
+        }
+        return result
+    }
+
+    /// Indexing progress for a code-intelligence call, shown on its card while it waits.
+    static func languageServerProgress(callId: String?) -> CodeIntelligence.ProgressHandler? {
+        guard let callId else { return nil }
+        return { line in LiveToolOutput.note(line, callId: callId) }
+    }
+
+    struct ArgumentProblem: Error {
+        var text: String
+    }
+
+    /// Where a code-intelligence tool call points, or what is missing from its arguments.
+    static func codeTarget(from dict: [String: Any], toolName: String) -> Result<CodeIntelligence.Target, ArgumentProblem> {
+        guard let path = ((dict["path"] as? String) ?? (dict["file"] as? String)), !path.isEmpty else {
+            return .failure(ArgumentProblem(text: "\(toolName) requires `path`, `line` and `symbol` — the file, the 1-based line, and the name as written on that line."))
+        }
+        guard let line = intArgument(dict["line"]) else {
+            return .failure(ArgumentProblem(text: "\(toolName) requires `line`, the 1-based line where the symbol appears."))
+        }
+        let symbol = ((dict["symbol"] as? String) ?? (dict["name"] as? String))?.trimmingCharacters(in: .whitespaces)
+        let column = intArgument(dict["column"])
+        guard (symbol?.isEmpty == false) || column != nil else {
+            return .failure(ArgumentProblem(text: "\(toolName) requires `symbol`, the name as written on line \(line)."))
+        }
+        return .success(CodeIntelligence.Target(path: path, line: line, symbol: symbol?.isEmpty == true ? nil : symbol, column: column))
+    }
+
+    /// Local models send numbers as strings often enough to accept both.
+    static func intArgument(_ value: Any?) -> Int? {
+        if let int = value as? Int { return int }
+        if let string = value as? String { return Int(string.trimmingCharacters(in: .whitespaces)) }
+        return nil
+    }
+
+    /// Files a successful call may have written, for language servers to re-read, and which of
+    /// them are new.
+    static func changedPaths(toolName: String, argumentsJson: String, workspace: Workspace, result: ToolExecutionResult) -> (paths: [String], created: Set<String>) {
+        var paths: [String] = []
+        var created = Set<String>()
+        if let target = diffTarget(toolName: toolName, argumentsJson: argumentsJson, workspace: workspace) {
+            paths.append(target)
+            if result.fileDiff?.kind == .created { created.insert(target) }
+        }
+        if ["file_move", "move_file", "mv", "file_copy", "copy_file", "cp"].contains(toolName.lowercased()),
+           let data = argumentsJson.data(using: .utf8),
+           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            for key in ["source", "destination", "from", "to"] {
+                if let raw = dict[key] as? String, !raw.isEmpty {
+                    let path = raw.hasPrefix("/") ? raw : (workspace.folderPath as NSString).appendingPathComponent(raw)
+                    paths.append(path)
+                    if key == "destination" || key == "to" { created.insert(path) }
+                }
+            }
+        }
+        for diff in result.fileDiffs ?? [] {
+            paths.append(diff.path)
+            if diff.kind == .created { created.insert(diff.path) }
+        }
+        return (paths, created)
     }
 
     /// The one file a call is about to change, when a single-file diff makes sense for it.
@@ -416,6 +565,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             let dryRun = (dict["dry_run"] as? Bool) ?? false
             let mode = (dict["mode"] as? String).flatMap(SymbolRename.Mode.init(rawValue:)) ?? .auto
             let declarationLine = (dict["line"] as? Int) ?? (dict["line"] as? String).flatMap(Int.init)
+            defer { if let callId { LiveToolOutput.conclude(noteFor: callId) } }
             do {
                 let outcome = try await SymbolRename.rename(
                     oldName: oldName,
@@ -424,7 +574,8 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     pathHint: pathHint,
                     dryRun: dryRun,
                     mode: mode,
-                    declarationLine: declarationLine
+                    declarationLine: declarationLine,
+                    onProgress: Self.languageServerProgress(callId: callId)
                 )
                 return ToolExecutionResult(
                     success: true,
@@ -439,6 +590,72 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     error: error.localizedDescription,
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
+            }
+
+        case "go_to_definition", "find_references", "symbol_info", "call_hierarchy":
+            let target: CodeIntelligence.Target
+            switch Self.codeTarget(from: dict, toolName: toolName) {
+            case .success(let value): target = value
+            case .failure(let message):
+                return ToolExecutionResult(success: false, output: "", error: message.text,
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            }
+            let absolute = CodeIntelligence.absolutePath(target.path, workspaceRoot: workspace.folderPath)
+            if let denial = sandboxDenial(for: absolute, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
+            let limit = Self.intArgument(dict["limit"])
+            let progress = Self.languageServerProgress(callId: callId)
+            defer { if let callId { LiveToolOutput.conclude(noteFor: callId) } }
+            do {
+                let output: String
+                switch toolName {
+                case "go_to_definition":
+                    let kind = (dict["kind"] as? String).flatMap(CodeIntelligence.DefinitionKind.init(rawValue:)) ?? .definition
+                    output = try await CodeIntelligence.definition(target, kind: kind, workspaceRoot: workspace.folderPath, onProgress: progress)
+                case "find_references":
+                    output = try await CodeIntelligence.references(
+                        target, includeDeclaration: (dict["include_declaration"] as? Bool) ?? true,
+                        limit: min(limit ?? 200, 1000), workspaceRoot: workspace.folderPath, onProgress: progress
+                    )
+                case "symbol_info":
+                    output = try await CodeIntelligence.symbolInfo(target, workspaceRoot: workspace.folderPath, onProgress: progress)
+                default:
+                    let direction = (dict["direction"] as? String).flatMap(CodeIntelligence.CallDirection.init(rawValue:)) ?? .incoming
+                    output = try await CodeIntelligence.callHierarchy(
+                        target, direction: direction, limit: min(limit ?? 100, 1000), workspaceRoot: workspace.folderPath, onProgress: progress
+                    )
+                }
+                return ToolExecutionResult(success: true, output: output,
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            } catch {
+                return ToolExecutionResult(success: false, output: "", error: error.localizedDescription,
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            }
+
+        case "setup_xcode_language_server":
+            return await setUpXcodeLanguageServer(dict: dict, workspace: workspace, settings: settings, startTime: startTime, callId: callId)
+
+        case "code_diagnostics", "document_symbols":
+            guard let path = ((dict["path"] as? String) ?? (dict["file"] as? String)), !path.isEmpty else {
+                return ToolExecutionResult(success: false, output: "", error: "\(toolName) requires `path` — the file to examine.",
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            }
+            let absolute = CodeIntelligence.absolutePath(path, workspaceRoot: workspace.folderPath)
+            if let denial = sandboxDenial(for: absolute, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
+            let progress = Self.languageServerProgress(callId: callId)
+            defer { if let callId { LiveToolOutput.conclude(noteFor: callId) } }
+            do {
+                let output = toolName == "code_diagnostics"
+                    ? try await CodeIntelligence.diagnostics(path: absolute, workspaceRoot: workspace.folderPath, onProgress: progress)
+                    : try await CodeIntelligence.documentSymbols(path: absolute, workspaceRoot: workspace.folderPath)
+                return ToolExecutionResult(success: true, output: output,
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            } catch {
+                return ToolExecutionResult(success: false, output: "", error: error.localizedDescription,
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
             }
 
         case "find_symbol", "symbol_search":

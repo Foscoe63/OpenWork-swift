@@ -53,19 +53,19 @@ final class LoopBreakerTests: XCTestCase {
         XCTAssertFalse(AgentStreamAccumulator.detectsRepetitionLoop(in: early + "\n" + sinceThen))
     }
 
-    /// A list of same-shaped bullets is ordinary writing, not a loop. This test used to assert the
-    /// opposite, documenting the false positive as an accepted cost; the fuzzy check has since
-    /// required three near-identical lines in a row *and* identical lines to repeat exactly, so a
-    /// numbered list with distinct items is no longer cut off. Kept as a guard against regressing.
+    /// A list of same-shaped bullets is ordinary writing, not a loop. The detector used to flag it
+    /// (a 5-word n-gram and a single similar pair were enough), which cut off long answers ending
+    /// in a settings list. It now takes an 8-word phrase three times, or three near-identical
+    /// lines in a row, so this list survives.
     func testTemplatedListsAreNotFlagged() {
         let list = (0..<6).map { "- Item \($0) describes a distinct configuration value here.\n" }.joined()
         XCTAssertFalse(AgentStreamAccumulator.detectsRepetitionLoop(in: list))
     }
 
-    /// The real loop shape is still caught: the same line, again and again.
-    func testRepeatedIdenticalLinesAreStillFlagged() {
-        let loop = String(repeating: "- Item describes a distinct configuration value here.\n", count: 6)
-        XCTAssertTrue(AgentStreamAccumulator.detectsRepetitionLoop(in: loop))
+    /// Loosening that must not let a real spiral through: the same long line again and again.
+    func testTheSameSentenceRepeatingIsStillFlagged() {
+        let spiral = String(repeating: "Now I have today's date, so let me check the calendar for today.\n", count: 5)
+        XCTAssertTrue(AgentStreamAccumulator.detectsRepetitionLoop(in: spiral))
     }
 
     // MARK: - The gate that keeps the cost bounded

@@ -3,8 +3,8 @@ import Foundation
 /// Rename a symbol across the workspace.
 ///
 /// Two ways, and the output always says which one ran:
-/// - **compiler** — `SourceKitRename` asks `sourcekit-lsp` for the occurrences of *that*
-///   declaration. Swift packages only.
+/// - **compiler** — `SemanticRename` asks the file's language server for the occurrences of *that*
+///   declaration. Needs a server and a project root (`LanguageServerCatalog`).
 /// - **text** — declaration lookup plus whole-word replacement. It cannot tell `Alpha.value` from
 ///   `Beta.value`, and it renames the word in comments and strings too.
 ///
@@ -25,6 +25,8 @@ public enum SymbolRename {
         public var notes: [String]
         /// Which strategy produced this result: "compiler" or "text".
         public var method: String = "text"
+        /// The language server behind a "compiler" result.
+        public var server: String?
         /// What each written file looked like before and after, for the tool card. Empty on a dry run.
         public var diffs: [InlineFileDiff] = []
 
@@ -34,7 +36,7 @@ public enum SymbolRename {
                 lines.append("Dry run — nothing was written.")
             }
             lines.append(method == "compiler"
-                ? "Method: compiler index (sourcekit-lsp) — only references to this declaration."
+                ? "Method: compiler index (\(server ?? "language server")) — only references to this declaration."
                 : "Method: whole-word text replacement — also renames same-named symbols, comments and strings. Review the diff.")
             lines.append("\(occurrenceCount) occurrence\(occurrenceCount == 1 ? "" : "s") across \(filesChanged.count) file\(filesChanged.count == 1 ? "" : "s").")
             if !filesChanged.isEmpty {
@@ -54,6 +56,9 @@ public enum SymbolRename {
         case ambiguous([String])
         case tooManyMatches(Int)
         case compilerRenameUnavailable(String)
+        /// The compiler rename was planned and writing it failed. Never falls back to text: the
+        /// workspace was touched, and a second, different rename on top would compound it.
+        case writeFailed(String)
 
         public var errorDescription: String? {
             switch self {
@@ -69,6 +74,8 @@ public enum SymbolRename {
                 return "Multiple declarations found (\(paths.joined(separator: ", "))). Pass `path` to disambiguate."
             case .compilerRenameUnavailable(let reason):
                 return "Compiler rename was requested and could not run: \(reason) Nothing was written. Use mode \"text\" to rename by whole-word replacement instead."
+            case .writeFailed(let reason):
+                return "The rename could not be written: \(reason)"
             case .tooManyMatches(let limit):
                 return "More than \(limit) occurrences matched, so the file list is incomplete and a rename would miss some. Nothing was written. Pass `path` to narrow it."
             }
@@ -92,7 +99,8 @@ public enum SymbolRename {
         dryRun: Bool = false,
         mode: Mode = .text,
         declarationLine: Int? = nil,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        onProgress: CodeIntelligence.ProgressHandler? = nil
     ) async throws -> Outcome {
         let old = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
         let new = newName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -115,14 +123,16 @@ public enum SymbolRename {
             do {
                 return try await renameWithCompiler(
                     symbols: symbols, old: old, new: new, root: root,
-                    pathHint: pathHint, declarationLine: declarationLine, dryRun: dryRun
+                    pathHint: pathHint, declarationLine: declarationLine, dryRun: dryRun,
+                    onProgress: onProgress
                 )
-            } catch let failure as SourceKitRename.Failure {
+            } catch let failure as SemanticRename.Failure {
                 guard mode == .auto else {
                     throw Failure.compilerRenameUnavailable(failure.localizedDescription)
                 }
                 fallbackNote = "Compiler rename not used: \(failure.localizedDescription)"
             } catch let failure as Failure {
+                if case .writeFailed = failure { throw failure }
                 guard mode == .auto else { throw failure }
                 fallbackNote = "Compiler rename not used: \(failure.localizedDescription)"
             }
@@ -210,7 +220,8 @@ public enum SymbolRename {
         root: String,
         pathHint: String?,
         declarationLine: Int?,
-        dryRun: Bool
+        dryRun: Bool,
+        onProgress: CodeIntelligence.ProgressHandler?
     ) async throws -> Outcome {
         let rootPrefix = root.hasSuffix("/") ? root : root + "/"
         var candidates = symbols.filter { $0.name == old }
@@ -225,71 +236,66 @@ public enum SymbolRename {
         // exists for, and guessing the first would rename the wrong one precisely.
         guard candidates.count == 1, let declaration = candidates.first else {
             if candidates.isEmpty {
-                throw SourceKitRename.Failure.positionNotFound(old)
+                throw SemanticRename.Failure.positionNotFound("No declaration of '\(old)' matches the given path and line.")
             }
             throw Failure.ambiguous(candidates.map { "\($0.path):\($0.line)" })
         }
         let file = rootPrefix + declaration.path
-        guard SourceKitRename.isCandidate(root: root, declarationPath: file) else {
-            throw SourceKitRename.Failure.notASwiftPackage
-        }
-
-        let edits = try await SourceKitRename.edits(
-            root: root, file: file, line: declaration.line, name: old, newName: new
+        let plan = try await SemanticRename.plan(
+            workspaceRoot: root, file: file, line: declaration.line, name: old, newName: new,
+            onProgress: onProgress
         )
 
-        let standardRoot = URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path
-        // The server can name one file by two paths — the URI it was opened with and the path its
-        // index recorded, e.g. /var/… and /private/var/…. Applied separately, the second copy
-        // rewrites a file the first already rewrote. Merge on the resolved path.
-        var merged: [String: [SourceKitRename.TextEdit]] = [:]
-        for (path, fileEdits) in edits {
-            let resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
-            for edit in fileEdits where !(merged[resolved]?.contains(edit) ?? false) {
-                merged[resolved, default: []].append(edit)
-            }
-        }
-
+        let standardRoot = LanguageServerCatalog.standardized(root)
         var planned: [(absolute: String, relative: String, before: String, after: String, count: Int)] = []
-        var notes: [String] = []
-        for (resolved, fileEdits) in merged.sorted(by: { $0.key < $1.key }) {
-            let path = resolved
-            guard resolved.hasPrefix(standardRoot + "/") else {
+        var notes: [String] = plan.notes
+        for (path, fileEdits) in plan.edits.sorted(by: { $0.key < $1.key }) {
+            guard path.hasPrefix(standardRoot + "/") else {
                 notes.append("Not edited, outside the workspace: \(path)")
                 continue
             }
-            let relative = String(resolved.dropFirst(standardRoot.count + 1))
+            let relative = String(path.dropFirst(standardRoot.count + 1))
             guard let before = try? String(contentsOfFile: path, encoding: .utf8),
-                  let after = SourceKitRename.apply(fileEdits, to: before) else {
+                  let after = SemanticRename.apply(fileEdits, to: before, expected: old) else {
                 // A stale edit position would corrupt the file. Refuse the whole rename rather
                 // than write the files that did apply — half a rename does not compile either.
-                throw Failure.compilerRenameUnavailable("the index is out of date for \(relative).")
+                throw Failure.compilerRenameUnavailable("the index is out of date for \(relative): its edits do not line up with '\(old)' in the file.")
             }
             planned.append((path, relative, before, after, fileEdits.count))
         }
 
         let total = planned.reduce(0) { $0 + $1.count }
         if dryRun {
-            return Outcome(filesChanged: planned.map(\.relative), occurrenceCount: total, dryRun: true, notes: notes, method: "compiler")
+            return Outcome(filesChanged: planned.map(\.relative), occurrenceCount: total, dryRun: true, notes: notes, method: "compiler", server: plan.server)
         }
 
-        var changed: [String] = []
-        var diffs: [InlineFileDiff] = []
-        for plan in planned where plan.before != plan.after {
-            await FileCheckpointStore.shared.record(path: plan.absolute)
+        var written: [(absolute: String, relative: String, before: String, after: String, count: Int)] = []
+        for file in planned where file.before != file.after {
+            await FileCheckpointStore.shared.record(path: file.absolute)
             do {
-                try plan.after.write(toFile: plan.absolute, atomically: true, encoding: .utf8)
-                changed.append(plan.relative)
-                if let diff = InlineFileDiff.between(before: plan.before, after: plan.after, path: plan.absolute) {
-                    diffs.append(diff)
-                }
+                try file.after.write(toFile: file.absolute, atomically: true, encoding: .utf8)
+                written.append(file)
             } catch {
-                notes.append("Failed to write \(plan.relative): \(error.localizedDescription)")
+                // All or nothing: put back what was already written, so the workspace is left as
+                // it was rather than half renamed.
+                var unrestored: [String] = []
+                for done in written {
+                    if (try? done.before.write(toFile: done.absolute, atomically: true, encoding: .utf8)) == nil {
+                        unrestored.append(done.relative)
+                    }
+                }
+                await LanguageServerPool.shared.filesChanged(written.map(\.absolute))
+                let restoredNote = unrestored.isEmpty
+                    ? "Files already written were restored."
+                    : "These files could not be restored and are renamed: \(unrestored.joined(separator: ", ")). revert_changes can undo them."
+                throw Failure.writeFailed("writing \(file.relative) failed (\(error.localizedDescription)). \(restoredNote)")
             }
         }
-        if !changed.isEmpty {
+        await LanguageServerPool.shared.filesChanged(written.map(\.absolute))
+        let diffs = written.compactMap { InlineFileDiff.between(before: $0.before, after: $0.after, path: $0.absolute) }
+        if !written.isEmpty {
             await SymbolIndex.shared.invalidate(root: root)
         }
-        return Outcome(filesChanged: changed, occurrenceCount: total, dryRun: false, notes: notes, method: "compiler", diffs: diffs)
+        return Outcome(filesChanged: written.map(\.relative), occurrenceCount: total, dryRun: false, notes: notes, method: "compiler", server: plan.server, diffs: diffs)
     }
 }

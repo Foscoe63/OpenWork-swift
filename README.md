@@ -55,7 +55,8 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 | 🔁 | Multi-turn ReAct with **native tool / function calling** (OpenAI, Ollama, in-process MLX) plus markdown / XML fallbacks |
 | 📁 | Filesystem — `file_read` (paginated, numbered), `file_write`, `edit_file`, `multi_edit` (several edits, all or nothing), `file_list`, `file_copy`, `file_move`, `file_delete` |
 | 🔎 | Code search — `grep` (regex → `path:line: text`), `glob` (`**/*.swift`), `find_symbol` (declarations only), `search_workspace` (BM25 index) |
-| ✏️ | Refactor — `rename_symbol` renames an identifier across the workspace from its declaration, with `dry_run` to see the hit list first |
+| 🧠 | **Code intelligence** (language servers) — `go_to_definition`, `find_references`, `symbol_info` (type, signature, docs), `code_diagnostics` (errors for one file in seconds), `document_symbols` (outline), `call_hierarchy` (callers / callees). Answers come from the compiler's index, so `find_references` lists uses of *that* declaration, not every word that matches |
+| ✏️ | Refactor — `rename_symbol` renames through the language server where one applies (only references to that declaration change) and falls back to whole-word replacement otherwise, saying which ran; `dry_run` shows the hit list first |
 | 🔨 | Build & test — `build_project`, `run_tests` — commands are inferred for SwiftPM **and Xcode** projects/workspaces (shared scheme discovery included); failures come back as `file:line: message`, and `run_tests(only_failing: true)` re-runs just the ones that failed |
 | 🌿 | Git — `git_status`, `git_diff`, `git_log`. Committing stays yours *on your checkout*; the agent may commit only inside a worktree of its own, where history is additive and cannot rewrite yours |
 | ↩️ | Undo — `changed_files`, `revert_changes` restore everything a turn touched |
@@ -81,6 +82,25 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 - **Plan mode** (read-only tools + `exit_plan_mode`)
 - Approval gates for destructive / MCP write actions. MCP read/write classification is **fail-closed**: a tool is a read only when a known server advertises it and it is absent from that server's write list, so unknown servers ask. Expect more prompts than a name-prefix heuristic would produce — that is the point
 - Sub-agent spawning and inter-agent messaging in the Side Inspector
+
+### Code intelligence
+
+The code-intelligence tools run real language servers, started on first use and kept running per project (stopped after ten idle minutes):
+
+| Language | Server | Project root it needs |
+|---|---|---|
+| Swift, C, Objective-C (packages) | `sourcekit-lsp` from Xcode | `Package.swift`, `compile_commands.json` or `buildServer.json` |
+| Swift / Objective-C (Xcode projects) | `sourcekit-lsp` + [`xcode-build-server`](https://github.com/SolaWing/xcode-build-server) | run `setup_xcode_language_server` once |
+| C / C++ | `clangd` | `compile_commands.json`, `compile_flags.txt` or `.clangd` |
+| TypeScript / JavaScript | `tsc --lsp` (TypeScript 7+) or `typescript-language-server` (TypeScript 5–6) | `tsconfig.json`, `jsconfig.json` or `package.json` |
+| Python | `basedpyright` or `pyright` | `pyproject.toml`, `setup.py`, `requirements.txt`, … |
+| Rust / Go | `rust-analyzer` / `gopls` | `Cargo.toml` / `go.mod` |
+
+- **No root, no answer.** Without a project root a server answers from the open file alone, which looks complete. The tools refuse instead, and say what is missing or how to install the server
+- **Never a partial index.** Index-backed answers wait for indexing to finish (`workspace/synchronize` for sourcekit-lsp); a timeout is an error, not a short list. The tool card shows indexing progress while it waits
+- **Kept in step with the disk** — edits from tools, the terminal or another editor reach the server through FSEvents; a crashed server is restarted and the answer says so
+- **Xcode projects** — `setup_xcode_language_server` (asks for approval) writes `buildServer.json` and builds the scheme once. xcode-build-server does not index, so answers state how old the last build's index is and which files changed since, and a compiler rename refuses while the index is stale. Keep `buildServer.json` out of git: it holds absolute paths
+- Renames check every edit lands on the old name before writing anything, and restore already-written files if a write fails
 - Clean chat UX: leaked model thinking moves to **Reasoning**, approvals sit **below** the answer, routine MCP status chips stay out of the way
 
 ### Local Apple Silicon (MLX) & providers
@@ -112,7 +132,7 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 
 ### Editor and live preview
 
-- **Code editor** in the inspector (⇧⌘E) and in Artifacts & Files — tabs, syntax highlighting for 20+ languages (strings and comments are lexed properly, so a `//` inside a string stays a string), line numbers, current-line highlight, find (⌘F), go to line (⌘L), toggle comment (⌘/), indent and outdent (⌘] / ⌘[), auto-indent that opens `{}` pairs, and **Tab completion** from the file's own words, the workspace's declarations and the language's keywords. **⌘-click** a name to jump to its declaration; ⇧⌘O opens any workspace file
+- **Code editor** in the inspector (⇧⌘E) and in Artifacts & Files — tabs, syntax highlighting for 20+ languages (strings and comments are lexed properly, so a `//` inside a string stays a string), line numbers, current-line highlight, find (⌘F), go to line (⌘L), toggle comment (⌘/), indent and outdent (⌘] / ⌘[), auto-indent that opens `{}` pairs, and **Tab completion** from the file's own words, the workspace's declarations and the language's keywords. After a typing pause, **ghost-text** from the idle local model (never queued behind an agent turn, never swapping the resident checkpoint). **⌘-click** a name to jump to its declaration; ⇧⌘O opens any workspace file
 - **Built for an agent editing the same files.** A clean tab follows the agent's writes and says it reloaded. A tab with unsaved edits is never overwritten: a banner offers Compare, Take Disk Version or Keep Mine, and Save refuses until you choose. Line endings (LF/CRLF) and indentation are kept as the file had them. The composer warns when a file has unsaved edits, because the agent reads what is on disk
 - **Everything opens where you are** — build and test errors, `+N/−N` diffs on tool cards, and console errors from the preview open the file at the line
 - **Live preview** (⇧⌘P) — detects how to run the project (`package.json` dev script with npm/pnpm/yarn/bun, Django, Rails, Hugo, Jekyll, or a static `index.html`, which the app serves itself with no toolchain), starts it with your login shell's PATH so nvm and Homebrew Node are found, waits until it answers, and shows it. Address bar, back/forward, phone/tablet/laptop widths, reload on file change for static sites (dev servers keep their own hot reload)
@@ -200,7 +220,12 @@ SwiftOpenWork/
     │   │                    # TurnCompletionNotifier
     │   ├── Automations/     # AutomationSchedule, CronExpression,
     │   │                    # AutomationScheduler
+    │   ├── Editor/          # EditorWorkspace, syntax highlighter, ghost-text
+    │   ├── Preview/         # DevServerManager, PreviewController, StaticFileServer
     │   ├── Providers/       # OpenAI, Anthropic, Ollama, NativeMLX, LocalMLXEngine
+    │   ├── LSP/             # LSPConnection (JSON-RPC), LanguageServerCatalog,
+    │   │                    # LanguageServerSession/Pool, FileChangeWatcher,
+    │   │                    # CodeIntelligence, SemanticRename, XcodeBuildServer
     │   ├── Tools/           # Execution, schemas, CodeSearch, GitTools,
     │   │                    # BuildDiagnostics, FileCheckpointStore, SymbolRename,
     │   │                    # InlineFileDiff, LiveToolOutput, DiagnosticLinkParser,
@@ -214,7 +239,7 @@ SwiftOpenWork/
         ├── Navigation/      # Sidebar, Spotlight
         ├── Theme/ · Components/
         └── Views/           # Chat, LocalModels, Agents, Automations,
-                             # Settings, Inspector, Dashboard, …
+                             # Editor, Preview, Settings, Inspector, Dashboard, …
 ```
 
 ### Sidebar destinations
@@ -244,6 +269,7 @@ SwiftOpenWork/
 | **…and its Metal toolchain** | A separate download as of Xcode 26: `xcodebuild -downloadComponent MetalToolchain`. Without it `mlx-swift` fails at `CompileMetalFile` |
 | **Optional local servers** | Ollama, LM Studio, oMLX / `mlx-lm`, or Osaurus — only if you use those backends |
 | **Optional MacUse MCP** | [MacUse.app](https://macuse.app); Accessibility / Automation for write actions |
+| **Optional language servers** | Xcode provides `sourcekit-lsp`. For other languages: `clangd`, TypeScript 7+ (`npm install -D typescript`), `pyright`, `rust-analyzer`, `gopls`. For Xcode projects: `brew install xcode-build-server` |
 
 Swift / Xcode are **not** required on machines that only install and run a prebuilt app.
 
@@ -277,8 +303,13 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 swift build
 swift run SwiftOpenWork
-swift test                      # 595 tests
+swift test                      # 818 tests
 ```
+
+Tests never touch your real data: under XCTest the app stores settings and sessions in a
+temporary folder per test process (set `SWIFTOPENWORK_DATA_DIRECTORY` to point a deliberate run
+at real data). The language-server integration tests use whichever servers are installed and
+skip the rest: the TypeScript, pyright, rust-analyzer and gopls tests run only when those servers are on `PATH`, and the in-process MLX shutdown tests only where their model is installed.
 
 `DEVELOPER_DIR` alone is not always enough. If `swift` on your `PATH` is a standalone toolchain —
 swiftly puts one in `~/.swiftly/bin`, and `swift --version` will say `swift-6.3-RELEASE` rather
@@ -334,6 +365,7 @@ if any are missing.
 | 📬 | **Dispatcher MCP servers** | e.g. `use the macuse mcp-server and check the mail on this computer` — the catalog is promoted on first listing |
 | 📄 | **Per-repo rules** | Drop `SWIFTOPENWORK.md` or `AGENTS.md` at the workspace root (`OPENWORK.md` from 1.1 is still read) — build commands, house style, what not to touch |
 | 🤖 | **Agents & skills** | Per-agent tools; enabled skills land in the system prompt |
+| 🧠 | **Code intelligence** | Nothing to configure for Swift packages. Xcode projects: ask the agent to run `setup_xcode_language_server` (needs `brew install xcode-build-server`). Other languages: install the server listed under *Code intelligence* |
 | 🎛️ | **Advanced** | Plan Mode, Max Turn Tokens, sub-agent depth, collaboration room |
 | 🧠 | **Context** | Settings → Preferences — auto-compaction and the token threshold that triggers it |
 | 🎚️ | **GPU budget** | Settings → Apple Silicon MLX — the budget ratio caps MLX's buffer cache *and* decides which models are badged as fitting |
