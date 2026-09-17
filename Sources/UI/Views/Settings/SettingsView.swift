@@ -37,6 +37,9 @@ public struct SettingsView: View {
     @State private var googleApiKey = ""
     @State private var googleAccessToken = ""
     @State private var googleRefreshToken = ""
+    /// The Google secrets have been read (in the background). Their fields stay disabled until then,
+    /// so nothing typed is overwritten when the read finishes.
+    @State private var googleCredentialsLoaded = false
     @State private var googleConnectionStatus = ""
     @State private var isTestingGoogleConnection = false
     @State private var isSigningInGoogle = false
@@ -1786,6 +1789,7 @@ public struct SettingsView: View {
 
                 SecureField("Google OAuth Client ID", text: $googleClientId)
                     .textFieldStyle(.roundedBorder)
+                    .disabled(!googleCredentialsLoaded)
                     .font(.system(size: 12))
                     .onChange(of: googleClientId) { _, newValue in
                         GoogleIntegrationsService.shared.clientId = newValue
@@ -1793,6 +1797,7 @@ public struct SettingsView: View {
 
                 SecureField("Google OAuth Client Secret", text: $googleClientSecret)
                     .textFieldStyle(.roundedBorder)
+                    .disabled(!googleCredentialsLoaded)
                     .font(.system(size: 12))
                     .onChange(of: googleClientSecret) { _, newValue in
                         GoogleIntegrationsService.shared.clientSecret = newValue
@@ -1865,7 +1870,7 @@ public struct SettingsView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .disabled(isSigningInGoogle || googleClientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(isSigningInGoogle || !googleCredentialsLoaded || googleClientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                     if googleIsSignedIn {
                         Button("Sign Out") {
@@ -1921,6 +1926,7 @@ public struct SettingsView: View {
 
                         SecureField("Google API Key (optional)", text: $googleApiKey)
                             .textFieldStyle(.roundedBorder)
+                            .disabled(!googleCredentialsLoaded)
                             .font(.system(size: 12))
                             .onChange(of: googleApiKey) { _, newValue in
                                 GoogleIntegrationsService.shared.apiKey = newValue
@@ -1928,6 +1934,7 @@ public struct SettingsView: View {
 
                         SecureField("Manual OAuth Access Token", text: $googleAccessToken)
                             .textFieldStyle(.roundedBorder)
+                            .disabled(!googleCredentialsLoaded)
                             .font(.system(size: 12))
                             .onChange(of: googleAccessToken) { _, newValue in
                                 GoogleIntegrationsService.shared.accessToken = newValue
@@ -1935,6 +1942,7 @@ public struct SettingsView: View {
 
                         SecureField("Manual OAuth Refresh Token", text: $googleRefreshToken)
                             .textFieldStyle(.roundedBorder)
+                            .disabled(!googleCredentialsLoaded)
                             .font(.system(size: 12))
                             .onChange(of: googleRefreshToken) { _, newValue in
                                 GoogleIntegrationsService.shared.refreshToken = newValue
@@ -1976,13 +1984,15 @@ public struct SettingsView: View {
                     .toggleStyle(.switch)
                 }
             }
-            .onAppear {
-                let google = GoogleIntegrationsService.shared
-                googleClientId = google.clientId
-                googleClientSecret = google.clientSecret
-                googleApiKey = google.apiKey
-                googleAccessToken = google.accessToken
-                googleRefreshToken = google.refreshToken
+            .task {
+                // Off the main thread: a Keychain read can wait on an authorisation prompt.
+                let loaded = await GoogleIntegrationsService.shared.loadCredentials()
+                googleClientId = loaded.clientId
+                googleClientSecret = loaded.clientSecret
+                googleApiKey = loaded.apiKey
+                googleAccessToken = loaded.accessToken
+                googleRefreshToken = loaded.refreshToken
+                googleCredentialsLoaded = true
                 refreshGoogleSignedInState()
             }
         }
