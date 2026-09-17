@@ -123,6 +123,38 @@ public struct SwiftOpenWorkApp: App {
                 .keyboardShortcut("p", modifiers: [.command, .shift])
             }
 
+            // The preview's tabs and layout, reachable from the keyboard as well as the pane.
+            CommandMenu("Preview") {
+                Button("New Preview Tab") {
+                    PreviewSessions.shared.newTab(workspaceRoot: appState.currentWorkspace.folderPath)
+                    appState.revealInspector(tab: .preview, minimumWidth: 560)
+                }
+                .keyboardShortcut("t", modifiers: [.command, .option])
+
+                Button("Duplicate Preview Tab") {
+                    let sessions = PreviewSessions.shared
+                    sessions.duplicate(sessions.active.id)
+                    appState.revealInspector(tab: .preview, minimumWidth: 560)
+                }
+
+                Button("Close Preview Tab") {
+                    let sessions = PreviewSessions.shared
+                    sessions.close(sessions.active.id)
+                }
+
+                Divider()
+
+                Button("One Preview at a Time") { PreviewSessions.shared.layout = .single }
+                Button("Previews Side by Side") {
+                    PreviewSessions.shared.layout = .sideBySide
+                    appState.revealInspector(tab: .preview, minimumWidth: 900)
+                }
+                Button("Previews Stacked") {
+                    PreviewSessions.shared.layout = .stacked
+                    appState.revealInspector(tab: .preview, minimumWidth: 560)
+                }
+            }
+
             CommandMenu("Navigation") {
                 Button("Chat & Sessions") {
                     appState.navigationDestination = .chat

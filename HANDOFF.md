@@ -1178,6 +1178,44 @@ the built app driven through its UI on throwaway data.
   `com.apple.dt.xctest.tool`).
 - The "SwiftOpenWork Local Signing" certificate exists in the login keychain now; Debug builds sign.
 
+### Added the same day: inline AI suggestions and several previews
+
+**Inline suggestions** (`Sources/Engine/Editor/InlineSuggestions.swift`, ghost text in `CodeTextView`):
+
+- Requested 0.5s after typing pauses, only where inserting cannot split a word
+  (`InlineSuggestionPolicy`), cancelled by the next keystroke. ⇥ accepts (one undo step), esc or a
+  cursor move dismisses, typing the suggested characters keeps the rest.
+- **Never queues.** `NativeMLXService.oneShot` uses `LocalGenerationGate.tryAcquire`: if a chat turn,
+  automation or sub-agent holds the model, no suggestion. It never evicts a different resident model,
+  never touches `cachedChats`, and passes `enable_thinking: false` (Ornith's template honours it).
+- **Two measured fixes.** Asked for "only the text at the cursor", Ornith continued `sum +` with
+  ` .amount`, and it ran the full 96 tokens writing new functions (6.9s). The prompt now asks for the
+  line restated then continued; `InlineSuggestionStopper` ends generation when the line (or the block
+  it opens) is complete; `InlineSuggestionCleaner` strips the restated part and short operator
+  overlaps (it once answered `+ item.amount` after `sum +`). Result: correct lines in 0.8–1.1s warm,
+  ~3s cold (`InlineSuggestionLiveTests`, `SOW_LIVE_MLX=1`).
+- **Model choice** (`InlineSuggestionModelChoice`): Automatic = the chat model *only when it is local*;
+  a cloud chat model gives "choose a model" rather than sending code anywhere. Explicit choice in the
+  editor status bar or Settings (`inlineSuggestionsEnabled`, `inlineSuggestionProviderId`,
+  `inlineSuggestionModelId`).
+- Verified in the running app: typing `function formatMoney(value) {` / `  return ` produced ghost
+  text `value.toLocaleString('en-US', { style: 'currency', currency: 'USD' });`. Accepting with ⇥
+  could not be driven from the automation tool (it cannot send raw keys to a background window); it is
+  covered by `GhostTextBehaviourTests` on a real `CodeTextView`.
+
+**Several previews** (`PreviewSessions`): up to six tabs, each a `PreviewController` with its own web
+view, console, viewport and server; layouts One at a Time / Side by Side / Stacked (pane menu and a new
+**Preview** menu). `PreviewLauncher` reuses the tab showing a server, else an idle tab, else opens a new
+one, so a second server never replaces the first page. `preview_start` takes `new_tab`,
+`preview_check` takes `tab` (number or text in title/URL — `"5173"` is a port, not tab 5173, unless
+that tab exists), `preview_logs` reports every tab. There is always at least one tab, so SwiftUI never
+creates one mid-render. Verified live: two static servers in two tabs with separate consoles
+(`PreviewSessionsTests`), and side by side in the running app.
+
+**Smoke-test trap:** copying the real `providers.json` into a throwaway data folder makes the rebuilt
+binary read cloud API keys from the Keychain at launch, on the main thread, before the window exists —
+it hangs behind a Keychain prompt with no window. Copy only `type == "local"` providers.
+
 ### Smoke-testing the UI safely
 
 ```bash
@@ -1195,7 +1233,7 @@ with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afte
   suggest a continuation. It never queues behind an agent turn and never swaps the resident
   checkpoint. Fill-in-the-middle prompting on every keystroke is still refused: a 35B model does
   not meet that latency budget.
-- **One preview at a time** in the pane; several servers can run, the pane follows the latest.
+- ~~One preview at a time~~ — tabs and split layouts were added the same day (see above).
 - **Highlighting is whole-document** on a background queue, debounced. Fine to ~1MB; files beyond
   1.5MB UTF-16 are shown uncoloured.
 - `preview_start` asks for approval even when detection picks the built-in static server.
