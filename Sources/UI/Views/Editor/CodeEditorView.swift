@@ -638,8 +638,10 @@ struct CodeEditorView: NSViewRepresentable {
         if let line = document.pendingReveal {
             DispatchQueue.main.async {
                 guard document.pendingReveal == line else { return }
+                let selection = document.pendingRevealSelection
                 document.pendingReveal = nil
-                coordinator.reveal(line: line)
+                document.pendingRevealSelection = nil
+                coordinator.reveal(line: line, selecting: selection)
             }
         }
     }
@@ -751,7 +753,7 @@ struct CodeEditorView: NSViewRepresentable {
             ruler?.needsDisplay = true
         }
 
-        func reveal(line: Int) {
+        func reveal(line: Int, selecting selection: (column: Int, length: Int)? = nil) {
             guard let textView else { return }
             let text = textView.string as NSString
             let start = EditorText.location(ofLine: line, in: text)
@@ -761,11 +763,17 @@ struct CodeEditorView: NSViewRepresentable {
                 lineRange.length -= 1
             }
             textView.window?.makeFirstResponder(textView)
-            textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
-            if lineRange.length > 0 {
+            // A search result selects its match; a plain jump puts the cursor at the line start.
+            var match: NSRange?
+            if let selection, selection.column >= 0, selection.length > 0 {
+                let location = min(lineRange.location + selection.column, text.length)
+                match = NSRange(location: location, length: min(selection.length, text.length - location))
+            }
+            textView.setSelectedRange(match ?? NSRange(location: lineRange.location, length: 0))
+            if let indicator = match ?? (lineRange.length > 0 ? lineRange : nil) {
                 // Before the scroll below: the indicator scrolls its whole range into view, which on
                 // a long line pulled the view sideways and hid the start of every line.
-                textView.showFindIndicator(for: lineRange)
+                textView.showFindIndicator(for: indicator)
             }
             // Centre it vertically, at the left edge, rather than leaving it pinned to a corner.
             if let layoutManager = textView.layoutManager, let container = textView.textContainer, let scrollView {
@@ -777,6 +785,15 @@ struct CodeEditorView: NSViewRepresentable {
                 wanted.origin = NSPoint(x: Self.leftmostOriginX(of: scrollView), y: rect.midY - visibleHeight / 2)
                 clip.scroll(to: clip.constrainBoundsRect(wanted).origin)
                 scrollView.reflectScrolledClipView(scrollView.contentView)
+                // A match far along a long line still has to be visible.
+                if let match {
+                    let matchGlyphs = layoutManager.glyphRange(forCharacterRange: match, actualCharacterRange: nil)
+                    var matchRect = layoutManager.boundingRect(forGlyphRange: matchGlyphs, in: container)
+                    matchRect.origin.x += textView.textContainerOrigin.x
+                    if !textView.visibleRect.contains(matchRect) {
+                        textView.scrollRangeToVisible(match)
+                    }
+                }
             }
             ruler?.needsDisplay = true
         }

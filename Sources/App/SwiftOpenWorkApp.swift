@@ -101,10 +101,15 @@ public struct SwiftOpenWorkApp: App {
                 }
                 .keyboardShortcut("n", modifiers: .command)
 
-                Button("Quick Open / Spotlight") {
+                Button("Command Palette…") {
                     appState.isSearchDialogOpen.toggle()
                 }
                 .keyboardShortcut("k", modifiers: .command)
+
+                Button("Find in Project…") {
+                    appState.showProjectSearch()
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
 
                 Button("Show Editor") {
                     if appState.navigationDestination != .chat && appState.navigationDestination != .tools {

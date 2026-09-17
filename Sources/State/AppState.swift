@@ -1097,9 +1097,9 @@ public final class AppState: ObservableObject {
     ///
     /// Shows it where the user already is: Artifacts & Files has its own editor; anywhere else the
     /// inspector opens on its Editor tab, widened when it is too narrow to read code in.
-    public func openInEditor(path: String, line: Int? = nil) {
+    public func openInEditor(path: String, line: Int? = nil, selecting selection: (column: Int, length: Int)? = nil) {
         do {
-            try EditorWorkspace.shared.open(path: path, line: line, workspaceRoot: currentWorkspace.folderPath)
+            try EditorWorkspace.shared.open(path: path, line: line, selecting: selection, workspaceRoot: currentWorkspace.folderPath)
         } catch {
             showToast(error.localizedDescription)
             return
@@ -1109,6 +1109,15 @@ public final class AppState: ObservableObject {
             navigationDestination = .chat
         }
         revealInspector(tab: .editor, minimumWidth: 560)
+    }
+
+    /// Show Find in Project in the editor, searching for the editor's selection when there is one.
+    public func showProjectSearch() {
+        if navigationDestination != .chat && navigationDestination != .tools {
+            navigationDestination = .chat
+        }
+        revealInspector(tab: .editor, minimumWidth: 560)
+        EditorWorkspace.shared.showProjectSearch(prefill: EditorWorkspace.shared.selectionForSearch)
     }
 
     /// Open the inspector on `tab`, asking for at least `minimumWidth`.

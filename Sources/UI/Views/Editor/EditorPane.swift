@@ -34,6 +34,11 @@ public struct EditorPane: View {
                 tabStrip
                 Divider()
             }
+            if editors.isSearchVisible {
+                ProjectSearchPanel(appState: appState)
+                    .frame(minHeight: 140, idealHeight: 260, maxHeight: editors.activeDocument == nil ? .infinity : 320)
+                Divider()
+            }
             if let document = editors.activeDocument {
                 DocumentChrome(
                     appState: appState,
@@ -137,9 +142,23 @@ public struct EditorPane: View {
             }
             Spacer(minLength: 0)
             Button {
+                if editors.isSearchVisible {
+                    editors.isSearchVisible = false
+                } else {
+                    editors.showProjectSearch(prefill: editors.selectionForSearch)
+                }
+            } label: {
+                Image(systemName: "text.magnifyingglass")
+                    .font(.system(size: 11))
+                    .foregroundColor(editors.isSearchVisible ? ThemeColors.accent(for: appState.settings.accentColor) : .primary)
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.hitTestable)
+            .help("Find in project (⇧⌘F)")
+            Button {
                 showingQuickOpen = true
             } label: {
-                Image(systemName: "magnifyingglass")
+                Image(systemName: "doc.badge.magnifyingglass")
                     .font(.system(size: 11))
                     .frame(width: 26, height: 26)
             }

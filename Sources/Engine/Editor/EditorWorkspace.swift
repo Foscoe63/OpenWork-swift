@@ -71,6 +71,8 @@ public final class EditorDocument: ObservableObject, Identifiable {
     public var scrollOrigin: CGPoint = .zero
     /// A line the view should scroll to and select on its next update.
     @Published public var pendingReveal: Int?
+    /// A range within the revealed line to select: UTF-16 column and length, for search results.
+    public var pendingRevealSelection: (column: Int, length: Int)?
 
     /// Colour ranges for the current text, cached so switching tabs does not re-lex.
     public var tokens: [SyntaxToken] = []
@@ -205,6 +207,22 @@ public final class EditorDocument: ObservableObject, Identifiable {
         isDirty = storage.string != lastSeenDiskText
     }
 
+    /// Replace the whole text as one undoable edit that leaves the file unsaved — for Replace All,
+    /// which must be reviewable before anything reaches disk.
+    public func applyEdit(_ newText: String, actionName: String) {
+        let previous = storage.string
+        guard newText != previous else { return }
+        storage.beginEditing()
+        storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: newText)
+        storage.endEditing()
+        undoManager.registerUndo(withTarget: self) { document in
+            document.applyEdit(previous, actionName: actionName)
+        }
+        undoManager.setActionName(actionName)
+        externalRevision += 1
+        textDidChange()
+    }
+
     private func replaceText(with newText: String, lineEnding: EditorText.LineEnding) {
         let keepSelection = selectedRange
         storage.beginEditing()
@@ -238,6 +256,30 @@ public final class EditorWorkspace: ObservableObject {
 
     @Published public private(set) var documents: [EditorDocument] = []
     @Published public var activeDocumentId: UUID?
+    /// Whether the editor shows its Find in Project panel.
+    @Published public var isSearchVisible = false
+    /// Incremented to move keyboard focus into the search field.
+    @Published public var searchFocusRequest = 0
+
+    /// Show the project search, optionally searching for `text`.
+    public func showProjectSearch(prefill text: String? = nil) {
+        if let text, !text.isEmpty, !text.contains("\n") {
+            ProjectSearchModel.shared.options.query = text
+        }
+        isSearchVisible = true
+        searchFocusRequest += 1
+    }
+
+    /// The selected text in the active document, when it is a short single line — what ⌘⇧F
+    /// should search for.
+    public var selectionForSearch: String? {
+        guard let document = activeDocument else { return nil }
+        let range = document.selectedRange
+        guard range.length > 0, range.length <= 200, NSMaxRange(range) <= document.storage.length else { return nil }
+        let text = (document.text as NSString).substring(with: range)
+        return text.contains("\n") ? nil : text
+    }
+
     /// Declared names in the current workspace, for completion and go-to-definition.
     @Published public private(set) var workspaceSymbols: [String] = []
 
@@ -270,11 +312,14 @@ public final class EditorWorkspace: ObservableObject {
     /// Open `path` (absolute, or relative to `workspaceRoot`) and make it active, optionally
     /// revealing a 1-based line. Opening a file that is already open switches to its tab.
     @discardableResult
-    public func open(path: String, line: Int? = nil, workspaceRoot: String? = nil) throws -> EditorDocument {
+    public func open(path: String, line: Int? = nil, selecting selection: (column: Int, length: Int)? = nil, workspaceRoot: String? = nil) throws -> EditorDocument {
         let absolute = Self.resolve(path, root: workspaceRoot)
         if let existing = documents.first(where: { $0.path == absolute }) {
             activeDocumentId = existing.id
-            if let line { existing.pendingReveal = line }
+            if let line {
+                existing.pendingRevealSelection = selection
+                existing.pendingReveal = line
+            }
             existing.checkDisk()
             return existing
         }
@@ -282,7 +327,10 @@ public final class EditorWorkspace: ObservableObject {
         switch WorkspaceFileScanner.read(path: absolute) {
         case .text(let text):
             let document = EditorDocument(path: absolute, text: text)
-            if let line { document.pendingReveal = line }
+            if let line {
+                document.pendingRevealSelection = selection
+                document.pendingReveal = line
+            }
             documents.append(document)
             // Forward each document's dirty flag, so views watching the workspace (the tab strip,
             // the composer's unsaved-files chip) redraw when a file becomes unsaved.
