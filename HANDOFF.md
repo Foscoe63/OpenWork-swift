@@ -1250,7 +1250,11 @@ with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afte
   prompt is not repeated. `AppState.loadProviderKeysForDisplay()` fills key fields when the provider
   settings screens open. `saveProviders` never deletes a key it was handed empty, so un-hydrated
   saves are safe. Verified: the rebuilt app with seeded cloud providers opened its window immediately.
-  Google keys are still read synchronously, but only when the Google settings page is open.
+  Google secrets go through `GoogleCredentialStore` (cached; Keychain reads and writes on a serial
+  background queue). The Google settings page awaits `GoogleIntegrationsService.loadCredentials()`
+  and keeps its fields disabled until it returns; putting the loaded values back into the fields
+  writes nothing (it used to rewrite all five items on every open, and one per keystroke on the
+  main thread). `GoogleCredentialStoreTests`.
 - **Command palette (⌘K)**, replacing the Spotlight dialog in place (`SpotlightSearchView`):
   `PaletteCommands`, `PaletteRanker` (prefix > word start > initials > substring > subsequence,
   recents boosted), `PaletteRecents`. Rows are buttons (a tap gesture was not clickable through

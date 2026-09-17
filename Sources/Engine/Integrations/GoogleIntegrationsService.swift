@@ -37,34 +37,54 @@ public final class GoogleIntegrationsService: @unchecked Sendable {
 
     private let lock = NSLock()
     private var refreshTask: Task<Void, Error>?
+    let credentials: GoogleCredentialStore
 
-    private init() {}
+    private convenience init() {
+        self.init(credentials: GoogleCredentialStore())
+    }
+
+    init(credentials: GoogleCredentialStore) {
+        self.credentials = credentials
+    }
 
     // MARK: - Credentials
 
     public var clientId: String {
-        get { KeychainManager.shared.getSecret(forKey: Key.clientId) ?? "" }
-        set { KeychainManager.shared.saveSecret(newValue, forKey: Key.clientId) }
+        get { credentials.value(for: Key.clientId) }
+        set { credentials.set(newValue, for: Key.clientId) }
     }
 
     public var clientSecret: String {
-        get { KeychainManager.shared.getSecret(forKey: Key.clientSecret) ?? "" }
-        set { KeychainManager.shared.saveSecret(newValue, forKey: Key.clientSecret) }
+        get { credentials.value(for: Key.clientSecret) }
+        set { credentials.set(newValue, for: Key.clientSecret) }
     }
 
     public var apiKey: String {
-        get { KeychainManager.shared.getSecret(forKey: Key.apiKey) ?? "" }
-        set { KeychainManager.shared.saveSecret(newValue, forKey: Key.apiKey) }
+        get { credentials.value(for: Key.apiKey) }
+        set { credentials.set(newValue, for: Key.apiKey) }
     }
 
     public var accessToken: String {
-        get { KeychainManager.shared.getSecret(forKey: Key.accessToken) ?? "" }
-        set { KeychainManager.shared.saveSecret(newValue, forKey: Key.accessToken) }
+        get { credentials.value(for: Key.accessToken) }
+        set { credentials.set(newValue, for: Key.accessToken) }
     }
 
     public var refreshToken: String {
-        get { KeychainManager.shared.getSecret(forKey: Key.refreshToken) ?? "" }
-        set { KeychainManager.shared.saveSecret(newValue, forKey: Key.refreshToken) }
+        get { credentials.value(for: Key.refreshToken) }
+        set { credentials.set(newValue, for: Key.refreshToken) }
+    }
+
+    /// All five secrets, read from the Keychain off the main thread and cached. Call this before
+    /// touching the properties from the main thread; afterwards they answer from memory.
+    public func loadCredentials() async -> GoogleCredentialStore.Snapshot {
+        await credentials.load(keys: [Key.clientId, Key.clientSecret, Key.apiKey, Key.accessToken, Key.refreshToken])
+        return GoogleCredentialStore.Snapshot(
+            clientId: clientId,
+            clientSecret: clientSecret,
+            apiKey: apiKey,
+            accessToken: accessToken,
+            refreshToken: refreshToken
+        )
     }
 
     public var tokenExpiresAt: Date? {
@@ -108,6 +128,7 @@ public final class GoogleIntegrationsService: @unchecked Sendable {
     /// Opens the system browser for Google consent, receives the code on a local loopback port, and stores tokens.
     @MainActor
     public func signInWithGoogle() async throws -> String {
+        _ = await loadCredentials()
         let trimmedClientId = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedClientId.isEmpty else {
             throw GoogleOAuthError.missingClientId
