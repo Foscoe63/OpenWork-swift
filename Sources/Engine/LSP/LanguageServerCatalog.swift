@@ -244,6 +244,8 @@ public struct ExecutableLocator: Sendable {
     var packageVersion: @Sendable (String) -> String?
     /// The path with symlinks resolved, so `node_modules/.bin/tsc` leads to its package.
     var resolveSymlinks: @Sendable (String) -> String
+    /// Whether a command exits successfully, within a few seconds.
+    var succeeds: @Sendable (String, [String]) -> Bool
 
     public init() {
         self.environment = ProcessInfo.processInfo.environment
@@ -263,6 +265,9 @@ public struct ExecutableLocator: Sendable {
             return object["version"] as? String
         }
         self.resolveSymlinks = { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+        self.succeeds = { executable, arguments in
+            RustupProbe.cachedResult(executable: executable, arguments: arguments)
+        }
     }
 
     init(
@@ -274,7 +279,8 @@ public struct ExecutableLocator: Sendable {
         bundleVersion: @escaping @Sendable (String) -> String? = { _ in nil },
         selectedDeveloperDirectory: @escaping @Sendable () -> String? = { nil },
         packageVersion: @escaping @Sendable (String) -> String? = { _ in nil },
-        resolveSymlinks: @escaping @Sendable (String) -> String = { $0 }
+        resolveSymlinks: @escaping @Sendable (String) -> String = { $0 },
+        succeeds: @escaping @Sendable (String, [String]) -> Bool = { _, _ in true }
     ) {
         self.environment = environment
         self.home = home
@@ -285,6 +291,22 @@ public struct ExecutableLocator: Sendable {
         self.selectedDeveloperDirectory = selectedDeveloperDirectory
         self.packageVersion = packageVersion
         self.resolveSymlinks = resolveSymlinks
+        self.succeeds = succeeds
+    }
+
+    /// Whether `candidate` is a rustup proxy for a component that is not installed.
+    ///
+    /// rustup puts a `rust-analyzer` proxy in `~/.cargo/bin` whether or not the component is
+    /// installed. Run without it, the proxy exits with "Unknown binary 'rust-analyzer' in official
+    /// toolchain", so a machine with rustup and no rust-analyzer looked like it had one — the
+    /// request then failed after launching it. Seen on the CI runner. A proxy sits beside `rustup`,
+    /// and `rustup which` answers whether the component really exists.
+    func isInertRustupProxy(_ candidate: String) -> Bool {
+        let directory = (candidate as NSString).deletingLastPathComponent
+        let name = (candidate as NSString).lastPathComponent
+        let rustup = directory + "/rustup"
+        guard name != "rustup", isExecutable(rustup) else { return false }
+        return !succeeds(rustup, ["which", name])
     }
 
     var searchDirectories: [String] {
@@ -325,7 +347,7 @@ public struct ExecutableLocator: Sendable {
         for command in spec.commands {
             var candidates = (projectRoot.map { root in command.projectPaths.map { root + "/" + $0 } } ?? [])
             candidates += searchDirectories.map { $0 + "/" + command.executable }
-            for candidate in candidates where isExecutable(candidate) {
+            for candidate in candidates where isExecutable(candidate) && !isInertRustupProxy(candidate) {
                 guard meets(command.requirement, executable: candidate, projectTypeScript: projectTypeScript) else { continue }
                 return Located(executable: candidate, arguments: command.arguments, environment: environment)
             }
@@ -390,5 +412,37 @@ public struct ExecutableLocator: Sendable {
         guard let lhs else { return false }
         guard let rhs else { return true }
         return lhs.compare(rhs, options: .numeric) == .orderedDescending
+    }
+}
+
+
+/// Runs `rustup which …` once per executable and remembers the answer.
+enum RustupProbe {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var results: [String: Bool] = [:]
+
+    static func cachedResult(executable: String, arguments: [String]) -> Bool {
+        let key = ([executable] + arguments).joined(separator: " ")
+        lock.lock()
+        if let known = results[key] { lock.unlock(); return known }
+        lock.unlock()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        var ok = false
+        if (try? process.run()) != nil {
+            if finished.wait(timeout: .now() + 5) == .timedOut {
+                process.terminate()
+            } else {
+                ok = process.terminationStatus == 0
+            }
+        }
+        lock.lock(); results[key] = ok; lock.unlock()
+        return ok
     }
 }
