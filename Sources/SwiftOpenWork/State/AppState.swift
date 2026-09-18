@@ -218,6 +218,8 @@ public final class AppState: ObservableObject {
     private let persistence = PersistenceManager.shared
 
     public init() {
+        // Also done at app launch; repeated here for anything that creates the state without it.
+        LocalInferenceWiring.install()
         // Before anything reads preferences or the Keychain: 1.1 stored them under another name.
         LegacyIdentityMigration.runIfNeeded()
         loadAll()

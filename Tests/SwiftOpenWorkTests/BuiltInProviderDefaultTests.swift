@@ -138,6 +138,7 @@ final class BuiltInMLXIsInProcessOnlyTests: XCTestCase {
     /// `.omlx` and `.vmlx` are the only kinds routed to the in-process engine, and they are the
     /// only ones that must never be answered over HTTP.
     func testOnlyTheInProcessKindsRouteToTheMLXService() {
+        LocalInferenceWiring.install()
         for kind in ProviderKind.allCases {
             let provider = ModelProvider(name: kind.rawValue, type: .local, kind: kind)
             let isMLXService = ProviderRouter.shared.client(for: provider) is NativeMLXService

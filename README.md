@@ -213,6 +213,7 @@ SwiftOpenWork/
     │   ├── Models/          # Agent, Workspace, Session, SessionTodo, Settings,
     │   │                    # ProviderSelection, InlineFileDiff, ToolSchemaCatalog
     │   ├── Providers/       # LLMProviderClient protocol, stream chunks,
+    │   │                    # InProcessModelEngine, LocalGenerationGate,
     │   │                    # ReasoningChannel, ImageTransport
     │   └── Utils/           # AsyncDeadline (timeouts for uncancellable work),
     │                        # AppLog (verbose logging, gated by the setting),
@@ -220,9 +221,10 @@ SwiftOpenWork/
     ├── SwiftOpenWorkStorage/ # library, Swift 6: persistence, Keychain, provider
     │                        # credentials, 1.1 → 1.2 identity migration
     ├── SwiftOpenWorkLocalInference/ # library: NativeMLXService, LocalMLXEngine,
-    │                        # MLXSessionReuse, LocalGenerationGate — the only
-    │                        # module that links MLX / Hugging Face / Transformers
-    ├── SwiftOpenWorkEngine/ # library; reaches the app only through EngineHost
+    │                        # MLXSessionReuse — the only module that links
+    │                        # MLX / Hugging Face / Transformers
+    ├── SwiftOpenWorkEngine/ # library; reaches the app only through EngineHost,
+    │                        # and MLX only through LocalInferenceRegistry
     │   ├── Agents/          # AgentRunner, SubAgentExecutor, approvals,
     │   │                    # ContextCompactor, ContextMeter,
     │   │                    # TurnCompletionNotifier
@@ -245,7 +247,8 @@ SwiftOpenWork/
     │   ├── RAG/             # CodeIndex (BM25 over the workspace)
     │   └── Terminal/ · Voice/ · Watch/ · Vision/ · Updates/
     └── SwiftOpenWork/       # the app
-        ├── App/             # Entry, App Intents, window frame persistence
+        ├── App/             # Entry, App Intents, window frame persistence,
+        │                    # LocalInferenceWiring
         ├── State/           # AppState (the EngineHost), AutomationScheduler,
         │                    # HeadlessAgentTurn
         └── UI/
@@ -262,6 +265,11 @@ project links them all as one dynamic library, the package's `SwiftOpenWorkKit` 
 third-party package is linked into the app exactly once. A module can only use what a lower module declares `public`, and cannot import anything above it, so the
 compiler enforces the layering.
 
+The engine never links MLX either. It reaches the in-process engine through the
+`InProcessModelEngine` and `LocalServerLauncher` protocols, looked up in `LocalInferenceRegistry`;
+the app registers `NativeMLXService` and `LocalMLXEngine` there at launch. With nothing
+registered, the built-in provider fails and says why rather than trying another backend.
+
 The engine never sees `AppState`. What it needs from the running app — settings, the current
 provider and model, a toast, revealing the preview — is the `EngineHost` protocol, which
 `AppState` conforms to and registers in `EngineHosting.host` when it is created. Engine code must
@@ -272,7 +280,7 @@ work when there is no host, as in a test that never creates the app's state.
 | `SwiftOpenWorkCore` | — | Swift 6 |
 | `SwiftOpenWorkStorage` | Core | Swift 6 |
 | `SwiftOpenWorkLocalInference` | Core, Storage, MLX, Hugging Face, Transformers | Swift 5 |
-| `SwiftOpenWorkEngine` | Core, Storage, LocalInference, Yams, MCP, NIO | Swift 5 |
+| `SwiftOpenWorkEngine` | Core, Storage, Yams, MCP, NIO | Swift 5 |
 | `SwiftOpenWork` (app) | all of the above | Swift 5 |
 
 The app compiles with a Swift 6 toolchain throughout. Modules move to the Swift 6 language mode
@@ -339,8 +347,19 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 swift build
 swift run SwiftOpenWork
-swift test                      # 818 tests
+swift test                      # 846 tests, in two bundles
+
+# Engine tests alone. This builds neither MLX nor the SwiftUI app:
+swift build --product SwiftOpenWorkEngineTests
+xcrun xctest .build/out/Products/Debug/SwiftOpenWorkEngineTests.xctest
 ```
+
+(`swift test` itself always builds every test bundle, and `--skip-build` needs all of them to
+exist, so run the engine bundle with `xctest` directly.)
+
+`SwiftOpenWorkEngineTests` holds the tests that need only Core, Storage and Engine.
+`SwiftOpenWorkTests` holds the ones that need the app, its views, or the MLX engine. Put a new
+test in the engine target when it can live there.
 
 Tests never touch your real data: under XCTest the app stores settings and sessions in a
 temporary folder per test process (set `SWIFTOPENWORK_DATA_DIRECTORY` to point a deliberate run

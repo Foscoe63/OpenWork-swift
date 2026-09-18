@@ -1,6 +1,5 @@
 import Foundation
 import SwiftOpenWorkCore
-import SwiftOpenWorkLocalInference
 
 public final class ProviderRouter: @unchecked Sendable {
     public static let shared = ProviderRouter()
@@ -10,7 +9,7 @@ public final class ProviderRouter: @unchecked Sendable {
     public func client(for provider: ModelProvider) -> LLMProviderClient {
         switch provider.kind {
         case .omlx, .vmlx:
-            return NativeMLXService.shared
+            return LocalInferenceRegistry.engine
         case .ollama:
             return OllamaService.shared
         case .anthropic:
@@ -38,7 +37,7 @@ public final class ProviderRouter: @unchecked Sendable {
         // look identical ("offline fallback mode") regardless of the selected model.
         if provider.kind == .omlx || provider.kind == .vmlx {
             do {
-                try await NativeMLXService.shared.streamChat(
+                try await LocalInferenceRegistry.engine.streamChat(
                     provider: activeProvider,
                     model: model,
                     systemPrompt: systemPrompt,
@@ -96,7 +95,8 @@ public final class ProviderRouter: @unchecked Sendable {
 
         // Other local OpenAI-compatible backends (LM Studio, llama.cpp, etc.)
         if activeProvider.type == .local {
-            let res = await LocalMLXEngine.shared.ensureServerRunning(modelId: model.id)
+            let res = await LocalInferenceRegistry.serverLauncher?.ensureServerRunning(modelId: model.id, settings: nil)
+                ?? (success: false, message: "No local server launcher is registered in this build.", activePort: 0)
             if !res.success {
                 let msg = res.message.isEmpty ? "Local backend failed to start." : res.message
                 onChunk(LLMStreamChunk(

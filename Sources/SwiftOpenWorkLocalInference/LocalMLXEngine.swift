@@ -860,3 +860,5 @@ public final class LocalMLXEngine: @unchecked Sendable {
         return (false, "Could not start local MLX server automatically. Please ensure `omlx` or `mlx-lm` is installed (`pip install mlx-lm`), or run Osaurus in the background.", 8000)
     }
 }
+
+extension LocalMLXEngine: LocalServerLauncher {}
