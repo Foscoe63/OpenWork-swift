@@ -154,6 +154,9 @@ public enum SemanticRename {
                 throw Failure.staleIndex(XcodeBuildServer.note(for: freshness) + " A rename from this index could miss uses, so it was not attempted.")
             }
         }
+        // Open first so a server that loads projects on open (tsserver) has started; see
+        // CodeIntelligence.prepare.
+        if session.loadsProjectOnOpen { _ = try await session.open(path) }
         try await session.waitUntilIndexed(timeout: indexTimeout, onProgress: onProgress)
         let (uri, text) = try await session.open(path)
         // The declaration line usually names the symbol once; `func value(value: Int)` names it

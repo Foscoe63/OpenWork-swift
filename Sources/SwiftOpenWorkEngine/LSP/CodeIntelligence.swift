@@ -233,8 +233,13 @@ public enum CodeIntelligence {
         let absolute = absolutePath(target.path, workspaceRoot: workspaceRoot)
         let lease = try await pool.session(for: absolute, workspaceRoot: workspaceRoot)
         let session = lease.session
+        let file = LanguageServerCatalog.standardized(absolute)
+        // tsserver loads a project only once a file in it is open. Waiting first found it idle, and
+        // the query then arrived mid-load and got the import line instead of the declaration.
+        // Opening again after the wait picks up any edit made since.
+        if session.loadsProjectOnOpen { _ = try await session.open(file) }
         try await session.waitUntilIndexed(timeout: indexTimeout, onProgress: onProgress)
-        let (uri, text) = try await session.open(LanguageServerCatalog.standardized(absolute))
+        let (uri, text) = try await session.open(file)
         let position = try SymbolPosition.resolve(in: text, line: target.line, symbol: target.symbol, column: target.column)
         let relative = relativePath(absolute, workspaceRoot: workspaceRoot)
         let subject = target.symbol.map { "'\($0)' at \(relative):\(target.line)" } ?? "\(relative):\(target.line):\(target.column ?? 1)"

@@ -302,6 +302,13 @@ public actor LanguageServerSession {
     ///
     /// `onProgress` receives a line whenever the server's reported progress changes, so a caller
     /// can show a first index that takes minutes as work rather than a hang.
+    /// Whether a file should be opened before `waitUntilIndexed`. Servers that report readiness
+    /// through progress, tsserver among them, load a project only once one of its files is open;
+    /// waiting first finds them idle. sourcekit-lsp's `workspace/synchronize` needs no file.
+    public nonisolated var loadsProjectOnOpen: Bool {
+        resolution.spec.readiness == .progressQuiet
+    }
+
     public func waitUntilIndexed(timeout: TimeInterval, onProgress: (@Sendable (String) -> Void)? = nil) async throws {
         flushFileChanges()
         let reporter = onProgress.map { report in
