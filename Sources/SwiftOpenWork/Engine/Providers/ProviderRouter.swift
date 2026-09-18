@@ -1,5 +1,6 @@
 import Foundation
 import SwiftOpenWorkCore
+import SwiftOpenWorkLocalInference
 
 public final class ProviderRouter: @unchecked Sendable {
     public static let shared = ProviderRouter()

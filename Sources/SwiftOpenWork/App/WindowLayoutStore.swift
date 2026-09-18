@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import CoreGraphics
 import SwiftUI
+import SwiftOpenWorkLocalInference
 
 /// Persists main-window chrome: nav destination, inspector, split widths, and window frame.
 public enum WindowLayoutStore {

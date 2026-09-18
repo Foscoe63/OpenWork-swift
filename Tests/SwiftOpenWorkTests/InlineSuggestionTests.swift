@@ -2,6 +2,7 @@ import XCTest
 import AppKit
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkLocalInference
 
 final class InlineSuggestionLogicTests: XCTestCase {
 

@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import SwiftOpenWorkCore
 import SwiftOpenWorkStorage
+import SwiftOpenWorkLocalInference
 
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {

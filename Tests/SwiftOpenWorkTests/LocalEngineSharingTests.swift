@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkLocalInference
 
 /// The in-process engine is one model shared by everything that can start a turn: the chat
 /// window, scheduled automations, Shortcuts, and sub-agents running in parallel.

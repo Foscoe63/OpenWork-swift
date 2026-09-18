@@ -54,37 +54,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     private init() {}
 
     public static func defaultEnvironment(custom: [String: String] = [:]) -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let extraPaths = [
-            "/opt/homebrew/bin",
-            "/opt/homebrew/sbin",
-            "/usr/local/bin",
-            "/usr/local/sbin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin",
-            "\(home)/.cargo/bin",
-            "\(home)/.local/bin",
-            "\(home)/bin"
-        ]
-        let currentPath = env["PATH"] ?? ""
-        var combinedPaths = extraPaths
-        for p in currentPath.components(separatedBy: ":") where !p.isEmpty {
-            if !combinedPaths.contains(p) {
-                combinedPaths.append(p)
-            }
-        }
-        env["PATH"] = combinedPaths.joined(separator: ":")
-        env["TERM"] = "xterm-256color"
-        env["LANG"] = "en_US.UTF-8"
-        env["LC_ALL"] = "en_US.UTF-8"
-        env["HOME"] = home
-        for (k, v) in custom {
-            env[k] = v
-        }
-        return env
+        ShellEnvironment.standard(custom: custom)
     }
 
     /// Run a tool, logging the call and its result when verbose logging is on.

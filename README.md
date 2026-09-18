@@ -212,11 +212,16 @@ SwiftOpenWork/
     ├── SwiftOpenWorkCore/   # library, Swift 6 language mode
     │   ├── Models/          # Agent, Workspace, Session, SessionTodo, Settings,
     │   │                    # ProviderSelection, InlineFileDiff, ToolSchemaCatalog
+    │   ├── Providers/       # LLMProviderClient protocol, stream chunks,
+    │   │                    # ReasoningChannel, ImageTransport
     │   └── Utils/           # AsyncDeadline (timeouts for uncancellable work),
     │                        # AppLog (verbose logging, gated by the setting),
-    │                        # LaunchAtLogin (SMAppService)
+    │                        # LaunchAtLogin (SMAppService), ShellEnvironment
     ├── SwiftOpenWorkStorage/ # library, Swift 6: persistence, Keychain, provider
     │                        # credentials, 1.1 → 1.2 identity migration
+    ├── SwiftOpenWorkLocalInference/ # library: NativeMLXService, LocalMLXEngine,
+    │                        # MLXSessionReuse, LocalGenerationGate — the only
+    │                        # module that links MLX / Hugging Face / Transformers
     └── SwiftOpenWork/       # the app
         ├── App/             # Entry + window frame persistence (WindowLayoutStore)
         ├── State/           # AppState
@@ -228,7 +233,7 @@ SwiftOpenWork/
         │   │                # AutomationScheduler
         │   ├── Editor/      # EditorWorkspace, syntax highlighter, ghost-text
         │   ├── Preview/     # DevServerManager, PreviewController, StaticFileServer
-        │   ├── Providers/   # OpenAI, Anthropic, Ollama, NativeMLX, LocalMLXEngine
+        │   ├── Providers/   # OpenAI, Anthropic, Ollama, ProviderRouter
         │   ├── LSP/         # LSPConnection (JSON-RPC), LanguageServerCatalog,
         │   │                # LanguageServerSession/Pool, FileChangeWatcher,
         │   │                # CodeIntelligence, SemanticRename, XcodeBuildServer
@@ -252,14 +257,17 @@ SwiftOpenWork/
 
 Each folder under `Sources/` is a module, defined once, as a target in `Package.swift`. The Xcode
 project links them all as one dynamic library, the package's `SwiftOpenWorkKit` product, so each
-third-party package is linked into the app exactly once. A module can only use what a lower module
-declares `public`, and cannot import anything above it, so the compiler enforces the layering.
+third-party package is linked into the app exactly once. (Not yet: until the engine becomes a
+module, the app links MCP itself, and EventSource and swift-collections — which MCP shares with
+Hugging Face — are linked twice.) A module can only use what a lower module declares `public`, and cannot import anything above it, so the
+compiler enforces the layering.
 
 | Module | Depends on | Language mode |
 |---|---|---|
 | `SwiftOpenWorkCore` | — | Swift 6 |
 | `SwiftOpenWorkStorage` | Core | Swift 6 |
-| `SwiftOpenWork` (app) | Core, Storage | Swift 5 |
+| `SwiftOpenWorkLocalInference` | Core, Storage, MLX, Hugging Face, Transformers | Swift 5 |
+| `SwiftOpenWork` (app) | Core, Storage, LocalInference | Swift 5 |
 
 The app compiles with a Swift 6 toolchain throughout. Modules move to the Swift 6 language mode
 one at a time, once their concurrency errors are fixed rather than suppressed.

@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// A model called `screenshot_window` with identical arguments eight times and was still going
 /// when the user stopped it by hand. Dead-end detection existed only for MCP (`mcpDeadEnds`), so

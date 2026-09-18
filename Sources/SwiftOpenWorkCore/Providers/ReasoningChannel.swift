@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Whether a model's own chat template opens a reasoning block for it.
 ///
@@ -29,18 +30,15 @@ import Foundation
 /// inside reasoning, and stays there until `</think>`.
 public enum ReasoningChannel {
 
-    private static let lock = NSLock()
-    private static var cache: [String: Bool] = [:]
+    private static let cache = OSAllocatedUnfairLock(initialState: [String: Bool]())
 
     /// Does the model at `directory` open a thinking block in its generation prompt?
     public static func templatePreOpensThinking(modelDirectory: URL) -> Bool {
         let key = modelDirectory.path
-        lock.lock()
-        if let cached = cache[key] { lock.unlock(); return cached }
-        lock.unlock()
+        if let cached = cache.withLock({ $0[key] }) { return cached }
 
         let answer = detect(in: modelDirectory)
-        lock.lock(); cache[key] = answer; lock.unlock()
+        cache.withLock { $0[key] = answer }
         return answer
     }
 

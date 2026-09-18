@@ -18,6 +18,7 @@ let package = Package(
             targets: [
                 "SwiftOpenWorkCore",
                 "SwiftOpenWorkStorage",
+                "SwiftOpenWorkLocalInference",
             ]
         ),
     ],
@@ -48,16 +49,13 @@ let package = Package(
                 .swiftLanguageMode(.v6)
             ]
         ),
-        .executableTarget(
-            name: "SwiftOpenWork",
+        // The in-process MLX engine and model discovery. Everything that links MLX, Hugging Face
+        // or Transformers lives here, so code that does not need them does not compile them.
+        .target(
+            name: "SwiftOpenWorkLocalInference",
             dependencies: [
                 "SwiftOpenWorkCore",
                 "SwiftOpenWorkStorage",
-                .product(name: "Yams", package: "yams"),
-                .product(name: "MCP", package: "swift-sdk"),
-                .product(name: "NIOCore", package: "swift-nio"),
-                .product(name: "NIOHTTP1", package: "swift-nio"),
-                .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 // Vision checkpoints need their own factory; LLMModelFactory builds a text-only
                 // pipeline that silently drops images. See NativeMLXService.loadContainer…
@@ -66,6 +64,26 @@ let package = Package(
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
+            ],
+            path: "Sources/SwiftOpenWorkLocalInference",
+            cxxSettings: [
+                .unsafeFlags(["-std=c++17", "-Wno-c++17-extensions"])
+            ],
+            swiftSettings: [
+                .unsafeFlags(["-strict-concurrency=minimal"])
+            ]
+        ),
+        .executableTarget(
+            name: "SwiftOpenWork",
+            dependencies: [
+                "SwiftOpenWorkCore",
+                "SwiftOpenWorkStorage",
+                "SwiftOpenWorkLocalInference",
+                .product(name: "Yams", package: "yams"),
+                .product(name: "MCP", package: "swift-sdk"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
             ],
             path: "Sources/SwiftOpenWork",
             resources: [
@@ -85,6 +103,7 @@ let package = Package(
             dependencies: [
                 "SwiftOpenWorkCore",
                 "SwiftOpenWorkStorage",
+                "SwiftOpenWorkLocalInference",
                 .target(name: "SwiftOpenWork")
             ]
         )

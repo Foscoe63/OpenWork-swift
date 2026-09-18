@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkLocalInference
 
 /// The curated catalog is a list of download targets. Five of fifteen ids pointed at Hugging Face
 /// repos that do not exist, so the app offered models it could never fetch. Whether a repo exists

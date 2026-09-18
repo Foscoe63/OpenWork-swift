@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftOpenWorkCore
+import SwiftOpenWorkLocalInference
 
 /// Ghost-text suggestions in the editor: what to ask, when to ask, which model answers, and how
 /// to turn a chat model's reply into text that can be inserted at the cursor.

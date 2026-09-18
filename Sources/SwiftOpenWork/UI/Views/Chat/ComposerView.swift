@@ -3,6 +3,7 @@ import Combine
 import AppKit
 import UniformTypeIdentifiers
 import SwiftOpenWorkCore
+import SwiftOpenWorkLocalInference
 
 // MARK: - Custom Native Chat Text View for macOS (Return to send, Shift/Option/Slash+Return for newline)
 public struct ChatInputRepresentable: NSViewRepresentable {

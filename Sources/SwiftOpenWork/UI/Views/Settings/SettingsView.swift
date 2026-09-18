@@ -4,6 +4,7 @@ import AVFoundation
 import UniformTypeIdentifiers
 import SwiftOpenWorkCore
 import SwiftOpenWorkStorage
+import SwiftOpenWorkLocalInference
 
 public struct SettingsView: View {
     @ObservedObject var appState: AppState
