@@ -15,14 +15,14 @@ import SwiftOpenWorkEngine
 // MARK: - Ask
 
 struct AskSwiftOpenWorkIntent: AppIntent {
-    static var title: LocalizedStringResource = "Ask SwiftOpenWork"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Ask SwiftOpenWork"
+    static let description = IntentDescription(
         "Run a prompt through your current SwiftOpenWork agent and return its reply.",
         categoryName: "Agents"
     )
 
     /// The app must be running: the agent needs its MCP servers, loaded model and workspace.
-    static var openAppWhenRun: Bool = true
+    static let openAppWhenRun: Bool = true
 
     @Parameter(title: "Prompt", requestValueDialog: "What should the agent do?")
     var prompt: String
@@ -47,8 +47,8 @@ struct AskSwiftOpenWorkIntent: AppIntent {
 
 /// An automation, as Shortcuts sees it: a thing the user picks from a list.
 struct AutomationEntity: AppEntity {
-    static var typeDisplayRepresentation: TypeDisplayRepresentation = "Automation"
-    static var defaultQuery = AutomationQuery()
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Automation"
+    static let defaultQuery = AutomationQuery()
 
     var id: String
     var name: String
@@ -84,13 +84,13 @@ extension AutomationEntity {
 }
 
 struct RunAutomationIntent: AppIntent {
-    static var title: LocalizedStringResource = "Run Automation"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Run Automation"
+    static let description = IntentDescription(
         "Run one of your SwiftOpenWork automations and return what it produced.",
         categoryName: "Agents"
     )
 
-    static var openAppWhenRun: Bool = true
+    static let openAppWhenRun: Bool = true
 
     @Parameter(title: "Automation")
     var automation: AutomationEntity

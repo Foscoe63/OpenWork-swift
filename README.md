@@ -279,12 +279,18 @@ work when there is no host, as in a test that never creates the app's state.
 |---|---|---|
 | `SwiftOpenWorkCore` | — | Swift 6 |
 | `SwiftOpenWorkStorage` | Core | Swift 6 |
-| `SwiftOpenWorkLocalInference` | Core, Storage, MLX, Hugging Face, Transformers | Swift 5 |
+| `SwiftOpenWorkLocalInference` | Core, Storage, MLX, Hugging Face, Transformers | Swift 6 |
 | `SwiftOpenWorkEngine` | Core, Storage, Yams, MCP, NIO | Swift 5 |
-| `SwiftOpenWork` (app) | all of the above | Swift 5 |
+| `SwiftOpenWork` (app) | all of the above | Swift 6 |
 
-The app compiles with a Swift 6 toolchain throughout. Modules move to the Swift 6 language mode
-one at a time, once their concurrency errors are fixed rather than suppressed.
+Every module but the engine compiles in the Swift 6 language mode, with its concurrency errors
+fixed rather than suppressed. The engine is in the Swift 5 mode with minimal checking. Built with
+`-strict-concurrency=complete` it reports 22 problems in 7 files, nearly all in the
+language-server layer: `LSPConnection` and `LanguageServerSession` pass untyped JSON
+(`[String: Any]`, `Any?`) in and out of actors, and `diagnostics(for:)` returns JSON the session
+also keeps. Moving the engine to Swift 6 means giving that layer Sendable types (or `sending`
+parameters and results where the value is freshly decoded), plus one construct in
+`PreviewController` the region checker cannot analyse yet.
 
 ### Sidebar destinations
 

@@ -159,7 +159,9 @@ public enum ScreenPerception {
     /// Ask for Accessibility once, with the system prompt, rather than failing silently.
     @discardableResult
     public static func requestAccessibilityPermission() -> Bool {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        // The value of `kAXTrustedCheckOptionPrompt`. The constant is a mutable C global, which
+        // Swift 6 will not read from nonisolated code.
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
 

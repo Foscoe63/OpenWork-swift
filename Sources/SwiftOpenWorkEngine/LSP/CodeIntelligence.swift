@@ -46,7 +46,7 @@ public enum CodeIntelligence {
 
     /// How long to wait for a server's index before refusing. The first request in a large
     /// package pays for the whole index; later requests return immediately.
-    public static var indexTimeout: TimeInterval = 240
+    public static let indexTimeout: TimeInterval = 240
 
     /// Receives a line whenever the server reports indexing progress.
     public typealias ProgressHandler = @Sendable (String) -> Void

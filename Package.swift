@@ -32,8 +32,7 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.3.0"),
     ],
     targets: [
-        // Models and small utilities: no dependencies on the rest of the app, and the first
-        // module compiled in the Swift 6 language mode.
+        // Models and small utilities: no dependencies on the rest of the app.
         .target(
             name: "SwiftOpenWorkCore",
             path: "Sources/SwiftOpenWorkCore",
@@ -71,7 +70,7 @@ let package = Package(
                 .unsafeFlags(["-std=c++17", "-Wno-c++17-extensions"])
             ],
             swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=minimal"])
+                .swiftLanguageMode(.v6)
             ]
         ),
         // The agent loop, tools, providers, MCP, language servers, preview and automations. It
@@ -89,6 +88,9 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
             ],
             path: "Sources/SwiftOpenWorkEngine",
+            // The one module still in the Swift 5 language mode. Its remaining Swift 6 errors are in
+            // the language-server layer, which passes untyped JSON (`[String: Any]`) across actors;
+            // see README › Modules.
             swiftSettings: [
                 .unsafeFlags(["-strict-concurrency=minimal"])
             ]
@@ -108,10 +110,8 @@ let package = Package(
             cxxSettings: [
                 .unsafeFlags(["-std=c++17", "-Wno-c++17-extensions"])
             ],
-            // Swift 6 toolchain, Swift 5 language mode: the app has only ever compiled with
-            // minimal concurrency checking. Modules move to `.v6` one at a time.
             swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=minimal"])
+                .swiftLanguageMode(.v6)
             ]
         ),
         // Tests that need only the engine and what it depends on. No app, no MLX: building these

@@ -126,6 +126,7 @@ public enum WindowLayoutStore {
         set { UserDefaults.standard.set(newValue, forKey: Key.windowIsZoomed) }
     }
 
+    @MainActor
     public static func saveWindowFrame(from window: NSWindow) {
         windowIsZoomed = window.isZoomed
         // Persist the un-zoomed frame when zoomed so restore can re-zoom cleanly.
@@ -135,6 +136,7 @@ public enum WindowLayoutStore {
         UserDefaults.standard.synchronize()
     }
 
+    @MainActor
     public static func restoreWindowFrame(on window: NSWindow) {
         guard let saved = savedWindowFrame else { return }
         var frame = saved
@@ -152,58 +154,44 @@ public enum WindowLayoutStore {
         }
     }
 
+    @MainActor
     private static func screenContaining(_ frame: NSRect) -> NSScreen? {
         NSScreen.screens.first { $0.frame.intersects(frame) }
     }
 
     public static let mainWindowAutosaveName = "SwiftOpenWorkMainWindow"
 
+    @MainActor
     private static var didObserve = false
 
+    @MainActor
     public static func observeMainWindowAutosave() {
         guard !didObserve else { return }
         didObserve = true
 
-        let center = NotificationCenter.default
-        let handler: (Notification) -> Void = { note in
-            guard let window = note.object as? NSWindow, shouldManage(window) else { return }
-            applyFrameAutosave(to: window)
-        }
-        center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main, using: handler)
-        center.addObserver(forName: NSWindow.didBecomeMainNotification, object: nil, queue: .main, using: handler)
-        center.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: nil, queue: .main) { note in
-            guard let window = note.object as? NSWindow, shouldManage(window) else { return }
-            saveWindowFrame(from: window)
-        }
-        center.addObserver(forName: NSWindow.didMoveNotification, object: nil, queue: .main) { note in
-            guard let window = note.object as? NSWindow, shouldManage(window) else { return }
-            // Avoid saving mid-animation noise; live resize has its own event.
-            if !window.inLiveResize {
-                saveWindowFrame(from: window)
-            }
-        }
-        center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
-            guard let window = note.object as? NSWindow, shouldManage(window) else { return }
-            saveWindowFrame(from: window)
-        }
+        WindowFrameObserver.shared.start()
     }
 
+    @MainActor
     public static func configureMainWindowAutosave() {
         for window in NSApp.windows where shouldManage(window) {
             applyFrameAutosave(to: window)
         }
     }
 
-    private static func shouldManage(_ window: NSWindow) -> Bool {
+    @MainActor
+    fileprivate static func shouldManage(_ window: NSWindow) -> Bool {
         if window.level != .normal { return false }
         if window.styleMask.contains(.utilityWindow) { return false }
         if window.isSheet { return false }
         return window.styleMask.contains(.titled) && window.styleMask.contains(.resizable)
     }
 
+    @MainActor
     private static var restoredWindowIds = Set<ObjectIdentifier>()
 
-    private static func applyFrameAutosave(to window: NSWindow) {
+    @MainActor
+    fileprivate static func applyFrameAutosave(to window: NSWindow) {
         window.setFrameAutosaveName(mainWindowAutosaveName)
         window.isRestorable = true
         window.minSize = NSSize(width: minWindowWidth, height: minWindowHeight)
@@ -250,5 +238,43 @@ private final class WindowFrameProbeView: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             WindowLayoutStore.configureMainWindowAutosave()
         }
+    }
+}
+
+/// Saves and restores the main window's frame as AppKit reports changes. Selector-based so the
+/// handlers are main-actor methods: AppKit posts window notifications on the main thread, and a
+/// block observer would have to carry the non-Sendable `Notification` across to the main actor.
+@MainActor
+private final class WindowFrameObserver: NSObject {
+    static let shared = WindowFrameObserver()
+
+    func start() {
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(applyAutosave(_:)), name: NSWindow.didBecomeKeyNotification, object: nil)
+        center.addObserver(self, selector: #selector(applyAutosave(_:)), name: NSWindow.didBecomeMainNotification, object: nil)
+        center.addObserver(self, selector: #selector(saveFrame(_:)), name: NSWindow.didEndLiveResizeNotification, object: nil)
+        center.addObserver(self, selector: #selector(windowDidMove(_:)), name: NSWindow.didMoveNotification, object: nil)
+        center.addObserver(self, selector: #selector(saveFrame(_:)), name: NSWindow.willCloseNotification, object: nil)
+    }
+
+    @objc private func applyAutosave(_ note: Notification) {
+        guard let window = managedWindow(note) else { return }
+        WindowLayoutStore.applyFrameAutosave(to: window)
+    }
+
+    @objc private func saveFrame(_ note: Notification) {
+        guard let window = managedWindow(note) else { return }
+        WindowLayoutStore.saveWindowFrame(from: window)
+    }
+
+    @objc private func windowDidMove(_ note: Notification) {
+        // Avoid saving mid-animation noise; live resize has its own event.
+        guard let window = managedWindow(note), !window.inLiveResize else { return }
+        WindowLayoutStore.saveWindowFrame(from: window)
+    }
+
+    private func managedWindow(_ note: Notification) -> NSWindow? {
+        guard let window = note.object as? NSWindow, WindowLayoutStore.shouldManage(window) else { return nil }
+        return window
     }
 }

@@ -21,7 +21,9 @@ public final class LocalMLXEngine: @unchecked Sendable {
         }
         
         if kerr == KERN_SUCCESS {
-            let pageSize = UInt64(vm_kernel_page_size)
+            // `vm_kernel_page_size` is a mutable C global, which Swift 6 will not read from
+            // nonisolated code; `getpagesize()` returns the same value.
+            let pageSize = UInt64(getpagesize())
             let freeBytes = (UInt64(vmStats.free_count) + UInt64(vmStats.inactive_count)) * pageSize
             return Double(freeBytes) / (1024 * 1024 * 1024)
         }
