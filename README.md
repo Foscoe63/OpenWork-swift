@@ -211,15 +211,15 @@ SwiftOpenWork/
 └── Sources/                 # one folder per module; see "Modules" below
     ├── SwiftOpenWorkCore/   # library, Swift 6 language mode
     │   ├── Models/          # Agent, Workspace, Session, SessionTodo, Settings,
-    │   │                    # ProviderSelection, InlineFileDiff
+    │   │                    # ProviderSelection, InlineFileDiff, ToolSchemaCatalog
     │   └── Utils/           # AsyncDeadline (timeouts for uncancellable work),
     │                        # AppLog (verbose logging, gated by the setting),
     │                        # LaunchAtLogin (SMAppService)
+    ├── SwiftOpenWorkStorage/ # library, Swift 6: persistence, Keychain, provider
+    │                        # credentials, 1.1 → 1.2 identity migration
     └── SwiftOpenWork/       # the app
-        ├── App/             # Entry + window frame persistence
+        ├── App/             # Entry + window frame persistence (WindowLayoutStore)
         ├── State/           # AppState
-        ├── Storage/         # Persistence, Keychain, WindowLayoutStore,
-        │                    # SessionCheckpointStore (durable per-turn snapshots)
         ├── Engine/
         │   ├── Agents/      # AgentRunner, SubAgentExecutor, approvals,
         │   │                # ContextCompactor, ContextMeter,
@@ -232,8 +232,8 @@ SwiftOpenWork/
         │   ├── LSP/         # LSPConnection (JSON-RPC), LanguageServerCatalog,
         │   │                # LanguageServerSession/Pool, FileChangeWatcher,
         │   │                # CodeIntelligence, SemanticRename, XcodeBuildServer
-        │   ├── Tools/       # Execution, schemas, CodeSearch, GitTools,
-        │   │                # BuildDiagnostics, FileCheckpointStore, SymbolRename,
+        │   ├── Tools/       # Execution, CodeSearch, GitTools, BuildDiagnostics,
+        │   │                # FileCheckpointStore, SessionCheckpointStore, SymbolRename,
         │   │                # LiveToolOutput, DiagnosticLinkParser,
         │   │                # WorkspaceContext, ProjectInstructions
         │   ├── MCP/         # Client, routing, effect catalog, tool gate,
@@ -258,7 +258,8 @@ declares `public`, and cannot import anything above it, so the compiler enforces
 | Module | Depends on | Language mode |
 |---|---|---|
 | `SwiftOpenWorkCore` | — | Swift 6 |
-| `SwiftOpenWork` (app) | Core | Swift 5 |
+| `SwiftOpenWorkStorage` | Core | Swift 6 |
+| `SwiftOpenWork` (app) | Core, Storage | Swift 5 |
 
 The app compiles with a Swift 6 toolchain throughout. Modules move to the Swift 6 language mode
 one at a time, once their concurrency errors are fixed rather than suppressed.

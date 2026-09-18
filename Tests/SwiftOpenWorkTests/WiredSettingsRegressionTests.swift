@@ -2,6 +2,7 @@ import XCTest
 import AVFoundation
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkStorage
 
 /// The GPU memory budget slider used to move a number nothing read.
 ///

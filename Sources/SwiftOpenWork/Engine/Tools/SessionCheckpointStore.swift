@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import SwiftOpenWorkStorage
 
 /// One file as it stood before a turn first touched it.
 public struct FileBaseline: Sendable, Equatable {

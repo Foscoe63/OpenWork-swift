@@ -1,5 +1,6 @@
 import Foundation
 import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 /// A sub-agent that actually does the work.
 ///

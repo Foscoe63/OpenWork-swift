@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkStorage
 
 /// The shipped default must name the engine that ships in the binary.
 ///

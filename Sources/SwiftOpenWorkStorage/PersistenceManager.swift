@@ -180,7 +180,7 @@ public final class PersistenceManager: @unchecked Sendable {
     /// Returns whether anything changed. A migration must be keyed on the stored version, not on
     /// the values themselves: re-deriving "this looks unset" on every load would mean the user
     /// could never turn the setting back off.
-    static func applyMigrations(to settings: inout AppSettings) -> Bool {
+    public static func applyMigrations(to settings: inout AppSettings) -> Bool {
         guard settings.settingsSchemaVersion < AppSettings.currentSchemaVersion else { return false }
 
         if settings.settingsSchemaVersion < 2 {
@@ -225,7 +225,7 @@ public final class PersistenceManager: @unchecked Sendable {
             let isCodegraph = s.command.lowercased().contains("codegraph")
                 || s.name.lowercased().contains("codegraph")
             guard isCodegraph else { return s }
-            let sanitized = MCPClientManager.sanitizedStdioArgs(command: s.command, name: s.name, args: s.args)
+            let sanitized = MCPServerConfig.sanitizedStdioArgs(command: s.command, name: s.name, args: s.args)
             if sanitized != s.args {
                 s.args = sanitized
             }
@@ -443,7 +443,7 @@ public final class PersistenceManager: @unchecked Sendable {
     /// Matching exactly, rather than by subset, so an allowlist a user narrowed *to* these tools
     /// on purpose is only cleared if it is identical to what was seeded — and a user who has
     /// added or removed anything keeps their choice.
-    static func isLegacySeededAllowlist(_ ids: [String]) -> Bool {
+    public static func isLegacySeededAllowlist(_ ids: [String]) -> Bool {
         let base: Set<String> = [
             "file_read", "file_write", "terminal_command", "web_search",
             "calculator", "agent_spawn", "agent_message"
@@ -454,7 +454,7 @@ public final class PersistenceManager: @unchecked Sendable {
     }
 
     /// The seed's old self-description with the new name, or nil when there is nothing to change.
-    static func renamedSeedAgentText(_ text: String) -> String? {
+    public static func renamedSeedAgentText(_ text: String) -> String? {
         // "OpenWork-Swift" was the name for a few hours before SwiftOpenWork, and test runs in
         // that window already rewrote this machine's agents.json to it. The lookbehind matters:
         // the new name itself contains "OpenWork Lead Agent", and without it every launch would

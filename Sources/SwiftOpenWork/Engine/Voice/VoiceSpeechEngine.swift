@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import Speech
 import Combine
+import SwiftOpenWorkStorage
 
 @MainActor
 public final class VoiceSpeechEngine: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {

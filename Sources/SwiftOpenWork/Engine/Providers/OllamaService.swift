@@ -1,5 +1,6 @@
 import Foundation
 import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 public final class OllamaService: LLMProviderClient, @unchecked Sendable {
     public static let shared = OllamaService()

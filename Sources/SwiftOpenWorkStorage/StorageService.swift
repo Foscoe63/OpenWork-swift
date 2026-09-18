@@ -28,18 +28,18 @@ public final class StorageService: @unchecked Sendable {
     /// Application Support, a test that crashed before restoring left the developer's settings
     /// changed, and anything the app does at launch ran on real data. Resolved once, so every
     /// store in the process agrees for its whole life.
-    static let resolvedBaseDirectory: URL = resolveBaseDirectory(
+    public static let resolvedBaseDirectory: URL = resolveBaseDirectory(
         environment: ProcessInfo.processInfo.environment,
-        hostedByTests: AutomationScheduler.isHostedByTests,
+        hostedByTests: AppIdentity.isHostedByTests,
         applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!,
         temporaryDirectory: FileManager.default.temporaryDirectory,
         processIdentifier: ProcessInfo.processInfo.processIdentifier
     )
 
-    static var testDirectoryPrefix: String { "\(AppIdentity.applicationSupportFolderName)-tests-" }
+    public static var testDirectoryPrefix: String { "\(AppIdentity.applicationSupportFolderName)-tests-" }
 
     /// Delete test data folders whose process has exited, so runs do not pile up.
-    static func removeFinishedTestDirectories(
+    public static func removeFinishedTestDirectories(
         in temporaryDirectory: URL,
         isRunning: (Int32) -> Bool = { kill($0, 0) == 0 || errno == EPERM }
     ) {
@@ -51,7 +51,7 @@ public final class StorageService: @unchecked Sendable {
         }
     }
 
-    static func resolveBaseDirectory(
+    public static func resolveBaseDirectory(
         environment: [String: String],
         hostedByTests: Bool,
         applicationSupport: URL,

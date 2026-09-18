@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftOpenWorkCore
 
 /// Carries 1.1 data across the rename from OpenWork (`ai.openwork.OpenWorkSwift`) to
@@ -30,10 +31,10 @@ import SwiftOpenWorkCore
 ///   over by an app; they have to be granted again once.
 public enum LegacyIdentityMigration {
 
-    static let completedKey = "SwiftOpenWork.migration.legacyIdentity.v1"
+    public static let completedKey = "SwiftOpenWork.migration.legacyIdentity.v1"
 
     /// Old key → new key, for keys this app wrote itself. Anything else is copied unchanged.
-    static func renamedKey(_ key: String) -> String {
+    public static func renamedKey(_ key: String) -> String {
         if key.hasPrefix("openwork.windowLayout.v1.") {
             return "swiftopenwork.windowLayout.v1." + key.dropFirst("openwork.windowLayout.v1.".count)
         }
@@ -51,7 +52,7 @@ public enum LegacyIdentityMigration {
     ///
     /// Old values replace anything already under the new name: this only runs before the renamed
     /// app's first real launch, when the new domain can hold nothing but test-host leftovers.
-    static func migratedPreferences(legacy: [String: Any]) -> [String: Any] {
+    public static func migratedPreferences(legacy: [String: Any]) -> [String: Any] {
         var result: [String: Any] = [:]
         for (key, value) in legacy {
             result[renamedKey(key)] = value
@@ -59,20 +60,19 @@ public enum LegacyIdentityMigration {
         return result
     }
 
-    private static let lock = NSLock()
-    private static var didRun = false
+    private static let didRun = OSAllocatedUnfairLock(initialState: false)
 
     /// Safe to call from anywhere and more than once; the work happens once per install.
     public static func runIfNeeded(
         defaults: UserDefaults = .standard,
         fileManager: FileManager = .default
     ) {
-        let shouldRun: Bool = lock.withLock {
+        let shouldRun: Bool = didRun.withLock { didRun in
             if didRun { return false }
             didRun = true
             return true
         }
-        guard shouldRun, !AutomationScheduler.isHostedByTests else { return }
+        guard shouldRun, !AppIdentity.isHostedByTests else { return }
         guard !defaults.bool(forKey: completedKey) else { return }
 
         if let legacy = defaults.persistentDomain(forName: AppIdentity.legacyBundleIdentifier) {
@@ -103,7 +103,7 @@ public enum LegacyIdentityMigration {
     ///
     /// Returns the path the displaced folder was moved to, if there was one.
     @discardableResult
-    static func adoptLegacyDirectory(
+    public static func adoptLegacyDirectory(
         from legacy: URL,
         to current: URL,
         now: Date = Date(),

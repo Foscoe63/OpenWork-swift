@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 public struct ToolExecutionResult: Sendable {
     public var success: Bool

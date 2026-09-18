@@ -50,12 +50,7 @@ public final class AutomationScheduler: ObservableObject {
     /// is called — against the real Application Support data. Before this guard every test run
     /// fired the user's enabled startup automations: real agent turns, a new session each, and a
     /// rewritten `lastRunAt`, from `xcodebuild test`.
-    nonisolated static var isHostedByTests: Bool {
-        let environment = ProcessInfo.processInfo.environment
-        return environment["XCTestConfigurationFilePath"] != nil
-            || environment["XCTestBundlePath"] != nil
-            || NSClassFromString("XCTestCase") != nil
-    }
+    nonisolated static var isHostedByTests: Bool { AppIdentity.isHostedByTests }
 
     /// Begin scheduling. Safe to call twice; the second call replaces the first.
     public func start(appState: AppState) {

@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkStorage
 
 /// Tests used to run against the developer's real Application Support folder: `xcodebuild test`
 /// launches the real app as host, and tests save settings through the shared store. A test that

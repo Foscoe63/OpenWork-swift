@@ -17,6 +17,7 @@ let package = Package(
             type: .dynamic,
             targets: [
                 "SwiftOpenWorkCore",
+                "SwiftOpenWorkStorage",
             ]
         ),
     ],
@@ -38,10 +39,20 @@ let package = Package(
                 .swiftLanguageMode(.v6)
             ]
         ),
+        // Settings, sessions and credentials on disk and in the Keychain.
+        .target(
+            name: "SwiftOpenWorkStorage",
+            dependencies: ["SwiftOpenWorkCore"],
+            path: "Sources/SwiftOpenWorkStorage",
+            swiftSettings: [
+                .swiftLanguageMode(.v6)
+            ]
+        ),
         .executableTarget(
             name: "SwiftOpenWork",
             dependencies: [
                 "SwiftOpenWorkCore",
+                "SwiftOpenWorkStorage",
                 .product(name: "Yams", package: "yams"),
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "NIOCore", package: "swift-nio"),
@@ -73,6 +84,7 @@ let package = Package(
             name: "SwiftOpenWorkTests",
             dependencies: [
                 "SwiftOpenWorkCore",
+                "SwiftOpenWorkStorage",
                 .target(name: "SwiftOpenWork")
             ]
         )

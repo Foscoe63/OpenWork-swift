@@ -3,6 +3,7 @@ import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
 import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 public struct SettingsView: View {
     @ObservedObject var appState: AppState

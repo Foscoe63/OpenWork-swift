@@ -15,13 +15,13 @@ import SwiftOpenWorkCore
 public enum ProviderCredentials {
 
     /// Reads a stored secret. Replaceable for tests.
-    nonisolated(unsafe) static var reader: @Sendable (String) -> String? = { key in
+    public nonisolated(unsafe) static var reader: @Sendable (String) -> String? = { key in
         KeychainManager.shared.getSecret(forKey: key)
     }
 
     private static let cache = Cache()
 
-    static func keychainKey(for providerId: String) -> String { "provider_key_\(providerId)" }
+    public static func keychainKey(for providerId: String) -> String { "provider_key_\(providerId)" }
 
     /// `provider` with its API key filled in, when it is a cloud provider whose key is not loaded.
     public static func hydrated(_ provider: ModelProvider) async -> ModelProvider {
@@ -48,7 +48,7 @@ public enum ProviderCredentials {
         cache.remove(providerId)
     }
 
-    static func resetCache() { cache.removeAll() }
+    public static func resetCache() { cache.removeAll() }
 
     private final class Cache: @unchecked Sendable {
         private let lock = NSLock()

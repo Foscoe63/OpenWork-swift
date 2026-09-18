@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkStorage
 
 /// Delegation is the model's decision now, made with `agent_spawn`. These pin what makes that
 /// path trustworthy: the right model, a depth budget that actually applies, refusals that say

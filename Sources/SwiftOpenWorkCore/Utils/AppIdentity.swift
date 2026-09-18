@@ -18,6 +18,15 @@ public enum AppIdentity {
     public static let logSubsystem = bundleIdentifier
     public static let keychainService = bundleIdentifier
 
+    /// True when this process is an XCTest host. The unit tests run inside the app, against the
+    /// real Application Support data unless something checks this; see `AutomationScheduler`.
+    public static var isHostedByTests: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+
     /// `~/.swiftopenwork`: downloaded models and agent screenshots.
     public static var homeDataDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".swiftopenwork", isDirectory: true)
