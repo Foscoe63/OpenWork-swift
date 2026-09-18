@@ -2,6 +2,7 @@ import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
 @testable import SwiftOpenWorkStorage
+@testable import SwiftOpenWorkEngine
 
 /// Sub-agents were theatre. `agent_spawn` built a `SubAgentTask`, returned "Spawned sub-agent […]
 /// to execute task", and ran nothing; auto-delegation made one call with `tools: []` and a

@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 public struct ChatView: View {
     @State private var showingChangeReview = false

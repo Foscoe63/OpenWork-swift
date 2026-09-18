@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import SwiftOpenWorkEngine
 
 public struct ReasoningDisclosureView: View {
     let reasoning: String

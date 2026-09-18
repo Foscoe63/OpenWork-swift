@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 /// Shared workspace picker used by the sidebar ("Core Workspaces & Research") and the chat header.
 /// Both bind to `appState.activeWorkspaceId`, so selections stay in sync.

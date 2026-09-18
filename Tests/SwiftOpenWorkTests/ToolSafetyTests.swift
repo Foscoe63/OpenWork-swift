@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 final class ToolSafetyTests: XCTestCase {
 

@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// Four related changes to one file cost four round trips today, and if the third fails the file
 /// is left matching neither the before nor the intended after. Half-applied is the worst available

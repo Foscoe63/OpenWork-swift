@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 public struct WatchFoldersView: View {
     @ObservedObject var appState: AppState

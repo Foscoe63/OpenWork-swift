@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// Compiler-backed rename. The pure half pins the edit arithmetic; the integration test runs the
 /// real `sourcekit-lsp` against a two-type package, because the property that matters — renaming

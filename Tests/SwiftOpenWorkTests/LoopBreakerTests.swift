@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// The "Auto Loop Breaker" detected repetition and then waited for the model to finish anyway: the
 /// flag was only read after the stream ended. A real run burned 219 seconds and its whole token

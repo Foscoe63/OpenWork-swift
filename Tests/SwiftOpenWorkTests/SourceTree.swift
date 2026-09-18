@@ -1,4 +1,5 @@
 import Foundation
+@testable import SwiftOpenWorkEngine
 
 /// The app's own source files, for the tests that read them.
 ///

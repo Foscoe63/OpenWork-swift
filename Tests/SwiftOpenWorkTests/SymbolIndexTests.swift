@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// "Where is X defined" answered by grep costs two or three hops and returns every call site
 /// alongside the one declaration. This indexes declarations only. It is a regex scan, not a

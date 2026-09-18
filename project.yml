@@ -27,17 +27,6 @@ packages:
   # package would each carry a copy — EventSource is shared by MCP and Hugging Face.
   SwiftOpenWorkKit:
     path: .
-  # Packages the app's own sources still import, until the code that uses them moves into a
-  # module. While any are listed here, a package shared with the Kit is linked twice.
-  Yams:
-    url: https://github.com/jpsim/Yams.git
-    from: 5.0.0
-  swift-sdk:
-    url: https://github.com/modelcontextprotocol/swift-sdk.git
-    from: 0.10.0
-  swift-nio:
-    url: https://github.com/apple/swift-nio.git
-    from: 2.81.0
 
 targets:
   SwiftOpenWork:
@@ -56,16 +45,6 @@ targets:
       - package: SwiftOpenWorkKit
         product: SwiftOpenWorkKit
         embed: true
-      - package: Yams
-        product: Yams
-      - package: swift-sdk
-        product: MCP
-      - package: swift-nio
-        product: NIOCore
-      - package: swift-nio
-        product: NIOHTTP1
-      - package: swift-nio
-        product: NIOPosix
     settings:
       base:
         # Renamed from OpenWork / ai.openwork.OpenWorkSwift in 1.2: another app is called

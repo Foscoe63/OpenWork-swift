@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// The Automations trigger picker says "Scheduled (Interval / Cron)", so cron has to mean cron.
 final class CronExpressionTests: XCTestCase {

@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// `.plain` hit-tests a button against what it *draws*, not against its frame.
 ///

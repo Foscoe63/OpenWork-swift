@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 public struct AgentsView: View {
     @ObservedObject var appState: AppState

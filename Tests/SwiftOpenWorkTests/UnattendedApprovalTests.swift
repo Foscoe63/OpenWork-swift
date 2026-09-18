@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// A run with no window has nobody to approve a sensitive tool call. Awaiting one would hang until
 /// the caller gave up, leaving a half-finished turn and no explanation; auto-approving would hand

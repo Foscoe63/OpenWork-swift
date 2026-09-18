@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// From a real exported session: a user said "Good Day" to Llama-3.3-70B and the entire reply was
 /// `<|python_tag|>`. The sanitizer knew about `<think>` and tool-call syntax but nothing about

@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// The wire protocol, over pipes with no process behind them, so each way a server can misbehave
 /// is produced on purpose. The property under test throughout: a waiting request always ends.

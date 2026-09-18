@@ -4,6 +4,7 @@ import AVFoundation
 @testable import SwiftOpenWorkCore
 @testable import SwiftOpenWorkStorage
 @testable import SwiftOpenWorkLocalInference
+@testable import SwiftOpenWorkEngine
 
 /// The GPU memory budget slider used to move a number nothing read.
 ///

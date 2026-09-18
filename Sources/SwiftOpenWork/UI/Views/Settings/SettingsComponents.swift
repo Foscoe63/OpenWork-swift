@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftOpenWorkEngine
 
 public struct SettingsCard<Content: View>: View {
     let title: String?

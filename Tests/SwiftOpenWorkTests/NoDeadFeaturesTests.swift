@@ -2,6 +2,7 @@ import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
 @testable import SwiftOpenWorkStorage
+@testable import SwiftOpenWorkEngine
 
 /// `NoDeadSettingsTests` enforced "nothing ships with a control until something reads it" — for
 /// fields of `AppSettings`. Two sweeps ran under that rule and both missed the largest dead

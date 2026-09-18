@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// Undo, change reporting, git reads, and per-repo instructions.
 final class CheckpointAndGitTests: XCTestCase {

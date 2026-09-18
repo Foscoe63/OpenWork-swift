@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// The lexer's job is to be right about strings and comments. Wrong colours mislead.
 final class SyntaxHighlighterTests: XCTestCase {

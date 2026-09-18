@@ -222,30 +222,32 @@ SwiftOpenWork/
     ├── SwiftOpenWorkLocalInference/ # library: NativeMLXService, LocalMLXEngine,
     │                        # MLXSessionReuse, LocalGenerationGate — the only
     │                        # module that links MLX / Hugging Face / Transformers
+    ├── SwiftOpenWorkEngine/ # library; reaches the app only through EngineHost
+    │   ├── Agents/          # AgentRunner, SubAgentExecutor, approvals,
+    │   │                    # ContextCompactor, ContextMeter,
+    │   │                    # TurnCompletionNotifier
+    │   ├── Automations/     # AutomationSchedule, CronExpression
+    │   ├── Editor/          # EditorWorkspace, ProjectSearchModel, syntax
+    │   │                    # highlighter, ghost-text
+    │   ├── Preview/         # DevServerManager, PreviewController, PreviewLauncher,
+    │   │                    # StaticFileServer
+    │   ├── Providers/       # OpenAI, Anthropic, Ollama, ProviderRouter
+    │   ├── LSP/             # LSPConnection (JSON-RPC), LanguageServerCatalog,
+    │   │                    # LanguageServerSession/Pool, FileChangeWatcher,
+    │   │                    # CodeIntelligence, SemanticRename, XcodeBuildServer
+    │   ├── Tools/           # Execution, CodeSearch, GitTools, BuildDiagnostics,
+    │   │                    # FileCheckpointStore, SessionCheckpointStore, SymbolRename,
+    │   │                    # LiveToolOutput, DiagnosticLinkParser,
+    │   │                    # WorkspaceContext, ProjectInstructions
+    │   ├── MCP/             # Client, routing, effect catalog, tool gate,
+    │   │                    # catalog promotion, failure classifier
+    │   ├── Integrations/    # Google (Gmail / Calendar)
+    │   ├── RAG/             # CodeIndex (BM25 over the workspace)
+    │   └── Terminal/ · Voice/ · Watch/ · Vision/ · Updates/
     └── SwiftOpenWork/       # the app
-        ├── App/             # Entry + window frame persistence (WindowLayoutStore)
-        ├── State/           # AppState
-        ├── Engine/
-        │   ├── Agents/      # AgentRunner, SubAgentExecutor, approvals,
-        │   │                # ContextCompactor, ContextMeter,
-        │   │                # TurnCompletionNotifier
-        │   ├── Automations/ # AutomationSchedule, CronExpression,
-        │   │                # AutomationScheduler
-        │   ├── Editor/      # EditorWorkspace, syntax highlighter, ghost-text
-        │   ├── Preview/     # DevServerManager, PreviewController, StaticFileServer
-        │   ├── Providers/   # OpenAI, Anthropic, Ollama, ProviderRouter
-        │   ├── LSP/         # LSPConnection (JSON-RPC), LanguageServerCatalog,
-        │   │                # LanguageServerSession/Pool, FileChangeWatcher,
-        │   │                # CodeIntelligence, SemanticRename, XcodeBuildServer
-        │   ├── Tools/       # Execution, CodeSearch, GitTools, BuildDiagnostics,
-        │   │                # FileCheckpointStore, SessionCheckpointStore, SymbolRename,
-        │   │                # LiveToolOutput, DiagnosticLinkParser,
-        │   │                # WorkspaceContext, ProjectInstructions
-        │   ├── MCP/         # Client, routing, effect catalog, tool gate,
-        │   │                # catalog promotion, failure classifier
-        │   ├── Integrations/ # Google (Gmail / Calendar)
-        │   ├── RAG/         # CodeIndex (BM25 over the workspace)
-        │   └── Terminal/ · Voice/ · Watch/
+        ├── App/             # Entry, App Intents, window frame persistence
+        ├── State/           # AppState (the EngineHost), AutomationScheduler,
+        │                    # HeadlessAgentTurn
         └── UI/
             ├── Navigation/  # Sidebar, Spotlight
             ├── Theme/ · Components/
@@ -257,17 +259,21 @@ SwiftOpenWork/
 
 Each folder under `Sources/` is a module, defined once, as a target in `Package.swift`. The Xcode
 project links them all as one dynamic library, the package's `SwiftOpenWorkKit` product, so each
-third-party package is linked into the app exactly once. (Not yet: until the engine becomes a
-module, the app links MCP itself, and EventSource and swift-collections — which MCP shares with
-Hugging Face — are linked twice.) A module can only use what a lower module declares `public`, and cannot import anything above it, so the
+third-party package is linked into the app exactly once. A module can only use what a lower module declares `public`, and cannot import anything above it, so the
 compiler enforces the layering.
+
+The engine never sees `AppState`. What it needs from the running app — settings, the current
+provider and model, a toast, revealing the preview — is the `EngineHost` protocol, which
+`AppState` conforms to and registers in `EngineHosting.host` when it is created. Engine code must
+work when there is no host, as in a test that never creates the app's state.
 
 | Module | Depends on | Language mode |
 |---|---|---|
 | `SwiftOpenWorkCore` | — | Swift 6 |
 | `SwiftOpenWorkStorage` | Core | Swift 6 |
 | `SwiftOpenWorkLocalInference` | Core, Storage, MLX, Hugging Face, Transformers | Swift 5 |
-| `SwiftOpenWork` (app) | Core, Storage, LocalInference | Swift 5 |
+| `SwiftOpenWorkEngine` | Core, Storage, LocalInference, Yams, MCP, NIO | Swift 5 |
+| `SwiftOpenWork` (app) | all of the above | Swift 5 |
 
 The app compiles with a Swift 6 toolchain throughout. Modules move to the Swift 6 language mode
 one at a time, once their concurrency errors are fixed rather than suppressed.

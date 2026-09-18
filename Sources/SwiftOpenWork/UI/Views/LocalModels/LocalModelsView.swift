@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import SwiftOpenWorkCore
 import SwiftOpenWorkLocalInference
+import SwiftOpenWorkEngine
 
 /// Presentation Tab for Local Models View matching Osaurus.
 public enum LocalModelsTab: String, CaseIterable, Identifiable {

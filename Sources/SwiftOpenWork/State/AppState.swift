@@ -5,6 +5,7 @@ import Combine
 import SwiftOpenWorkCore
 import SwiftOpenWorkStorage
 import SwiftOpenWorkLocalInference
+import SwiftOpenWorkEngine
 
 public enum NavigationDestination: String, CaseIterable, Identifiable {
     case chat = "chat"
@@ -220,6 +221,7 @@ public final class AppState: ObservableObject {
         // Before anything reads preferences or the Keychain: 1.1 stored them under another name.
         LegacyIdentityMigration.runIfNeeded()
         loadAll()
+        EngineHosting.host = self
         recoverInterruptedAutomationRuns()
         mlxLoadedObserver = NotificationCenter.default.addObserver(
             forName: .mlxLoadedModelsDidChange,
@@ -2100,5 +2102,13 @@ public final class AppState: ObservableObject {
         self.settings = newSettings
         persistence.saveSettings(newSettings)
         showToast("Settings saved")
+    }
+}
+
+extension AppState: EngineHost {
+    /// The preview sits beside chat and tools; anywhere else, opening it would move the user.
+    public func revealPreviewIfWatched() {
+        if navigationDestination != .chat && navigationDestination != .tools { return }
+        revealInspector(tab: .preview, minimumWidth: 560)
     }
 }

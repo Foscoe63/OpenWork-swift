@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import AppKit
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 /// Native WebKit wrapper for live interactive rendering of HTML5, React builds, SVGs, charts, and Mermaid diagrams
 public struct InteractiveLiveWebView: NSViewRepresentable {

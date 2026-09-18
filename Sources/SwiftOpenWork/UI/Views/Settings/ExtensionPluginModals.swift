@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 // MARK: - Add / Install Extension Modal
 public struct AddExtensionModalView: View {

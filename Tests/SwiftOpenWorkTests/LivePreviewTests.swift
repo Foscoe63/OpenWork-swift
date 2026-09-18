@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// Dev servers announce themselves in many shapes. These are copied from real output.
 final class DevServerURLDetectorTests: XCTestCase {

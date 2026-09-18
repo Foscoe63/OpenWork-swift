@@ -1,6 +1,7 @@
 import AppIntents
 import Foundation
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 /// Shortcuts and Siri entry points.
 ///

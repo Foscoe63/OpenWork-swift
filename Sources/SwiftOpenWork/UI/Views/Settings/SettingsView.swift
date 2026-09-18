@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 import SwiftOpenWorkCore
 import SwiftOpenWorkStorage
 import SwiftOpenWorkLocalInference
+import SwiftOpenWorkEngine
 
 public struct SettingsView: View {
     @ObservedObject var appState: AppState

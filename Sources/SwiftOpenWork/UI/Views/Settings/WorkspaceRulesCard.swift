@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 /// Edit the workspace's `SWIFTOPENWORK.md` (or create it). Loaded into the agent system prompt.
 public struct WorkspaceRulesCard: View {

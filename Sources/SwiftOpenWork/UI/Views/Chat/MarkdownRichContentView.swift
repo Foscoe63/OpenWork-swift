@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import SwiftOpenWorkEngine
 
 public enum MarkdownSegment: Identifiable {
     public var id: String {
