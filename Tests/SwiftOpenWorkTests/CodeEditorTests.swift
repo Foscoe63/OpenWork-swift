@@ -1,5 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// The lexer's job is to be right about strings and comments. Wrong colours mislead.
 final class SyntaxHighlighterTests: XCTestCase {
@@ -255,6 +257,7 @@ final class EditorTextTests: XCTestCase {
         XCTAssertEqual(removal.firstChangedLine, 2, "a pure removal points at the line now in its place")
     }
 
+    @MainActor
     func testUnsavedBannerWording() {
         XCTAssertTrue(UnsavedEditorFilesBanner.message(for: ["A.swift"]).contains("A.swift has unsaved edits"))
         XCTAssertTrue(UnsavedEditorFilesBanner.message(for: ["A", "B", "C"]).hasPrefix("3 files"))

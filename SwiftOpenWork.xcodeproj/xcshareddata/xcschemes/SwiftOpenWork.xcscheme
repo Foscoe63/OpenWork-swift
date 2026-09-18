@@ -43,6 +43,17 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "9546773BD701E321CCD0986B"
+               BuildableName = "SwiftOpenWorkEngineTests.xctest"
+               BlueprintName = "SwiftOpenWorkEngineTests"
+               ReferencedContainer = "container:SwiftOpenWork.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "5B46AFA07F0460716CE5B0F5"
                BuildableName = "SwiftOpenWorkTests.xctest"
                BlueprintName = "SwiftOpenWorkTests"

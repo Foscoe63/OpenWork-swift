@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// The Updates page had a disabled button and a disabled switch because nothing could be asked.
 /// These pin the rules of the real check: newer is newer numerically, and nothing unverified is

@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// Rewinding is the safety net the whole "let the agent run" posture rests on, so these tests are
 /// about the two ways it could betray that: putting back the wrong contents, and claiming success

@@ -1587,8 +1587,9 @@ The model library on this machine is `/Volumes/Models/Models` (13 loadable bundl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 SWIFT=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
 
-$SWIFT test                    # 818 tests; tests needing an uninstalled server or model, and the bundle-identity test, skip
-xcodegen generate              # after adding files — the .xcodeproj is tracked
+$SWIFT test                    # 848 tests in two bundles; tests needing an uninstalled server or model, and the bundle-identity test, skip
+$SWIFT build --product SwiftOpenWorkEngineTests && xcrun xctest .build/out/Products/Debug/SwiftOpenWorkEngineTests.xctest   # engine tests only: no MLX, no app
+xcodegen generate              # after adding files — the .xcodeproj is tracked. Modules live in Package.swift; see README › Modules
 xcodebuild -project SwiftOpenWork.xcodeproj -scheme SwiftOpenWork build   # App Intents metadata
 Scripts/check-curated-models.sh   # after editing the curated model list
 ```

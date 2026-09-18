@@ -1,5 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkLocalInference
+@testable import SwiftOpenWorkEngine
 
 #if canImport(MLXLMCommon) && canImport(MLXLLM) && canImport(MLXHuggingFace) && canImport(HuggingFace) && canImport(Tokenizers)
 final class NativeMLXServiceTests: XCTestCase {

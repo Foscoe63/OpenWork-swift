@@ -1,5 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkLocalInference
 
 /// Two settings that were stored but never read. The LM Studio one had a switch that did nothing;
 /// the preload one had no switch at all.

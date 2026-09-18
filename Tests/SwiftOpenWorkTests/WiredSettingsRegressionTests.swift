@@ -1,6 +1,10 @@
 import XCTest
 import AVFoundation
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkStorage
+@testable import SwiftOpenWorkLocalInference
+@testable import SwiftOpenWorkEngine
 
 /// The GPU memory budget slider used to move a number nothing read.
 ///
@@ -270,7 +274,7 @@ final class NewlyWiredSettingsTests: XCTestCase {
     /// inspector renders. A message built and not passed there is one the user never sees.
     func testEveryAgentMessageIsForwardedToTheInspector() throws {
         let runner = try String(
-            contentsOf: Self.sourceRoot.appendingPathComponent("Engine/Agents/AgentRunner.swift"),
+            contentsOf: SourceTree.url("Engine/Agents/AgentRunner.swift"),
             encoding: .utf8
         )
         // Delegation now happens through `agent_spawn`; both halves of the exchange — the task

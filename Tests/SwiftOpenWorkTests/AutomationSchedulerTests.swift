@@ -1,5 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// The scheduler's one decision: is this automation due?
 ///

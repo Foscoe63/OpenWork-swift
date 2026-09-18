@@ -1,5 +1,9 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkStorage
+@testable import SwiftOpenWorkLocalInference
+@testable import SwiftOpenWorkEngine
 
 /// The shipped default must name the engine that ships in the binary.
 ///
@@ -106,13 +110,13 @@ final class BuiltInMLXIsInProcessOnlyTests: XCTestCase {
         )
         let model = ModelInfo(id: "nobody/Not-A-Real-Model", name: "missing", providerId: "omlx-local")
 
-        var streamed = ""
+        let streamed = ConcurrentTextBox()
         do {
             try await NativeMLXService.shared.streamChat(
                 provider: provider, model: model,
                 systemPrompt: "", messages: [ChatMessage(role: .user, content: "hi")],
                 temperature: 0.2, maxTokens: 8, reasoningEffort: .medium, tools: []
-            ) { chunk in streamed += chunk.deltaText }
+            ) { chunk in streamed.append(chunk.deltaText) }
 
             XCTFail("a model the in-process engine cannot load must not be answered by anything else")
         } catch {
@@ -128,12 +132,13 @@ final class BuiltInMLXIsInProcessOnlyTests: XCTestCase {
                 )
             }
         }
-        XCTAssertTrue(streamed.isEmpty, "no other backend should have produced tokens")
+        XCTAssertTrue(streamed.text.isEmpty, "no other backend should have produced tokens")
     }
 
     /// `.omlx` and `.vmlx` are the only kinds routed to the in-process engine, and they are the
     /// only ones that must never be answered over HTTP.
     func testOnlyTheInProcessKindsRouteToTheMLXService() {
+        LocalInferenceWiring.install()
         for kind in ProviderKind.allCases {
             let provider = ModelProvider(name: kind.rawValue, type: .local, kind: kind)
             let isMLXService = ProviderRouter.shared.client(for: provider) is NativeMLXService

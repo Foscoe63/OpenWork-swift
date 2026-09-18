@@ -208,43 +208,97 @@ SwiftOpenWork/
 ├── SwiftOpenWork.xcodeproj
 ├── Resources/                         # App icon & assets
 ├── Tests/
-└── Sources/
-    ├── App/                 # Entry + window frame persistence
-    ├── Models/              # Agent, Workspace, Session, SessionTodo, Settings,
-    │                        # ProviderSelection
-    ├── State/               # AppState
-    ├── Storage/             # Persistence, Keychain, WindowLayoutStore,
-    │                        # SessionCheckpointStore (durable per-turn snapshots)
-    ├── Utils/               # AsyncDeadline (timeouts for uncancellable work),
+└── Sources/                 # one folder per module; see "Modules" below
+    ├── SwiftOpenWorkCore/   # library, Swift 6 language mode
+    │   ├── Models/          # Agent, Workspace, Session, SessionTodo, Settings,
+    │   │                    # ProviderSelection, InlineFileDiff, ToolSchemaCatalog
+    │   ├── Providers/       # LLMProviderClient protocol, stream chunks,
+    │   │                    # InProcessModelEngine, LocalGenerationGate,
+    │   │                    # ReasoningChannel, ImageTransport
+    │   └── Utils/           # AsyncDeadline (timeouts for uncancellable work),
     │                        # AppLog (verbose logging, gated by the setting),
-    │                        # LaunchAtLogin (SMAppService)
-    ├── Engine/
+    │                        # LaunchAtLogin (SMAppService), ShellEnvironment
+    ├── SwiftOpenWorkStorage/ # library, Swift 6: persistence, Keychain, provider
+    │                        # credentials, 1.1 → 1.2 identity migration
+    ├── SwiftOpenWorkLocalInference/ # library: NativeMLXService, LocalMLXEngine,
+    │                        # MLXSessionReuse — the only module that links
+    │                        # MLX / Hugging Face / Transformers
+    ├── SwiftOpenWorkEngine/ # library; reaches the app only through EngineHost,
+    │                        # and MLX only through LocalInferenceRegistry
     │   ├── Agents/          # AgentRunner, SubAgentExecutor, approvals,
     │   │                    # ContextCompactor, ContextMeter,
     │   │                    # TurnCompletionNotifier
-    │   ├── Automations/     # AutomationSchedule, CronExpression,
-    │   │                    # AutomationScheduler
-    │   ├── Editor/          # EditorWorkspace, syntax highlighter, ghost-text
-    │   ├── Preview/         # DevServerManager, PreviewController, StaticFileServer
-    │   ├── Providers/       # OpenAI, Anthropic, Ollama, NativeMLX, LocalMLXEngine
+    │   ├── Automations/     # AutomationSchedule, CronExpression
+    │   ├── Editor/          # EditorWorkspace, ProjectSearchModel, syntax
+    │   │                    # highlighter, ghost-text
+    │   ├── Preview/         # DevServerManager, PreviewController, PreviewLauncher,
+    │   │                    # StaticFileServer
+    │   ├── Providers/       # OpenAI, Anthropic, Ollama, ProviderRouter
     │   ├── LSP/             # LSPConnection (JSON-RPC), LanguageServerCatalog,
     │   │                    # LanguageServerSession/Pool, FileChangeWatcher,
     │   │                    # CodeIntelligence, SemanticRename, XcodeBuildServer
-    │   ├── Tools/           # Execution, schemas, CodeSearch, GitTools,
-    │   │                    # BuildDiagnostics, FileCheckpointStore, SymbolRename,
-    │   │                    # InlineFileDiff, LiveToolOutput, DiagnosticLinkParser,
+    │   ├── Tools/           # Execution, CodeSearch, GitTools, BuildDiagnostics,
+    │   │                    # FileCheckpointStore, SessionCheckpointStore, SymbolRename,
+    │   │                    # LiveToolOutput, DiagnosticLinkParser,
     │   │                    # WorkspaceContext, ProjectInstructions
     │   ├── MCP/             # Client, routing, effect catalog, tool gate,
     │   │                    # catalog promotion, failure classifier
     │   ├── Integrations/    # Google (Gmail / Calendar)
     │   ├── RAG/             # CodeIndex (BM25 over the workspace)
-    │   └── Terminal/ · Voice/ · Watch/
-    └── UI/
-        ├── Navigation/      # Sidebar, Spotlight
-        ├── Theme/ · Components/
-        └── Views/           # Chat, LocalModels, Agents, Automations,
+    │   └── Terminal/ · Voice/ · Watch/ · Vision/ · Updates/
+    └── SwiftOpenWork/       # the app
+        ├── App/             # Entry, App Intents, window frame persistence,
+        │                    # LocalInferenceWiring
+        ├── State/           # AppState (the EngineHost), AutomationScheduler,
+        │                    # HeadlessAgentTurn
+        └── UI/
+            ├── Navigation/  # Sidebar, Spotlight
+            ├── Theme/ · Components/
+            └── Views/       # Chat, LocalModels, Agents, Automations,
                              # Editor, Preview, Settings, Inspector, Dashboard, …
 ```
+
+### Modules
+
+Each folder under `Sources/` is a module, defined once, as a target in `Package.swift`. The Xcode
+project links them all as one dynamic library, the package's `SwiftOpenWorkKit` product, so each
+third-party package is linked into the app exactly once. A module can only use what a lower module declares `public`, and cannot import anything above it, so the
+compiler enforces the layering.
+
+The engine never links MLX either. It reaches the in-process engine through the
+`InProcessModelEngine` and `LocalServerLauncher` protocols, looked up in `LocalInferenceRegistry`;
+the app registers `NativeMLXService` and `LocalMLXEngine` there at launch. With nothing
+registered, the built-in provider fails and says why rather than trying another backend.
+
+The engine never sees `AppState`. What it needs from the running app — settings, the current
+provider and model, a toast, revealing the preview — is the `EngineHost` protocol, which
+`AppState` conforms to and registers in `EngineHosting.host` when it is created. Engine code must
+work when there is no host, as in a test that never creates the app's state.
+
+| Module | Depends on | Language mode |
+|---|---|---|
+| `SwiftOpenWorkCore` | — | Swift 6 |
+| `SwiftOpenWorkStorage` | Core | Swift 6 |
+| `SwiftOpenWorkLocalInference` | Core, Storage, MLX, Hugging Face, Transformers | Swift 6 |
+| `SwiftOpenWorkEngine` | Core, Storage, Yams, MCP, NIO | Swift 6 |
+| `SwiftOpenWork` (app) | all of the above | Swift 6 |
+
+Every module and both test targets compile in the Swift 6 language mode, with concurrency errors
+fixed rather than suppressed. `Package.swift` sets it once for the package; `project.yml` sets
+`SWIFT_VERSION: "6.0"` for the targets Xcode compiles itself (the app and the two test bundles).
+
+JSON from `JSONSerialization` (`[String: Any]`, `Any`) is not Sendable, and the language-server and
+MCP layers pass it in and out of actors. The rules that make that compile:
+
+- A request's parameters and result are `sending`: built fresh by the caller, decoded fresh for
+  it. `LSPConnection` hands a response from its reader thread to the waiting task as JSON bytes,
+  and the task decodes its own copy.
+- Diagnostics a session keeps are stored as JSON bytes (`PublishedDiagnostics`), and each read
+  decodes a new copy.
+- To send a value that is still in use — one element of an array, or arguments read again
+  afterwards — send `JSONCopy.fresh(value)`, a deep copy that shares nothing with the original.
+- An API whose closure type is `@MainActor` also writes `@Sendable`. Swift 6 implies it and puts it
+  in the symbol name; Swift 5 does not, so code built in the other mode cannot link against it.
 
 ### Sidebar destinations
 
@@ -269,7 +323,7 @@ SwiftOpenWork/
 | Use case | Need |
 |---|---|
 | **Run a built `.app`** | macOS 14+ (Sonoma or later); Apple Silicon recommended for MLX |
-| **Build from source** | **Xcode 26.6+ (Swift 6.3)**, macOS 14+ SDK — `mlx-swift` declares `swift-tools-version: 6.3`, so the package graph will not resolve on an older toolchain whatever this project's own 5.9 language mode says |
+| **Build from source** | **Xcode 26.6+ (Swift 6.3)**, macOS 14+ SDK — `mlx-swift` declares `swift-tools-version: 6.3`, so the package graph will not resolve on an older toolchain whatever language mode this project's own modules use |
 | **…and its Metal toolchain** | A separate download as of Xcode 26: `xcodebuild -downloadComponent MetalToolchain`. Without it `mlx-swift` fails at `CompileMetalFile` |
 | **Optional local servers** | Ollama, LM Studio, oMLX / `mlx-lm`, or Osaurus — only if you use those backends |
 | **Optional MacUse MCP** | [MacUse.app](https://macuse.app); Accessibility / Automation for write actions |
@@ -293,7 +347,7 @@ open SwiftOpenWork.xcodeproj
 
 Select the **SwiftOpenWork** scheme → Build / Run.
 
-> The app target compiles `Sources/` directly and links SPM products from `project.yml` (Yams, MCP, NIO, mlx-swift-lm, Hugging Face, Tokenizers).
+> The app target compiles `Sources/SwiftOpenWork` and links the modules through the local package's `SwiftOpenWorkKit` product (see *Modules*).
 
 ### Swift Package Manager
 
@@ -307,8 +361,19 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 swift build
 swift run SwiftOpenWork
-swift test                      # 818 tests
+swift test                      # 846 tests, in two bundles
+
+# Engine tests alone. This builds neither MLX nor the SwiftUI app:
+swift build --product SwiftOpenWorkEngineTests
+xcrun xctest .build/out/Products/Debug/SwiftOpenWorkEngineTests.xctest
 ```
+
+(`swift test` itself always builds every test bundle, and `--skip-build` needs all of them to
+exist, so run the engine bundle with `xctest` directly.)
+
+`SwiftOpenWorkEngineTests` holds the tests that need only Core, Storage and Engine.
+`SwiftOpenWorkTests` holds the ones that need the app, its views, or the MLX engine. Put a new
+test in the engine target when it can live there.
 
 Tests never touch your real data: under XCTest the app stores settings and sessions in a
 temporary folder per test process (set `SWIFTOPENWORK_DATA_DIRECTORY` to point a deliberate run
