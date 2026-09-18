@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import SwiftOpenWorkCore
+import SwiftOpenWorkLocalInference
 
 /// Colours for the editor, derived from the app theme.
 struct EditorPalette {

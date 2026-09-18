@@ -51,7 +51,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// Two, so a chat and an automation (or a lead and its sub-agent) can take turns without
     /// each rebuilding the other's cache. Each entry pins a KV cache in unified memory, which is
     /// why it is not more.
-    static let maxCachedChats = 2
+    public static let maxCachedChats = 2
     /// Generations still running, so quitting can stop them first (see `prepareForExit`).
     private var activeGenerations: [UUID: ActiveGeneration] = [:]
     private let lock = NSLock()
@@ -84,7 +84,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// Cancellation is checked once per token, so this is normally a single token's work. A long
     /// prompt prefill does not check it and can overrun, in which case the call returns anyway,
     /// as it did before this wait existed.
-    static let generationJoinSeconds: TimeInterval = 15
+    public static let generationJoinSeconds: TimeInterval = 15
 
     /// Don't retry a doomed load on every subsequent message.
     private static let failureCooldown: TimeInterval = 300
@@ -110,7 +110,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     private static let assumedLoadBytesPerSecond: Double = 25_000_000
 
     /// How long this turn will wait for `modelId` to load, from the size of its weights.
-    static func loadBudgetSeconds(modelId: String, settings: AppSettings) -> TimeInterval {
+    public static func loadBudgetSeconds(modelId: String, settings: AppSettings) -> TimeInterval {
         guard let dir = LocalMLXEngine.shared.resolveLocalModelDirectory(modelId: modelId, settings: settings)
         else { return minimumLoadSeconds }
         let bytes = Double(weightBytes(in: dir))
@@ -118,7 +118,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     }
 
     /// Total size of the weight shards in a bundle directory.
-    static func weightBytes(in directory: URL) -> Int64 {
+    public static func weightBytes(in directory: URL) -> Int64 {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return 0 }
         var total: Int64 = 0
@@ -146,11 +146,11 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         }
     }
 
-    var cachedChatCount: Int {
+    public var cachedChatCount: Int {
         lock.withLock { cachedChats.count }
     }
 
-    var inFlightLoadCount: Int {
+    public var inFlightLoadCount: Int {
         lock.withLock { inFlightLoads.count }
     }
 
@@ -584,7 +584,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         return finished.wait(timeout: .now() + timeout) == .success
     }
 
-    var activeGenerationCount: Int {
+    public var activeGenerationCount: Int {
         lock.withLock { activeGenerations.count }
     }
 
@@ -683,7 +683,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// silently inert — including `autoAdjustPenaltiesForLocalModels`, which exists precisely for
     /// local models and which the Ollama and OpenAI paths both honour. Repetition penalties are
     /// what stop a local model looping, so the one path most in need of them had none.
-    static func generateParameters(
+    public static func generateParameters(
         maxTokens: Int,
         temperature: Double,
         settings: AppSettings? = nil
@@ -946,7 +946,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// Memory Budget" and ProvidersView repeated it — so the slider moved a number nothing read.
     /// It went unnoticed because the setting's default (0.75) matched a *different* hardcode in
     /// `assessCompatibility`, which made the two readouts agree until someone moved the slider.
-    static func applyMemoryPolicy(budgetRatio: Double) {
+    public static func applyMemoryPolicy(budgetRatio: Double) {
         MLX.Memory.cacheLimit = Int(
             Double(ProcessInfo.processInfo.physicalMemory)
                 * LocalMLXEngine.clampedBudgetRatio(budgetRatio)
@@ -1002,7 +1002,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// Naming the roots is the point: the failure that produced this message was a model sitting
     /// complete on an attached volume that the root list did not include, and nothing on screen
     /// could have told the user that.
-    static func modelNotDownloadedError(modelId: String, settings: AppSettings) -> Error {
+    public static func modelNotDownloadedError(modelId: String, settings: AppSettings) -> Error {
         let roots = LocalMLXEngine.knownMLXSearchRoots(settings: settings)
         let searched = roots.isEmpty
             ? "  (no model folders exist on this Mac yet)"
@@ -1060,7 +1060,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// 1.)`, which names neither the repo nor the reason. In the case that produced it, the repo
     /// simply did not exist — the app's own curated catalog held an id that 401s — and the user had
     /// no way to tell that from a network problem or a half-finished download.
-    static func describeDownloadFailure(_ error: Error, modelId: String) -> Error {
+    public static func describeDownloadFailure(_ error: Error, modelId: String) -> Error {
         let raw = error.localizedDescription
         let nsError = error as NSError
 
@@ -1121,7 +1121,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// `config.json` alone is not proof a model is usable — an interrupted or cancelled download
     /// (including one killed by our own load timeout) can leave config.json and a handful of small
     /// metadata files on disk while most or all of the multi-gigabyte weight shards are missing.
-    static func isModelDirectoryComplete(_ dir: URL) -> Bool {
+    public static func isModelDirectoryComplete(_ dir: URL) -> Bool {
         LocalMLXEngine.isModelDirectoryComplete(dir)
     }
 
@@ -1192,9 +1192,9 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     @discardableResult public func unloadAll() -> Int { 0 }
     @discardableResult public func prepareForExit(timeout: TimeInterval = 3) -> Bool { true }
     public func preload(modelId: String) {}
-    var cachedChatCount: Int { 0 }
-    var inFlightLoadCount: Int { 0 }
-    var activeGenerationCount: Int { 0 }
+    public var cachedChatCount: Int { 0 }
+    public var inFlightLoadCount: Int { 0 }
+    public var activeGenerationCount: Int { 0 }
 
     public static var downloadCacheRoot: URL {
         AppIdentity.homeDataDirectory
@@ -1261,5 +1261,5 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
 #endif
 
 public extension Notification.Name {
-    static let mlxLoadedModelsDidChange = Notification.Name("mlxLoadedModelsDidChange")
+    public static let mlxLoadedModelsDidChange = Notification.Name("mlxLoadedModelsDidChange")
 }

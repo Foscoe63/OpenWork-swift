@@ -57,7 +57,7 @@ public protocol LLMProviderClient: Sendable {
 }
 
 public extension LLMProviderClient {
-    func streamChat(
+    public func streamChat(
         provider: ModelProvider,
         model: ModelInfo,
         systemPrompt: String,

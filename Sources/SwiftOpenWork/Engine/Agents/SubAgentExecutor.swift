@@ -1,6 +1,7 @@
 import Foundation
 import SwiftOpenWorkCore
 import SwiftOpenWorkStorage
+import SwiftOpenWorkLocalInference
 
 /// A sub-agent that actually does the work.
 ///

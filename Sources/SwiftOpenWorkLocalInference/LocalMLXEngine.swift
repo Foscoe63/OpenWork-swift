@@ -328,7 +328,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
     ///
     /// `mountedVolumeURLs` skips volumes the user has hidden from the browser, so `/Volumes` is
     /// also listed directly and walked one level down.
-    static func mountedVolumes() -> [URL] {
+    public static func mountedVolumes() -> [URL] {
         let fm = FileManager.default
         var result: [URL] = []
         func add(_ url: URL) {
@@ -464,7 +464,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
     }
 
     /// Compare model names ignoring org, case, and separator style.
-    static func normalizedModelName(_ id: String) -> String {
+    public static func normalizedModelName(_ id: String) -> String {
         let name = id.split(separator: "/").last.map(String.init) ?? id
         return name.lowercased().filter { $0.isLetter || $0.isNumber }
     }
@@ -826,7 +826,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             process.arguments = ["-l", "-c", cmd]
-            process.environment = ToolExecutionEngine.defaultEnvironment()
+            process.environment = ShellEnvironment.standard()
             
             let pipe = Pipe()
             process.standardOutput = pipe

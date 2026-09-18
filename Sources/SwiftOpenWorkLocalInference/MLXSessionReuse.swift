@@ -58,7 +58,7 @@ public enum MLXSessionReuse {
         }
 
         /// Whether `incoming` can stand in for this consumed message.
-        func matches(_ incoming: Fingerprint) -> Bool {
+        public func matches(_ incoming: Fingerprint) -> Bool {
             if isGeneratedReply {
                 return incoming.role == role
             }

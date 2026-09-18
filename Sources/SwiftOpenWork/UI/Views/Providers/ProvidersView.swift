@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftOpenWorkCore
+import SwiftOpenWorkLocalInference
 
 public enum ProvidersViewTab: String, CaseIterable, Identifiable {
     case localModels = "localModels"

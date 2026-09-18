@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftOpenWorkCore
+import SwiftOpenWorkLocalInference
 
 /// Searchable model picker used on the main chat header (and composer).
 /// Replaces `Menu` so we can put a real search field at the top.

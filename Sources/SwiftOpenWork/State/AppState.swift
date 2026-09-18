@@ -4,6 +4,7 @@ import SwiftUI
 import Combine
 import SwiftOpenWorkCore
 import SwiftOpenWorkStorage
+import SwiftOpenWorkLocalInference
 
 public enum NavigationDestination: String, CaseIterable, Identifiable {
     case chat = "chat"

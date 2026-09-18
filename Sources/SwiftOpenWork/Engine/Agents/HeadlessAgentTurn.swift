@@ -1,6 +1,7 @@
 import Foundation
 import SwiftOpenWorkCore
 import SwiftOpenWorkStorage
+import SwiftOpenWorkLocalInference
 
 /// Run one agent turn with no one watching.
 ///

@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkLocalInference
 
 /// Finding a downloaded MLX model on disk when the requested id does not match its folder path.
 final class LocalModelResolutionTests: XCTestCase {
