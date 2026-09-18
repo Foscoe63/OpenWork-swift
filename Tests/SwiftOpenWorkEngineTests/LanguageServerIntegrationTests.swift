@@ -66,13 +66,19 @@ final class LanguageServerIntegrationTests: XCTestCase {
             var all: [String] = []
         }
         let progress = Lines()
+        let asked = Date()
         let definition = try await CodeIntelligence.definition(
             target("Sources/Toy/Use.swift", 1, "value"), workspaceRoot: root, pool: pool,
             onProgress: { line in progress.lock.withLock { progress.all.append(line) } }
         )
         XCTAssertTrue(definition.hasPrefix("[sourcekit-lsp]"), definition)
+        let waited = Date().timeIntervalSince(asked)
         let reported = progress.lock.withLock { progress.all }
-        XCTAssertFalse(reported.isEmpty, "the first query waits for indexing and says so while it does")
+        // A wait longer than the reporter's 2s announcement delay must have said something. An
+        // index that finishes sooner has nothing to report, which is what made this flaky.
+        if waited > 3 {
+            XCTAssertFalse(reported.isEmpty, "the first query waited \(Int(waited))s for indexing and said nothing")
+        }
         XCTAssertTrue(reported.allSatisfy { $0.contains("sourcekit-lsp") }, "\(reported)")
         XCTAssertTrue(definition.contains("Sources/Toy/Types.swift:3:17: public func value() -> Int { 1 }"), definition)
 
