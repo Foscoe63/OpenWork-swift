@@ -1,4 +1,5 @@
 import Foundation
+import SwiftOpenWorkCore
 import AppKit
 import CoreGraphics
 import SwiftUI
@@ -34,96 +35,96 @@ public enum WindowLayoutStore {
 
     public static var navigationDestination: NavigationDestination {
         get {
-            let raw = UserDefaults.standard.string(forKey: Key.navigation) ?? NavigationDestination.chat.rawValue
+            let raw = AppIdentity.defaults.string(forKey: Key.navigation) ?? NavigationDestination.chat.rawValue
             return NavigationDestination(rawValue: raw) ?? .chat
         }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.navigation) }
+        set { AppIdentity.defaults.set(newValue.rawValue, forKey: Key.navigation) }
     }
 
     public static var isInspectorOpen: Bool {
         get {
-            if UserDefaults.standard.object(forKey: Key.inspectorOpen) == nil { return true }
-            return UserDefaults.standard.bool(forKey: Key.inspectorOpen)
+            if AppIdentity.defaults.object(forKey: Key.inspectorOpen) == nil { return true }
+            return AppIdentity.defaults.bool(forKey: Key.inspectorOpen)
         }
-        set { UserDefaults.standard.set(newValue, forKey: Key.inspectorOpen) }
+        set { AppIdentity.defaults.set(newValue, forKey: Key.inspectorOpen) }
     }
 
     public static var inspectorTab: InspectorTab {
         get {
-            let raw = UserDefaults.standard.string(forKey: Key.inspectorTab) ?? InspectorTab.tools.rawValue
+            let raw = AppIdentity.defaults.string(forKey: Key.inspectorTab) ?? InspectorTab.tools.rawValue
             return InspectorTab(rawValue: raw) ?? .tools
         }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.inspectorTab) }
+        set { AppIdentity.defaults.set(newValue.rawValue, forKey: Key.inspectorTab) }
     }
 
     static let removedSettingsTabs: Set<String> = ["cloud", "connect"]
 
     public static var settingsTab: String {
         get {
-            let stored = UserDefaults.standard.string(forKey: Key.settingsTab) ?? "general"
+            let stored = AppIdentity.defaults.string(forKey: Key.settingsTab) ?? "general"
             // Pages that were removed. Restoring onto one would highlight nothing in the sidebar.
             return removedSettingsTabs.contains(stored) ? "general" : stored
         }
-        set { UserDefaults.standard.set(newValue, forKey: Key.settingsTab) }
+        set { AppIdentity.defaults.set(newValue, forKey: Key.settingsTab) }
     }
 
     public static var sidebarWidth: Double {
         get {
-            let stored = UserDefaults.standard.double(forKey: Key.sidebarWidth)
+            let stored = AppIdentity.defaults.double(forKey: Key.sidebarWidth)
             if stored < minSidebarWidth { return defaultSidebarWidth }
             return min(max(stored, minSidebarWidth), maxSidebarWidth)
         }
         set {
             let clamped = min(max(newValue, minSidebarWidth), maxSidebarWidth)
             guard abs(clamped - sidebarWidth) > 0.5 else { return }
-            UserDefaults.standard.set(clamped, forKey: Key.sidebarWidth)
+            AppIdentity.defaults.set(clamped, forKey: Key.sidebarWidth)
         }
     }
 
     public static var inspectorWidth: Double {
         get {
-            let stored = UserDefaults.standard.double(forKey: Key.inspectorWidth)
+            let stored = AppIdentity.defaults.double(forKey: Key.inspectorWidth)
             if stored < minInspectorWidth { return defaultInspectorWidth }
             return min(max(stored, minInspectorWidth), maxInspectorWidth)
         }
         set {
             let clamped = min(max(newValue, minInspectorWidth), maxInspectorWidth)
             guard abs(clamped - inspectorWidth) > 0.5 else { return }
-            UserDefaults.standard.set(clamped, forKey: Key.inspectorWidth)
+            AppIdentity.defaults.set(clamped, forKey: Key.inspectorWidth)
         }
     }
 
     public static var sessionId: String? {
-        get { UserDefaults.standard.string(forKey: Key.sessionId) }
-        set { UserDefaults.standard.set(newValue, forKey: Key.sessionId) }
+        get { AppIdentity.defaults.string(forKey: Key.sessionId) }
+        set { AppIdentity.defaults.set(newValue, forKey: Key.sessionId) }
     }
 
     public static var workspaceId: String? {
-        get { UserDefaults.standard.string(forKey: Key.workspaceId) }
-        set { UserDefaults.standard.set(newValue, forKey: Key.workspaceId) }
+        get { AppIdentity.defaults.string(forKey: Key.workspaceId) }
+        set { AppIdentity.defaults.set(newValue, forKey: Key.workspaceId) }
     }
 
     // MARK: - Explicit window frame (more reliable than SwiftUI + setFrameAutosaveName races)
 
     public static var savedWindowFrame: NSRect? {
         get {
-            guard let raw = UserDefaults.standard.string(forKey: Key.windowFrame), !raw.isEmpty else { return nil }
+            guard let raw = AppIdentity.defaults.string(forKey: Key.windowFrame), !raw.isEmpty else { return nil }
             let rect = NSRectFromString(raw)
             guard rect.width >= minWindowWidth * 0.5, rect.height >= minWindowHeight * 0.5 else { return nil }
             return rect
         }
         set {
             if let newValue {
-                UserDefaults.standard.set(NSStringFromRect(newValue), forKey: Key.windowFrame)
+                AppIdentity.defaults.set(NSStringFromRect(newValue), forKey: Key.windowFrame)
             } else {
-                UserDefaults.standard.removeObject(forKey: Key.windowFrame)
+                AppIdentity.defaults.removeObject(forKey: Key.windowFrame)
             }
         }
     }
 
     public static var windowIsZoomed: Bool {
-        get { UserDefaults.standard.bool(forKey: Key.windowIsZoomed) }
-        set { UserDefaults.standard.set(newValue, forKey: Key.windowIsZoomed) }
+        get { AppIdentity.defaults.bool(forKey: Key.windowIsZoomed) }
+        set { AppIdentity.defaults.set(newValue, forKey: Key.windowIsZoomed) }
     }
 
     @MainActor
@@ -133,7 +134,7 @@ public enum WindowLayoutStore {
         let frame = window.isZoomed ? window.frame // still useful as screen placement
             : window.frame
         savedWindowFrame = frame
-        UserDefaults.standard.synchronize()
+        AppIdentity.defaults.synchronize()
     }
 
     @MainActor

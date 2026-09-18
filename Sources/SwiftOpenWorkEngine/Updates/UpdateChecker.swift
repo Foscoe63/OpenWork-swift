@@ -113,7 +113,7 @@ public enum UpdateChecker {
     @MainActor
     public static func runAutomaticCheckIfDue(appState: any EngineHost) {
         guard Bundle.main.bundleIdentifier != nil, !AppIdentity.isHostedByTests else { return }
-        let defaults = UserDefaults.standard
+        let defaults = AppIdentity.defaults
         let last = defaults.object(forKey: lastCheckKey) as? Date
         guard automaticCheckIsDue(enabled: appState.settings.autoCheckForUpdates, lastCheck: last) else { return }
         Task { @MainActor in

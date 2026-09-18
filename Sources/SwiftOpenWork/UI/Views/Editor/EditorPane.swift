@@ -13,7 +13,7 @@ public struct EditorPane: View {
     /// Hide the tab strip when the host shows its own file list (Artifacts & Files).
     var showsTabs: Bool
 
-    @AppStorage("editorWrapLines") private var wrapLines = false
+    @AppStorage("editorWrapLines", store: AppIdentity.defaults) private var wrapLines = false
     @State private var cursor = (line: 1, column: 1)
     @State private var showingGoToLine = false
     @State private var goToLineText = ""

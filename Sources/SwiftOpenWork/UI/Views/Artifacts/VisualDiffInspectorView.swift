@@ -29,7 +29,7 @@ public struct VisualDiffInspectorView: View {
     let onReject: () -> Void
     let rejectTitle: String
 
-    @AppStorage("diffViewMode") private var viewModeRaw: String = DiffViewMode.split.rawValue
+    @AppStorage("diffViewMode", store: AppIdentity.defaults) private var viewModeRaw: String = DiffViewMode.split.rawValue
 
     private var viewMode: DiffViewMode {
         DiffViewMode(rawValue: viewModeRaw) ?? .split

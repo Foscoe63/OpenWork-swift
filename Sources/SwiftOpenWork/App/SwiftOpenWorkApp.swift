@@ -35,7 +35,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         for window in NSApp.windows where window.styleMask.contains(.titled) && window.styleMask.contains(.resizable) {
             WindowLayoutStore.saveWindowFrame(from: window)
         }
-        UserDefaults.standard.synchronize()
+        AppIdentity.defaults.synchronize()
         // A reply still generating on the GPU would crash the process as `exit` tears MLX down.
         NativeMLXService.shared.prepareForExit()
         // Language servers would exit on their own when stdin closes; this makes it certain.

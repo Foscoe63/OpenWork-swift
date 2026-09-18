@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// The app's name and identifiers, in one place.
 ///
@@ -16,7 +17,27 @@ public enum AppIdentity {
 
     /// Unified log subsystem: `log stream --predicate 'subsystem == "io.github.foscoe63.SwiftOpenWork"'`.
     public static let logSubsystem = bundleIdentifier
-    public static let keychainService = bundleIdentifier
+    /// The Keychain service for the app's secrets. Under XCTest it is a separate one, so a test run
+    /// can neither read nor overwrite the user's API keys; see `isHostedByTests`.
+    public static var keychainService: String {
+        isHostedByTests ? bundleIdentifier + ".tests" : bundleIdentifier
+    }
+
+    /// Preferences. `UserDefaults.standard` normally; under XCTest a separate suite, emptied when
+    /// the test process starts, so tests never rewrite the user's window layout, recents or
+    /// update-check dates. Use this rather than `.standard` everywhere.
+    public static var defaults: UserDefaults {
+        guard isHostedByTests else { return .standard }
+        let suite = bundleIdentifier + ".tests"
+        testDefaultsCleared.withLock { cleared in
+            guard !cleared else { return }
+            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+            cleared = true
+        }
+        return UserDefaults(suiteName: suite) ?? .standard
+    }
+
+    private static let testDefaultsCleared = OSAllocatedUnfairLock(initialState: false)
 
     /// True when this process is an XCTest host. The unit tests run inside the app, against the
     /// real Application Support data unless something checks this; see `AutomationScheduler`.
@@ -48,7 +69,11 @@ public enum AppIdentity {
     // MARK: - 1.1 names, for migration only
 
     public static let legacyBundleIdentifier = "ai.openwork.OpenWorkSwift"
-    public static let legacyKeychainService = "ai.openwork.OpenWorkSwift"
+    /// Under XCTest, a test-only name like `keychainService`, so tests cannot delete the user's
+    /// 1.1-era secrets through the migration fallback.
+    public static var legacyKeychainService: String {
+        isHostedByTests ? "ai.openwork.OpenWorkSwift.tests" : "ai.openwork.OpenWorkSwift"
+    }
     public static let legacyApplicationSupportFolderName = "OpenWorkSwift"
     public static var legacyHomeDataDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".openwork", isDirectory: true)

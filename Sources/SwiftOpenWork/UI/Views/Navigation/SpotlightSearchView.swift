@@ -124,13 +124,13 @@ enum PaletteRecents {
     static let limit = 8
 
     static var ids: [String] {
-        (UserDefaults.standard.array(forKey: key) as? [String]) ?? []
+        (AppIdentity.defaults.array(forKey: key) as? [String]) ?? []
     }
 
     static func record(_ id: String) {
         var list = ids.filter { $0 != id }
         list.insert(id, at: 0)
-        UserDefaults.standard.set(Array(list.prefix(limit)), forKey: key)
+        AppIdentity.defaults.set(Array(list.prefix(limit)), forKey: key)
     }
 }
 

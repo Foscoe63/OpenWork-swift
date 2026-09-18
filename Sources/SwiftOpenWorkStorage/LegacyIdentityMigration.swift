@@ -64,7 +64,7 @@ public enum LegacyIdentityMigration {
 
     /// Safe to call from anywhere and more than once; the work happens once per install.
     public static func runIfNeeded(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppIdentity.defaults,
         fileManager: FileManager = .default
     ) {
         let shouldRun: Bool = didRun.withLock { didRun in

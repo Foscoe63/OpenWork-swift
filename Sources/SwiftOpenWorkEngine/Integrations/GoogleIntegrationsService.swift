@@ -1,4 +1,5 @@
 import Foundation
+import SwiftOpenWorkCore
 import AppKit
 import CryptoKit
 import Network
@@ -90,26 +91,26 @@ public final class GoogleIntegrationsService: @unchecked Sendable {
 
     public var tokenExpiresAt: Date? {
         get {
-            let value = UserDefaults.standard.double(forKey: DefaultsKey.tokenExpiresAt)
+            let value = AppIdentity.defaults.double(forKey: DefaultsKey.tokenExpiresAt)
             return value > 0 ? Date(timeIntervalSince1970: value) : nil
         }
         set {
             if let newValue {
-                UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: DefaultsKey.tokenExpiresAt)
+                AppIdentity.defaults.set(newValue.timeIntervalSince1970, forKey: DefaultsKey.tokenExpiresAt)
             } else {
-                UserDefaults.standard.removeObject(forKey: DefaultsKey.tokenExpiresAt)
+                AppIdentity.defaults.removeObject(forKey: DefaultsKey.tokenExpiresAt)
             }
         }
     }
 
     public var signedInEmail: String {
-        get { UserDefaults.standard.string(forKey: DefaultsKey.accountEmail) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.accountEmail) }
+        get { AppIdentity.defaults.string(forKey: DefaultsKey.accountEmail) ?? "" }
+        set { AppIdentity.defaults.set(newValue, forKey: DefaultsKey.accountEmail) }
     }
 
     public var signedInName: String {
-        get { UserDefaults.standard.string(forKey: DefaultsKey.accountName) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.accountName) }
+        get { AppIdentity.defaults.string(forKey: DefaultsKey.accountName) ?? "" }
+        set { AppIdentity.defaults.set(newValue, forKey: DefaultsKey.accountName) }
     }
 
     public var isConfigured: Bool {
