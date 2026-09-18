@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// Fail-closed effect classification, per-tool gating, and failure classification.
 final class MCPSafetyTests: XCTestCase {

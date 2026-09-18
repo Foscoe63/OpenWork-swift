@@ -1,6 +1,7 @@
 import XCTest
 import AppKit
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// The agent could write a view and never look at it. These cover the transport that carries
 /// what it sees back to the model.

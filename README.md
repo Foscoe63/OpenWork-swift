@@ -208,43 +208,60 @@ SwiftOpenWork/
 ├── SwiftOpenWork.xcodeproj
 ├── Resources/                         # App icon & assets
 ├── Tests/
-└── Sources/
-    ├── App/                 # Entry + window frame persistence
-    ├── Models/              # Agent, Workspace, Session, SessionTodo, Settings,
-    │                        # ProviderSelection
-    ├── State/               # AppState
-    ├── Storage/             # Persistence, Keychain, WindowLayoutStore,
-    │                        # SessionCheckpointStore (durable per-turn snapshots)
-    ├── Utils/               # AsyncDeadline (timeouts for uncancellable work),
+└── Sources/                 # one folder per module; see "Modules" below
+    ├── SwiftOpenWorkCore/   # library, Swift 6 language mode
+    │   ├── Models/          # Agent, Workspace, Session, SessionTodo, Settings,
+    │   │                    # ProviderSelection, InlineFileDiff
+    │   └── Utils/           # AsyncDeadline (timeouts for uncancellable work),
     │                        # AppLog (verbose logging, gated by the setting),
     │                        # LaunchAtLogin (SMAppService)
-    ├── Engine/
-    │   ├── Agents/          # AgentRunner, SubAgentExecutor, approvals,
-    │   │                    # ContextCompactor, ContextMeter,
-    │   │                    # TurnCompletionNotifier
-    │   ├── Automations/     # AutomationSchedule, CronExpression,
-    │   │                    # AutomationScheduler
-    │   ├── Editor/          # EditorWorkspace, syntax highlighter, ghost-text
-    │   ├── Preview/         # DevServerManager, PreviewController, StaticFileServer
-    │   ├── Providers/       # OpenAI, Anthropic, Ollama, NativeMLX, LocalMLXEngine
-    │   ├── LSP/             # LSPConnection (JSON-RPC), LanguageServerCatalog,
-    │   │                    # LanguageServerSession/Pool, FileChangeWatcher,
-    │   │                    # CodeIntelligence, SemanticRename, XcodeBuildServer
-    │   ├── Tools/           # Execution, schemas, CodeSearch, GitTools,
-    │   │                    # BuildDiagnostics, FileCheckpointStore, SymbolRename,
-    │   │                    # InlineFileDiff, LiveToolOutput, DiagnosticLinkParser,
-    │   │                    # WorkspaceContext, ProjectInstructions
-    │   ├── MCP/             # Client, routing, effect catalog, tool gate,
-    │   │                    # catalog promotion, failure classifier
-    │   ├── Integrations/    # Google (Gmail / Calendar)
-    │   ├── RAG/             # CodeIndex (BM25 over the workspace)
-    │   └── Terminal/ · Voice/ · Watch/
-    └── UI/
-        ├── Navigation/      # Sidebar, Spotlight
-        ├── Theme/ · Components/
-        └── Views/           # Chat, LocalModels, Agents, Automations,
+    └── SwiftOpenWork/       # the app
+        ├── App/             # Entry + window frame persistence
+        ├── State/           # AppState
+        ├── Storage/         # Persistence, Keychain, WindowLayoutStore,
+        │                    # SessionCheckpointStore (durable per-turn snapshots)
+        ├── Engine/
+        │   ├── Agents/      # AgentRunner, SubAgentExecutor, approvals,
+        │   │                # ContextCompactor, ContextMeter,
+        │   │                # TurnCompletionNotifier
+        │   ├── Automations/ # AutomationSchedule, CronExpression,
+        │   │                # AutomationScheduler
+        │   ├── Editor/      # EditorWorkspace, syntax highlighter, ghost-text
+        │   ├── Preview/     # DevServerManager, PreviewController, StaticFileServer
+        │   ├── Providers/   # OpenAI, Anthropic, Ollama, NativeMLX, LocalMLXEngine
+        │   ├── LSP/         # LSPConnection (JSON-RPC), LanguageServerCatalog,
+        │   │                # LanguageServerSession/Pool, FileChangeWatcher,
+        │   │                # CodeIntelligence, SemanticRename, XcodeBuildServer
+        │   ├── Tools/       # Execution, schemas, CodeSearch, GitTools,
+        │   │                # BuildDiagnostics, FileCheckpointStore, SymbolRename,
+        │   │                # LiveToolOutput, DiagnosticLinkParser,
+        │   │                # WorkspaceContext, ProjectInstructions
+        │   ├── MCP/         # Client, routing, effect catalog, tool gate,
+        │   │                # catalog promotion, failure classifier
+        │   ├── Integrations/ # Google (Gmail / Calendar)
+        │   ├── RAG/         # CodeIndex (BM25 over the workspace)
+        │   └── Terminal/ · Voice/ · Watch/
+        └── UI/
+            ├── Navigation/  # Sidebar, Spotlight
+            ├── Theme/ · Components/
+            └── Views/       # Chat, LocalModels, Agents, Automations,
                              # Editor, Preview, Settings, Inspector, Dashboard, …
 ```
+
+### Modules
+
+Each folder under `Sources/` is a module, defined once, as a target in `Package.swift`. The Xcode
+project links them all as one dynamic library, the package's `SwiftOpenWorkKit` product, so each
+third-party package is linked into the app exactly once. A module can only use what a lower module
+declares `public`, and cannot import anything above it, so the compiler enforces the layering.
+
+| Module | Depends on | Language mode |
+|---|---|---|
+| `SwiftOpenWorkCore` | — | Swift 6 |
+| `SwiftOpenWork` (app) | Core | Swift 5 |
+
+The app compiles with a Swift 6 toolchain throughout. Modules move to the Swift 6 language mode
+one at a time, once their concurrency errors are fixed rather than suppressed.
 
 ### Sidebar destinations
 
@@ -269,7 +286,7 @@ SwiftOpenWork/
 | Use case | Need |
 |---|---|
 | **Run a built `.app`** | macOS 14+ (Sonoma or later); Apple Silicon recommended for MLX |
-| **Build from source** | **Xcode 26.6+ (Swift 6.3)**, macOS 14+ SDK — `mlx-swift` declares `swift-tools-version: 6.3`, so the package graph will not resolve on an older toolchain whatever this project's own 5.9 language mode says |
+| **Build from source** | **Xcode 26.6+ (Swift 6.3)**, macOS 14+ SDK — `mlx-swift` declares `swift-tools-version: 6.3`, so the package graph will not resolve on an older toolchain whatever language mode this project's own modules use |
 | **…and its Metal toolchain** | A separate download as of Xcode 26: `xcodebuild -downloadComponent MetalToolchain`. Without it `mlx-swift` fails at `CompileMetalFile` |
 | **Optional local servers** | Ollama, LM Studio, oMLX / `mlx-lm`, or Osaurus — only if you use those backends |
 | **Optional MacUse MCP** | [MacUse.app](https://macuse.app); Accessibility / Automation for write actions |
@@ -293,7 +310,7 @@ open SwiftOpenWork.xcodeproj
 
 Select the **SwiftOpenWork** scheme → Build / Run.
 
-> The app target compiles `Sources/` directly and links SPM products from `project.yml` (Yams, MCP, NIO, mlx-swift-lm, Hugging Face, Tokenizers).
+> The app target compiles `Sources/SwiftOpenWork` and links the modules through the local package's `SwiftOpenWorkKit` product (see *Modules*).
 
 ### Swift Package Manager
 

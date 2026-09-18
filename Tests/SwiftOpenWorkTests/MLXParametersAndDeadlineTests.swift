@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// Sampling parameters for the in-process MLX path, and a deadline that works on uncancellable work.
 final class MLXParametersTests: XCTestCase {

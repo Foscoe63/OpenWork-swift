@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// A long command that shows nothing until it exits is indistinguishable from a hung one, so these
 /// cover the two halves of the fix: the tail reaching the running card, and the same bytes reaching

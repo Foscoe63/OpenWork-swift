@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// `NoDeadSettingsTests` enforced "nothing ships with a control until something reads it" — for
 /// fields of `AppSettings`. Two sweeps ran under that rule and both missed the largest dead
@@ -58,7 +59,7 @@ final class NoDeadFeaturesTests: XCTestCase {
     /// scheduler never learned about would pass the test above on the strength of the UI alone.
     func testTheSchedulerHandlesEveryNonManualTrigger() throws {
         let scheduler = try String(
-            contentsOf: Self.sourceRoot.appendingPathComponent("Engine/Automations/AutomationScheduler.swift"),
+            contentsOf: SourceTree.url("Engine/Automations/AutomationScheduler.swift"),
             encoding: .utf8
         )
         for trigger in AutomationTriggerType.allCases where trigger != .manual {
@@ -77,15 +78,15 @@ final class NoDeadFeaturesTests: XCTestCase {
     /// "unknown tool" — the model then retries it, because nothing said the attempt was hopeless.
     func testEverySeededToolIsImplemented() throws {
         let engine = try String(
-            contentsOf: Self.sourceRoot.appendingPathComponent("Engine/Tools/ToolExecutionEngine.swift"),
+            contentsOf: SourceTree.url("Engine/Tools/ToolExecutionEngine.swift"),
             encoding: .utf8
         )
         let declarations = try String(
-            contentsOf: Self.sourceRoot.appendingPathComponent("Storage/PersistenceManager.swift"),
+            contentsOf: SourceTree.url("Storage/PersistenceManager.swift"),
             encoding: .utf8
         )
         let catalog = try String(
-            contentsOf: Self.sourceRoot.appendingPathComponent("Engine/Tools/ToolSchemaCatalog.swift"),
+            contentsOf: SourceTree.url("Engine/Tools/ToolSchemaCatalog.swift"),
             encoding: .utf8
         )
 
@@ -101,7 +102,7 @@ final class NoDeadFeaturesTests: XCTestCase {
     /// installs that already saved them — `defaultTools` seeds a list, it does not prune one.
     func testRetiredToolsAreNotSeededAndAreStrippedOnLoad() throws {
         let declarations = try String(
-            contentsOf: Self.sourceRoot.appendingPathComponent("Storage/PersistenceManager.swift"),
+            contentsOf: SourceTree.url("Storage/PersistenceManager.swift"),
             encoding: .utf8
         )
         XCTAssertFalse(
@@ -122,7 +123,7 @@ final class NoDeadFeaturesTests: XCTestCase {
     /// and structured components" when it returns recognised text.
     func testVisionToolDescriptionsMatchWhatTheyDo() throws {
         let declarations = try String(
-            contentsOf: Self.sourceRoot.appendingPathComponent("Storage/PersistenceManager.swift"),
+            contentsOf: SourceTree.url("Storage/PersistenceManager.swift"),
             encoding: .utf8
         )
         let describeLine = try XCTUnwrap(
@@ -153,7 +154,7 @@ final class NoDeadFeaturesTests: XCTestCase {
     /// what was on screen.
     func testTheDiffViewModePickerDrivesWhatIsRendered() throws {
         let view = try String(
-            contentsOf: Self.sourceRoot.appendingPathComponent("UI/Views/Artifacts/VisualDiffInspectorView.swift"),
+            contentsOf: SourceTree.url("UI/Views/Artifacts/VisualDiffInspectorView.swift"),
             encoding: .utf8
         )
         let readsOutsideTheBinding = view.contains("viewMode == .split")
@@ -172,7 +173,7 @@ final class NoDeadFeaturesTests: XCTestCase {
     /// written the file, `onAccept` was `{}`, and "Apply & Save Changes" did nothing at all.
     func testTheTurnReviewSheetDoesNotOfferAnApplyButtonThatSavesNothing() throws {
         let view = try String(
-            contentsOf: Self.sourceRoot.appendingPathComponent("UI/Views/Chat/TurnChangeReviewView.swift"),
+            contentsOf: SourceTree.url("UI/Views/Chat/TurnChangeReviewView.swift"),
             encoding: .utf8
         )
         XCTAssertFalse(

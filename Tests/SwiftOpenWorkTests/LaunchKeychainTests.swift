@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// Launch must not read the Keychain: a read can block behind an authorisation prompt on the main
 /// thread before the window exists, and the app hung with no window.
@@ -22,9 +23,7 @@ final class LaunchKeychainTests: XCTestCase {
     }
 
     func testLoadingProvidersReadsNoKeychainItems() throws {
-        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/Storage/PersistenceManager.swift"), encoding: .utf8)
+        let source = try String(contentsOf: SourceTree.url("Sources/Storage/PersistenceManager.swift"), encoding: .utf8)
         let start = try XCTUnwrap(source.range(of: "public func loadProviders()"))
         let end = try XCTUnwrap(source.range(of: "public func saveProviders(", range: start.upperBound..<source.endIndex))
         XCTAssertFalse(source[start.lowerBound..<end.lowerBound].contains("getSecret"),

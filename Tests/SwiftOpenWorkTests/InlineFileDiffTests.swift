@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// A diff shown in a card is read instead of the file, so being wrong here is worse than showing
 /// nothing: it invites someone to approve a change they did not actually see.

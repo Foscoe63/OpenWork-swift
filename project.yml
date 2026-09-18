@@ -21,6 +21,14 @@ settings:
     OTHER_METAL_FLAGS: "$(inherited) -Wno-c++17-extensions"
 
 packages:
+  # The modules are defined once, in Package.swift, and reach the app as its SwiftOpenWorkKit
+  # product: one dynamic library holding every module. Each third-party package (MLX, NIO, MCP,
+  # Hugging Face, …) is linked into it exactly once. Two dynamic libraries depending on the same
+  # package would each carry a copy — EventSource is shared by MCP and Hugging Face.
+  SwiftOpenWorkKit:
+    path: .
+  # Packages the app's own sources still import, until the code that uses them moves into a
+  # module. While any are listed here, a package shared with the Kit is linked twice.
   Yams:
     url: https://github.com/jpsim/Yams.git
     from: 5.0.0
@@ -46,13 +54,17 @@ targets:
     platform: macOS
     deploymentTarget: "14.0"
     sources:
-      - path: Sources
+      - path: Sources/SwiftOpenWork
       - path: Resources
     scheme:
       testTargets:
         - SwiftOpenWorkTests
       gatherCoverageData: true
     dependencies:
+      # A dynamic library, so it is copied into Contents/Frameworks and signed with the app.
+      - package: SwiftOpenWorkKit
+        product: SwiftOpenWorkKit
+        embed: true
       - package: Yams
         product: Yams
       - package: swift-sdk
@@ -139,6 +151,8 @@ targets:
     dependencies:
       # Sets TEST_HOST/BUNDLE_LOADER so `@testable import SwiftOpenWork` resolves.
       - target: SwiftOpenWork
+      - package: SwiftOpenWorkKit
+        product: SwiftOpenWorkKit
     settings:
       base:
         # The base settings force PRODUCT_NAME to "SwiftOpenWork" for every target; the
@@ -151,3 +165,4 @@ targets:
         # but the app ships as SwiftOpenWork.app. Point at the real product.
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SwiftOpenWork.app/Contents/MacOS/SwiftOpenWork"
         BUNDLE_LOADER: "$(TEST_HOST)"
+

@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// Finding the weights that are already on this Mac, and failing usefully when they are not.
 ///
