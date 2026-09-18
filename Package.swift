@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.1
 import PackageDescription
 
 let package = Package(
@@ -45,6 +45,8 @@ let package = Package(
             cxxSettings: [
                 .unsafeFlags(["-std=c++17", "-Wno-c++17-extensions"])
             ],
+            // Swift 6 toolchain, Swift 5 language mode: the app has only ever compiled with
+            // minimal concurrency checking. Modules move to `.v6` one at a time.
             swiftSettings: [
                 .unsafeFlags(["-strict-concurrency=minimal"])
             ]
@@ -55,5 +57,6 @@ let package = Package(
                 .target(name: "SwiftOpenWork")
             ]
         )
-    ]
+    ],
+    swiftLanguageModes: [.v5]
 )
