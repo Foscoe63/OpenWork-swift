@@ -159,20 +159,23 @@ public enum SemanticRename {
         // The declaration line usually names the symbol once; `func value(value: Int)` names it
         // twice, and the keyword says which is the declaration.
         let position = try SymbolPosition.resolve(in: text, line: line, symbol: name, column: nil, preferDeclaration: true)
-        let positionParams: [String: Any] = [
-            "textDocument": ["uri": uri],
-            "position": ["line": position.line, "character": position.character],
-        ]
+        // A fresh dictionary per request: each one is handed to the session actor.
+        func positionParams() -> [String: Any] {
+            [
+                "textDocument": ["uri": uri],
+                "position": ["line": position.line, "character": position.character],
+            ]
+        }
         let place = "\(CodeIntelligence.relativePath(path, workspaceRoot: workspaceRoot)):\(line)"
 
         do {
-            let prepared = try await session.send("textDocument/prepareRename", positionParams)
+            let prepared = try await session.send("textDocument/prepareRename", positionParams())
             if prepared == nil { throw Failure.notRenameable(place) }
         } catch LanguageServerError.unsupported {
             // Optional in the protocol; the declaration check below still applies.
         }
 
-        var params = positionParams
+        var params = positionParams()
         params["newName"] = newName
         let response = try await session.send("textDocument/rename", params, timeout: indexTimeout)
         let edits = mergeByResolvedPath(parseWorkspaceEdit(response))

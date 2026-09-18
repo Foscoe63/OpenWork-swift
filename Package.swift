@@ -88,11 +88,8 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
             ],
             path: "Sources/SwiftOpenWorkEngine",
-            // The one module still in the Swift 5 language mode. Its remaining Swift 6 errors are in
-            // the language-server layer, which passes untyped JSON (`[String: Any]`) across actors;
-            // see README › Modules.
             swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=minimal"])
+                .swiftLanguageMode(.v6)
             ]
         ),
         .executableTarget(

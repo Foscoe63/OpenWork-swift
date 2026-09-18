@@ -199,15 +199,7 @@ public final class PreviewController: NSObject, ObservableObject, Identifiable {
         try? await Task.sleep(nanoseconds: 150_000_000)
         guard isLoading || webView.isLoading else { return }
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { @MainActor in
-                await withCheckedContinuation { continuation in
-                    if !self.isLoading && !self.webView.isLoading {
-                        continuation.resume()
-                    } else {
-                        self.navigationWaiters.append(continuation)
-                    }
-                }
-            }
+            group.addTask { await self.navigationFinished() }
             group.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             }
@@ -215,6 +207,17 @@ public final class PreviewController: NSObject, ObservableObject, Identifiable {
             group.cancelAll()
         }
         resumeNavigationWaiters()
+    }
+
+    /// Returns when the current navigation ends, at once if none is running.
+    private func navigationFinished() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if !isLoading && !webView.isLoading {
+                continuation.resume()
+            } else {
+                navigationWaiters.append(continuation)
+            }
+        }
     }
 
     private func resumeNavigationWaiters() {

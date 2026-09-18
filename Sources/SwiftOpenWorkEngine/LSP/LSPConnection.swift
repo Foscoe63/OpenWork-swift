@@ -69,7 +69,9 @@ public final class LSPConnection: @unchecked Sendable {
     private let writeLock = NSLock()
     private var buffer = Data()
     private var nextId = 0
-    private var pending: [Int: CheckedContinuation<Any?, Error>] = [:]
+    /// Waiting requests. A response crosses from the reader thread as its JSON bytes, which are
+    /// Sendable, and is decoded again by the task that asked; the parsed `Any` never changes threads.
+    private var pending: [Int: CheckedContinuation<Data?, Error>] = [:]
     /// Requests whose task was cancelled before the continuation was registered.
     private var cancelledBeforeSend = Set<Int>()
     private var failure: Failure?
@@ -195,13 +197,13 @@ public final class LSPConnection: @unchecked Sendable {
 
     // MARK: - Messages
 
-    public func request(_ method: String, _ params: Any?, timeout: TimeInterval) async throws -> Any? {
+    public func request(_ method: String, _ params: sending Any?, timeout: TimeInterval) async throws -> sending Any? {
         let id: Int = lock.withLock {
             nextId += 1
             return nextId
         }
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Any?, Error>) in
+        let body: Data? = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, Error>) in
                 let refusal: Failure? = lock.withLock {
                     if let failure { return failure }
                     if cancelledBeforeSend.remove(id) != nil { return .cancelled }
@@ -228,6 +230,8 @@ public final class LSPConnection: @unchecked Sendable {
                 notify("$/cancelRequest", ["id": id])
             }
         }
+        guard let body else { return nil }
+        return try JSONSerialization.jsonObject(with: body, options: .fragmentsAllowed)
     }
 
     public func notify(_ method: String, _ params: Any?) {
@@ -236,7 +240,7 @@ public final class LSPConnection: @unchecked Sendable {
 
     /// Resume a pending request exactly once. False if something else already resolved it.
     @discardableResult
-    private func resolve(_ id: Int, with result: Result<Any?, Error>) -> Bool {
+    private func resolve(_ id: Int, with result: Result<Data?, Error>) -> Bool {
         guard let continuation = lock.withLock({ pending.removeValue(forKey: id) }) else { return false }
         continuation.resume(with: result)
         return true
@@ -325,7 +329,16 @@ public final class LSPConnection: @unchecked Sendable {
             resolve(id, with: .failure(Failure.server(code: code, message: text)))
         } else {
             let result = message["result"]
-            resolve(id, with: .success(result is NSNull ? nil : result))
+            guard let result, !(result is NSNull) else {
+                resolve(id, with: .success(nil))
+                return
+            }
+            // It was parsed from JSON a moment ago, so it serialises again.
+            do {
+                resolve(id, with: .success(try JSONSerialization.data(withJSONObject: result, options: .fragmentsAllowed)))
+            } catch {
+                resolve(id, with: .failure(Failure.server(code: 0, message: "\(name) sent a result that could not be read: \(error.localizedDescription)")))
+            }
         }
     }
 
@@ -340,7 +353,7 @@ public final class LSPConnection: @unchecked Sendable {
 
     /// Mark the connection dead and fail every waiting request. The first reason wins.
     private func fail(_ reason: Failure) {
-        let (waiting, final): ([CheckedContinuation<Any?, Error>], Failure) = lock.withLock {
+        let (waiting, final): ([CheckedContinuation<Data?, Error>], Failure) = lock.withLock {
             if let failure { return ([], failure) }
             let tail = String(decoding: stderrTail, as: UTF8.self)
                 .split(separator: "\n").suffix(6).joined(separator: "\n")

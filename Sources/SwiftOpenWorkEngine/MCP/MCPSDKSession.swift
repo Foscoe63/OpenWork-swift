@@ -87,7 +87,7 @@ public actor MCPSDKSession {
         return tools.map(Self.mapTool)
     }
 
-    public func callTool(name: String, arguments: [String: Any]) async throws -> String {
+    public func callTool(name: String, arguments: sending [String: Any]) async throws -> String {
         guard let client else {
             throw MCPSDKError.notConnected
         }

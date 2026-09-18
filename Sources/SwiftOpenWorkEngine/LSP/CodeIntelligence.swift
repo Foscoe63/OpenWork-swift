@@ -1,4 +1,5 @@
 import Foundation
+import SwiftOpenWorkCore
 
 /// Compiler-grade answers about code, for agents: where a symbol is defined, who uses it, what
 /// type it has, what is wrong with a file.
@@ -175,7 +176,7 @@ public enum CodeIntelligence {
         var entries: [Location] = []
         for item in items {
             let method = direction == .incoming ? "callHierarchy/incomingCalls" : "callHierarchy/outgoingCalls"
-            let calls = (try await context.session.send(method, ["item": item], timeout: indexTimeout) as? [[String: Any]]) ?? []
+            let calls = (try await context.session.send(method, ["item": JSONCopy.fresh(item)], timeout: indexTimeout) as? [[String: Any]]) ?? []
             for call in calls {
                 guard let other = (call[direction == .incoming ? "from" : "to"]) as? [String: Any],
                       let name = other["name"] as? String else { continue }
@@ -215,7 +216,7 @@ public enum CodeIntelligence {
 
     // MARK: - Shared preparation
 
-    public struct Context {
+    public struct Context: Sendable {
         public let session: LanguageServerSession
         public let uri: String
         public let position: SymbolPosition.Resolved

@@ -280,17 +280,24 @@ work when there is no host, as in a test that never creates the app's state.
 | `SwiftOpenWorkCore` | — | Swift 6 |
 | `SwiftOpenWorkStorage` | Core | Swift 6 |
 | `SwiftOpenWorkLocalInference` | Core, Storage, MLX, Hugging Face, Transformers | Swift 6 |
-| `SwiftOpenWorkEngine` | Core, Storage, Yams, MCP, NIO | Swift 5 |
+| `SwiftOpenWorkEngine` | Core, Storage, Yams, MCP, NIO | Swift 6 |
 | `SwiftOpenWork` (app) | all of the above | Swift 6 |
 
-Every module but the engine compiles in the Swift 6 language mode, with its concurrency errors
-fixed rather than suppressed. The engine is in the Swift 5 mode with minimal checking. Built with
-`-strict-concurrency=complete` it reports 22 problems in 7 files, nearly all in the
-language-server layer: `LSPConnection` and `LanguageServerSession` pass untyped JSON
-(`[String: Any]`, `Any?`) in and out of actors, and `diagnostics(for:)` returns JSON the session
-also keeps. Moving the engine to Swift 6 means giving that layer Sendable types (or `sending`
-parameters and results where the value is freshly decoded), plus one construct in
-`PreviewController` the region checker cannot analyse yet.
+Every module compiles in the Swift 6 language mode, with its concurrency errors fixed rather than
+suppressed. The test targets stay in the Swift 5 mode.
+
+JSON from `JSONSerialization` (`[String: Any]`, `Any`) is not Sendable, and the language-server and
+MCP layers pass it in and out of actors. The rules that make that compile:
+
+- A request's parameters and result are `sending`: built fresh by the caller, decoded fresh for
+  it. `LSPConnection` hands a response from its reader thread to the waiting task as JSON bytes,
+  and the task decodes its own copy.
+- Diagnostics a session keeps are stored as JSON bytes (`PublishedDiagnostics`), and each read
+  decodes a new copy.
+- To send a value that is still in use — one element of an array, or arguments read again
+  afterwards — send `JSONCopy.fresh(value)`, a deep copy that shares nothing with the original.
+- An API whose closure type is `@MainActor` also writes `@Sendable`. Swift 6 implies it and puts it
+  in the symbol name; Swift 5 does not. Without it, the Swift 5 test bundles cannot link.
 
 ### Sidebar destinations
 

@@ -35,10 +35,22 @@ public enum LanguageServerError: Error, LocalizedError, Equatable {
 /// State the server pushes at us, written from the connection's reader thread.
 public final class SessionEvents: @unchecked Sendable {
 
-    public struct PublishedDiagnostics {
+    /// A server's latest diagnostics for one file. Kept as JSON bytes so the value is Sendable:
+    /// the reader thread stores it and a session reads it, and each read decodes its own copy.
+    public struct PublishedDiagnostics: Sendable {
         public var version: Int?
-        public var items: [[String: Any]]
         public var received: Date
+        private var itemsJSON: Data
+
+        public init(version: Int?, items: [[String: Any]], received: Date) {
+            self.version = version
+            self.received = received
+            self.itemsJSON = (try? JSONSerialization.data(withJSONObject: items)) ?? Data("[]".utf8)
+        }
+
+        public var items: [[String: Any]] {
+            (try? JSONSerialization.jsonObject(with: itemsJSON)) as? [[String: Any]] ?? []
+        }
     }
 
     public enum FileChange: Int {
@@ -266,7 +278,7 @@ public actor LanguageServerSession {
     // MARK: - Requests
 
     /// Send a request, translating transport failures into errors that name the server.
-    public func send(_ method: String, _ params: Any?, timeout: TimeInterval = 60) async throws -> Any? {
+    public func send(_ method: String, _ params: sending Any?, timeout: TimeInterval = 60) async throws -> sending Any? {
         lastUsed = Date()
         inFlight += 1
         defer {
@@ -429,7 +441,7 @@ public actor LanguageServerSession {
 
     /// Diagnostics for one file: pulled where the server supports it, otherwise the next set it
     /// publishes for the version we sent.
-    public func diagnostics(for path: String, timeout: TimeInterval) async throws -> [[String: Any]] {
+    public func diagnostics(for path: String, timeout: TimeInterval) async throws -> sending [[String: Any]] {
         let (uri, _) = try open(path)
         if !pullDiagnosticsUnsupported {
             do {
