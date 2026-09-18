@@ -49,6 +49,7 @@ public struct SwiftOpenWorkApp: App {
     @StateObject private var appState = AppState.shared
 
     public init() {
+        LocalInferenceWiring.install()
         LegacyIdentityMigration.runIfNeeded()
     }
 

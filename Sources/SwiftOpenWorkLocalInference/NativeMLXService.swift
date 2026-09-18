@@ -1263,3 +1263,5 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
 public extension Notification.Name {
     public static let mlxLoadedModelsDidChange = Notification.Name("mlxLoadedModelsDidChange")
 }
+
+extension NativeMLXService: InProcessModelEngine {}

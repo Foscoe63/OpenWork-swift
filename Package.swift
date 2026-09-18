@@ -75,13 +75,13 @@ let package = Package(
             ]
         ),
         // The agent loop, tools, providers, MCP, language servers, preview and automations. It
-        // reaches the running app only through `EngineHost`.
+        // reaches the running app only through `EngineHost`, and the MLX engine only through
+        // `LocalInferenceRegistry` — it does not link MLX.
         .target(
             name: "SwiftOpenWorkEngine",
             dependencies: [
                 "SwiftOpenWorkCore",
                 "SwiftOpenWorkStorage",
-                "SwiftOpenWorkLocalInference",
                 .product(name: "Yams", package: "yams"),
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "NIOCore", package: "swift-nio"),
@@ -114,6 +114,17 @@ let package = Package(
                 .unsafeFlags(["-strict-concurrency=minimal"])
             ]
         ),
+        // Tests that need only the engine and what it depends on. No app, no MLX: building these
+        // compiles neither the SwiftUI layer nor the MLX packages.
+        .testTarget(
+            name: "SwiftOpenWorkEngineTests",
+            dependencies: [
+                "SwiftOpenWorkCore",
+                "SwiftOpenWorkStorage",
+                "SwiftOpenWorkEngine",
+            ]
+        ),
+        // Tests of the app, its state and views, and the MLX engine.
         .testTarget(
             name: "SwiftOpenWorkTests",
             dependencies: [

@@ -38,6 +38,7 @@ targets:
       - path: Resources
     scheme:
       testTargets:
+        - SwiftOpenWorkEngineTests
         - SwiftOpenWorkTests
       gatherCoverageData: true
     dependencies:
@@ -122,3 +123,24 @@ targets:
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SwiftOpenWork.app/Contents/MacOS/SwiftOpenWork"
         BUNDLE_LOADER: "$(TEST_HOST)"
 
+  # Under SwiftPM these build without the app or MLX. Under Xcode they are hosted by the app like
+  # SwiftOpenWorkTests: an unhosted bundle is loaded by Xcode's own runner, which macOS may not let
+  # read a repository on an external volume, and the app build produces the Kit anyway.
+  SwiftOpenWorkEngineTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Tests/SwiftOpenWorkEngineTests
+    dependencies:
+      - target: SwiftOpenWork
+      - package: SwiftOpenWorkKit
+        product: SwiftOpenWorkKit
+    settings:
+      base:
+        PRODUCT_NAME: "SwiftOpenWorkEngineTests"
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.foscoe63.SwiftOpenWorkEngineTests
+        GENERATE_INFOPLIST_FILE: YES
+        OTHER_SWIFT_FLAGS: "$(inherited) -strict-concurrency=minimal"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SwiftOpenWork.app/Contents/MacOS/SwiftOpenWork"
+        BUNDLE_LOADER: "$(TEST_HOST)"

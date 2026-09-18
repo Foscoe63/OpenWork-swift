@@ -1,7 +1,6 @@
 import Foundation
 import Combine
 import SwiftOpenWorkCore
-import SwiftOpenWorkLocalInference
 
 /// Ghost-text suggestions in the editor: what to ask, when to ask, which model answers, and how
 /// to turn a chat model's reply into text that can be inserted at the cursor.
@@ -326,7 +325,7 @@ public final class InlineSuggestionEngine: ObservableObject {
             let buffer = Buffer()
             do {
                 if provider.kind == .omlx || provider.kind == .vmlx {
-                    try await NativeMLXService.shared.oneShot(
+                    try await LocalInferenceRegistry.engine.oneShot(
                         modelId: model.id,
                         system: InlineSuggestionRequest.systemPrompt,
                         user: request.userPrompt,
@@ -362,11 +361,7 @@ public final class InlineSuggestionEngine: ObservableObject {
             } catch {
                 if Task.isCancelled { return nil }
                 await MainActor.run {
-                    if let oneShot = error as? NativeMLXService.OneShotError {
-                        self.status = .unavailable(oneShot.localizedDescription)
-                    } else {
-                        self.status = .unavailable(error.localizedDescription)
-                    }
+                    self.status = .unavailable(error.localizedDescription)
                 }
                 return nil
             }
