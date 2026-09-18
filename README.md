@@ -33,13 +33,6 @@
 
 **SwiftOpenWork** is a standalone native macOS app for autonomous agents, multi-agent collaboration, scheduled automations, and local/cloud LLM orchestration.
 
-> **Formerly "OpenWork".** Releases up to 1.1 shipped as `OpenWork.app` with the bundle ID
-> `ai.openwork.OpenWorkSwift`. From 1.2 the app is `SwiftOpenWork.app`
-> (`io.github.foscoe63.SwiftOpenWork`), to avoid confusion with an unrelated app named OpenWork.
-> Settings, sessions, window layout and API keys carry over on first launch. macOS ties
-> Accessibility and Screen Recording to the bundle ID, so grant those once more, remove the old
-> `OpenWork` entries from System Settings › Privacy & Security, and re-add any Shortcuts.
-
 It ships as a real `.app` — UI and tooling sit on system frameworks (`Accelerate`, `Vision`, `PDFKit`, `WebKit`, `Speech`, Keychain). End users who install a build do **not** need Xcode or Swift installed.
 
 Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK sessions, namespaced first-class MCP tools, native function calling on local MLX and cloud providers, and a multi-turn tool loop that keeps going until the job is done (with sensible guards for local models).
