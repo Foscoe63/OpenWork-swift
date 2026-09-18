@@ -1338,7 +1338,7 @@ public final class AppState: ObservableObject {
         isScanningMLX = true
         Task.detached(priority: .userInitiated) { [weak self] in
             let models = LocalMLXEngine.shared.scanInstalledModels(settings: PersistenceManager.shared.loadSettings())
-            await MainActor.run {
+            await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.localMLXModels = models
                 self.isScanningMLX = false

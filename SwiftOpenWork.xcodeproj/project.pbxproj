@@ -1096,11 +1096,11 @@
 				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
-				OTHER_SWIFT_FLAGS = "$(inherited) -strict-concurrency=minimal";
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.foscoe63.SwiftOpenWork;
 				PRODUCT_MODULE_NAME = SwiftOpenWork;
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -1250,11 +1250,11 @@
 				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
-				OTHER_SWIFT_FLAGS = "$(inherited) -strict-concurrency=minimal";
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.foscoe63.SwiftOpenWork;
 				PRODUCT_MODULE_NAME = SwiftOpenWork;
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};

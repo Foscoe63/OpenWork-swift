@@ -1646,11 +1646,11 @@ public final class MCPStdioBuffer: @unchecked Sendable {
 
 // MARK: - Request Throttling Extension
 public extension MCPClientManager {
-    public func shouldAcceptRequest() -> Bool {
+    func shouldAcceptRequest() -> Bool {
         pendingRequests < maxConcurrentRequests
     }
     
-    public func acquireRequestSlot() -> Bool {
+    func acquireRequestSlot() -> Bool {
         if pendingRequests < maxConcurrentRequests {
             pendingRequests += 1
             return true
@@ -1658,7 +1658,7 @@ public extension MCPClientManager {
         return false
     }
     
-    public func releaseRequestSlot() {
+    func releaseRequestSlot() {
         if pendingRequests > 0 {
             pendingRequests -= 1
         }

@@ -35,10 +35,12 @@ public struct PaletteItem: Identifiable {
     public var kind: Kind
     public var shortcut: String?
     public var keywords: [String]
-    public var action: @MainActor () -> Void
+    // `@Sendable` is implied by `@MainActor` in the Swift 6 mode but not in Swift 5, and the two
+    // spell the type differently in the symbol name. Written out, so the Swift 5 test bundles link.
+    public var action: @MainActor @Sendable () -> Void
 
     public init(id: String, title: String, subtitle: String = "", icon: String? = nil, kind: Kind,
-                shortcut: String? = nil, keywords: [String] = [], action: @escaping @MainActor () -> Void) {
+                shortcut: String? = nil, keywords: [String] = [], action: @escaping @MainActor @Sendable () -> Void) {
         self.id = id
         self.title = title
         self.subtitle = subtitle
@@ -139,7 +141,7 @@ enum PaletteCommands {
 
     static func all(appState: AppState, close: @escaping () -> Void) -> [PaletteItem] {
         func command(_ id: String, _ title: String, _ subtitle: String = "", icon: String, shortcut: String? = nil,
-                     keywords: [String] = [], _ action: @escaping @MainActor () -> Void) -> PaletteItem {
+                     keywords: [String] = [], _ action: @escaping @MainActor @Sendable () -> Void) -> PaletteItem {
             PaletteItem(id: "cmd." + id, title: title, subtitle: subtitle, icon: icon, kind: .command,
                         shortcut: shortcut, keywords: keywords) {
                 close()
