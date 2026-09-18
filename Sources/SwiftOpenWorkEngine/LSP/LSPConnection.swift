@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftOpenWorkCore
 
 /// JSON-RPC over stdio to one language server process.
@@ -372,19 +373,18 @@ public final class LSPConnection: @unchecked Sendable {
 
 /// Every running server, so the app can stop them all when it quits.
 public enum LiveConnections {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var connections: [ObjectIdentifier: LSPConnection] = [:]
+    private static let connections = OSAllocatedUnfairLock(initialState: [ObjectIdentifier: LSPConnection]())
 
     public static func add(_ connection: LSPConnection) {
-        lock.withLock { connections[ObjectIdentifier(connection)] = connection }
+        connections.withLock { $0[ObjectIdentifier(connection)] = connection }
     }
 
     public static func remove(_ connection: LSPConnection) {
-        lock.withLock { _ = connections.removeValue(forKey: ObjectIdentifier(connection)) }
+        connections.withLock { _ = $0.removeValue(forKey: ObjectIdentifier(connection)) }
     }
 
     public static func terminateAll() {
-        let all = lock.withLock { Array(connections.values) }
+        let all = connections.withLock { Array($0.values) }
         all.forEach { $0.terminateNow() }
     }
 }

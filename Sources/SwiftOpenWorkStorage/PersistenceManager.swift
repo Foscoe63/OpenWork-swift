@@ -1,7 +1,7 @@
 import Foundation
 import SwiftOpenWorkCore
 
-public final class PersistenceManager: @unchecked Sendable {
+public final class PersistenceManager: Sendable {
     public static let shared = PersistenceManager()
 
     private let storage = StorageService.shared

@@ -2,7 +2,7 @@ import Foundation
 import SwiftOpenWorkCore
 import SwiftOpenWorkStorage
 
-public final class OpenAIService: LLMProviderClient, @unchecked Sendable {
+public final class OpenAIService: LLMProviderClient, Sendable {
     public static let shared = OpenAIService()
 
     private let session: URLSession

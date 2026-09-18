@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// A language server the app knows how to run, and which files it answers for.
 public struct LanguageServerSpec: Sendable, Equatable {
@@ -418,14 +419,11 @@ public struct ExecutableLocator: Sendable {
 
 /// Runs `rustup which …` once per executable and remembers the answer.
 public enum RustupProbe {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var results: [String: Bool] = [:]
+    private static let results = OSAllocatedUnfairLock(initialState: [String: Bool]())
 
     public static func cachedResult(executable: String, arguments: [String]) -> Bool {
         let key = ([executable] + arguments).joined(separator: " ")
-        lock.lock()
-        if let known = results[key] { lock.unlock(); return known }
-        lock.unlock()
+        if let known = results.withLock({ $0[key] }) { return known }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -442,7 +440,8 @@ public enum RustupProbe {
                 ok = process.terminationStatus == 0
             }
         }
-        lock.lock(); results[key] = ok; lock.unlock()
-        return ok
+        let answer = ok
+        results.withLock { $0[key] = answer }
+        return answer
     }
 }

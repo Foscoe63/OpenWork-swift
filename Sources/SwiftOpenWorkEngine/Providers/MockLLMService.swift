@@ -4,7 +4,7 @@ import SwiftOpenWorkCore
 /// Offline helper used only for explicit automation dry-runs / tests.
 /// Chat routing must never silently fall through here — that produced identical
 /// "offline fallback mode" replies for every prompt and model.
-public final class MockLLMService: LLMProviderClient, @unchecked Sendable {
+public final class MockLLMService: LLMProviderClient, Sendable {
     public static let shared = MockLLMService()
 
     public func testConnection(provider: ModelProvider) async throws -> Bool {

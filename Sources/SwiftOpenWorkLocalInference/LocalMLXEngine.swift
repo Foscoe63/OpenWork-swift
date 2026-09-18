@@ -762,6 +762,9 @@ public final class LocalMLXEngine: @unchecked Sendable {
     }
 
     // MARK: - Daemon Server Lifecycle
+    /// Guards the two below. Two turns can reach `ensureServerRunning` at once; without the lock
+    /// both passed the `isServerStarting` check and each launched a server.
+    private let serverLock = NSLock()
     private var serverProcess: Process? = nil
     private var isServerStarting: Bool = false
 
@@ -792,7 +795,12 @@ public final class LocalMLXEngine: @unchecked Sendable {
             }
         }
 
-        guard !isServerStarting else {
+        let claimed: Bool = serverLock.withLock {
+            if isServerStarting { return false }
+            isServerStarting = true
+            return true
+        }
+        guard claimed else {
             // Wait up to 15 seconds for start in progress
             for _ in 0..<30 {
                 try? await Task.sleep(nanoseconds: 500_000_000)
@@ -805,8 +813,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
             return (false, "MLX server startup in progress...", 8000)
         }
 
-        isServerStarting = true
-        defer { isServerStarting = false }
+        defer { serverLock.withLock { isServerStarting = false } }
 
         // Find binary or Python mlx-lm module
         let targetModel = modelId ?? "mlx-community/Qwen3.6-35B-A3B-8bit"
@@ -836,7 +843,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
 
             do {
                 try process.run()
-                self.serverProcess = process
+                serverLock.withLock { self.serverProcess = process }
 
                 // Poll until server port opens (up to 20 seconds per attempt to allow model loading into memory)
                 for _ in 0..<40 {

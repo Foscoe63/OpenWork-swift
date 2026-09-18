@@ -1,7 +1,7 @@
 import Foundation
 import SwiftOpenWorkCore
 
-public final class ProviderRouter: @unchecked Sendable {
+public final class ProviderRouter: Sendable {
     public static let shared = ProviderRouter()
 
     private init() {}

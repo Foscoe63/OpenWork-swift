@@ -3,7 +3,7 @@ import Security
 import SwiftOpenWorkCore
 
 /// Thread-safe macOS Keychain Manager providing hardware-backed encryption for API keys and sensitive credentials
-public final class KeychainManager: @unchecked Sendable {
+public final class KeychainManager: Sendable {
     public static let shared = KeychainManager()
 
     private let serviceName = AppIdentity.keychainService

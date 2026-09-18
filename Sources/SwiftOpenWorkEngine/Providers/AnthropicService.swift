@@ -2,7 +2,7 @@ import Foundation
 import SwiftOpenWorkCore
 import SwiftOpenWorkStorage
 
-public final class AnthropicService: LLMProviderClient, @unchecked Sendable {
+public final class AnthropicService: LLMProviderClient, Sendable {
     public static let shared = AnthropicService()
 
     private let session: URLSession

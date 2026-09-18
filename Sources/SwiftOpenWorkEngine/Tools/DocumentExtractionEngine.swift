@@ -4,7 +4,7 @@ import Vision
 import AppKit
 
 /// High-performance document extractor for macOS leveraging PDFKit and Vision.framework OCR
-public final class DocumentExtractionEngine: @unchecked Sendable {
+public final class DocumentExtractionEngine: Sendable {
     public static let shared = DocumentExtractionEngine()
 
     private init() {}

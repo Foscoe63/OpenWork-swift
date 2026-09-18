@@ -68,7 +68,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     }
 
     /// What a finished (or stopped) generation produced.
-    private struct ConsumedGeneration: @unchecked Sendable {
+    private struct ConsumedGeneration: Sendable {
         var tokens = 0
         var text = ""
         var toolCalls: [ToolCallInfo] = []

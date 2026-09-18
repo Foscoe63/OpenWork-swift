@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftOpenWorkCore
 
 /// Cloud API keys, read from the Keychain the first time something needs one — never at launch.
@@ -14,9 +15,14 @@ import SwiftOpenWorkCore
 /// and cached — misses too, so a denied prompt is not shown again on every request.
 public enum ProviderCredentials {
 
-    /// Reads a stored secret. Replaceable for tests.
-    public nonisolated(unsafe) static var reader: @Sendable (String) -> String? = { key in
+    private static let readerStore = OSAllocatedUnfairLock<@Sendable (String) -> String?>(initialState: { key in
         KeychainManager.shared.getSecret(forKey: key)
+    })
+
+    /// Reads a stored secret. Replaceable for tests.
+    public static var reader: @Sendable (String) -> String? {
+        get { readerStore.withLock { $0 } }
+        set { readerStore.withLock { $0 = newValue } }
     }
 
     private static let cache = Cache()
