@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 public struct AutomationsView: View {
     @ObservedObject var appState: AppState

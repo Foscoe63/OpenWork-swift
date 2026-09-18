@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftOpenWorkStorage
 
 public struct TerminalLogLine: Identifiable, Hashable {
     public let id = UUID()

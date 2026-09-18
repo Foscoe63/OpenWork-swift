@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 public struct ToolsView: View {
     @ObservedObject var appState: AppState

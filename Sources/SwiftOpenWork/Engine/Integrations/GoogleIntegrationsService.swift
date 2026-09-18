@@ -3,6 +3,7 @@ import AppKit
 import CryptoKit
 import Network
 import Security
+import SwiftOpenWorkStorage
 
 /// Keychain-backed Google credentials + OAuth (browser sign-in) + Gmail / Calendar REST helpers.
 public final class GoogleIntegrationsService: @unchecked Sendable {

@@ -3,6 +3,7 @@ import AppKit
 import SwiftUI
 import Combine
 import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 public enum NavigationDestination: String, CaseIterable, Identifiable {
     case chat = "chat"

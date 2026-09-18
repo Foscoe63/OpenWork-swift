@@ -1,5 +1,6 @@
 import Foundation
 import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 @MainActor
 public final class AgentStreamAccumulator {

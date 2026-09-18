@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkStorage
 
 /// Keeping file and shell tools inside the workspace.
 final class SandboxContainmentTests: XCTestCase {

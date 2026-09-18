@@ -8,6 +8,7 @@ import MLXHuggingFace
 import HuggingFace
 import Tokenizers
 import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 /// In-process Apple Silicon Metal MLX Inference Engine.
 /// Matches GrizzyClaw and Osaurus architecture using `mlx-swift-lm` directly on GPU.

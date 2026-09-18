@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftOpenWorkStorage
 
 public struct ToolsPanelView: View {
     @ObservedObject var appState: AppState
