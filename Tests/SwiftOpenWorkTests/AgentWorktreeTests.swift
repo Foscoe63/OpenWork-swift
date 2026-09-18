@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// Git was read-only here on purpose. A worktree is what makes committing safe rather than a
 /// weakening of that rule: history added on a branch of its own cannot rewrite anything the user

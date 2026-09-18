@@ -2,6 +2,7 @@ import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
 @testable import SwiftOpenWorkStorage
+@testable import SwiftOpenWorkEngine
 
 /// The app was renamed from OpenWork to SwiftOpenWork, with a new bundle ID. These pin the
 /// migration that carries 1.1 data across, and sweep the sources so the old name cannot creep

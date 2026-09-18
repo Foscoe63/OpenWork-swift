@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// Reasoning reaching the user as the answer was recorded as unsolved, with the wrong fix
 /// guessed at: "consume MLX's own reasoning channel where the model exposes one". There is no

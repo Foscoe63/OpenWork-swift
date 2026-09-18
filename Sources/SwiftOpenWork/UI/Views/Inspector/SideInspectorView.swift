@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftOpenWorkEngine
 
 public struct SideInspectorView: View {
     @ObservedObject var appState: AppState

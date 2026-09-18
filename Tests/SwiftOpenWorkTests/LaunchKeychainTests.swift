@@ -2,6 +2,7 @@ import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
 @testable import SwiftOpenWorkStorage
+@testable import SwiftOpenWorkEngine
 
 /// Launch must not read the Keychain: a read can block behind an authorisation prompt on the main
 /// thread before the window exists, and the app hung with no window.

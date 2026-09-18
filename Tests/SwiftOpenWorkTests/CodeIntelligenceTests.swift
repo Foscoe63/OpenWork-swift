@@ -2,6 +2,7 @@ import CoreServices
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// The parts of the language-server layer that need no server: which server and root a file gets,
 /// where a symbol on a line is, and how answers are parsed and printed.

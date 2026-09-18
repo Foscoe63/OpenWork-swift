@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftOpenWorkEngine
 
 /// Review everything this session changed on disk, across every turn.
 ///

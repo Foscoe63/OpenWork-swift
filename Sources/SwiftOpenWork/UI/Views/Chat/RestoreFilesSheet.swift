@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 /// Confirmation for rewinding the working tree to a point in the transcript.
 ///

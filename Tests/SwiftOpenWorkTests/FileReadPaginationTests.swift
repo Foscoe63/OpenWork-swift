@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// End-to-end coverage for the read path, through `ToolExecutionEngine.execute` rather than the
 /// private helper — the bug being fixed was that a caller could not reach past line ~250 of a

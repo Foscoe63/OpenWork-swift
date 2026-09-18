@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 /// The code editor: open files as tabs, with the state a person needs to trust what they are
 /// editing — unsaved marks, a banner when the agent changed the file underneath them, and a

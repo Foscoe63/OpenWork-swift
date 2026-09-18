@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftOpenWorkEngine
 
 /// Review what the agent changed this turn, file by file, and take any of it back.
 ///

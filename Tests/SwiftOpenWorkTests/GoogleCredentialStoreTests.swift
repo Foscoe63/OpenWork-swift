@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// Opening Settings → Google must not read the Keychain on the main thread, nor rewrite what it read.
 final class GoogleCredentialStoreTests: XCTestCase {

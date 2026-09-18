@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// The parser behind every next-run time the Automations screen shows, and behind every automation
 /// that fires. One function for both, so the screen cannot promise a run the app will not make.

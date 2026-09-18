@@ -2,6 +2,7 @@ import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
 @testable import SwiftOpenWorkLocalInference
+@testable import SwiftOpenWorkEngine
 
 /// When a cached MLX session may be continued, and when continuing it would be wrong.
 final class MLXSessionReuseTests: XCTestCase {

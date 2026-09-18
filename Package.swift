@@ -19,6 +19,7 @@ let package = Package(
                 "SwiftOpenWorkCore",
                 "SwiftOpenWorkStorage",
                 "SwiftOpenWorkLocalInference",
+                "SwiftOpenWorkEngine",
             ]
         ),
     ],
@@ -73,8 +74,10 @@ let package = Package(
                 .unsafeFlags(["-strict-concurrency=minimal"])
             ]
         ),
-        .executableTarget(
-            name: "SwiftOpenWork",
+        // The agent loop, tools, providers, MCP, language servers, preview and automations. It
+        // reaches the running app only through `EngineHost`.
+        .target(
+            name: "SwiftOpenWorkEngine",
             dependencies: [
                 "SwiftOpenWorkCore",
                 "SwiftOpenWorkStorage",
@@ -84,6 +87,19 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
+            ],
+            path: "Sources/SwiftOpenWorkEngine",
+            swiftSettings: [
+                .unsafeFlags(["-strict-concurrency=minimal"])
+            ]
+        ),
+        .executableTarget(
+            name: "SwiftOpenWork",
+            dependencies: [
+                "SwiftOpenWorkCore",
+                "SwiftOpenWorkStorage",
+                "SwiftOpenWorkLocalInference",
+                "SwiftOpenWorkEngine",
             ],
             path: "Sources/SwiftOpenWork",
             resources: [
@@ -104,6 +120,7 @@ let package = Package(
                 "SwiftOpenWorkCore",
                 "SwiftOpenWorkStorage",
                 "SwiftOpenWorkLocalInference",
+                "SwiftOpenWorkEngine",
                 .target(name: "SwiftOpenWork")
             ]
         )

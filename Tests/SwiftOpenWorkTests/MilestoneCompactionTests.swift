@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// Compaction that fires on token count alone can land mid-task, throwing away files just read and
 /// not yet used. A milestone — a green test run, a clean tree — is the opposite: the work behind it

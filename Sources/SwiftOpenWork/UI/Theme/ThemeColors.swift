@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 public struct ThemeColors {
     public static func bg(for theme: AppTheme) -> Color {

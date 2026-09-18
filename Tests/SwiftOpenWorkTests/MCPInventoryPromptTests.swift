@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkEngine
 
 /// Inventory mode strips every tool from the turn. A false positive silently disables the agent,
 /// which is what it did to a scheduled brief every morning.

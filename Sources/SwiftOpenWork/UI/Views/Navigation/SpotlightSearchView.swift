@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 // MARK: - Model
 

@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import UniformTypeIdentifiers
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 /// Build `MessageAttachment`s from Finder drops, pasteboard files, and pasted images.
 public enum ComposerAttachmentIntake {

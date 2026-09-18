@@ -1,6 +1,7 @@
 import XCTest
 @testable import SwiftOpenWork
 @testable import SwiftOpenWorkCore
+@testable import SwiftOpenWorkEngine
 
 /// Real servers against throwaway projects. What these prove only exists with a real index: that
 /// references mean *that* declaration, that a long-lived server keeps up with edits it did not
