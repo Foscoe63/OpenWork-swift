@@ -113,7 +113,8 @@ final class AsyncDeadlineTests: XCTestCase {
         let started = Date()
         let task = Task<Int, Error> {
             // Blocks a thread outright — no cancellation checks anywhere, like MLX's loader.
-            Thread.sleep(forTimeInterval: 6)
+            // `usleep` rather than `Thread.sleep`, which Swift 6 forbids in async code.
+            usleep(6_000_000)
             return 1
         }
         do {

@@ -1,5 +1,4 @@
 import Foundation
-import SwiftOpenWorkCore
 
 /// Radiant-quality JSON Schema catalog for first-party tools.
 /// Local models (MLX / Ollama) need real `parameters` objects — empty `"{}"` breaks tool calling.

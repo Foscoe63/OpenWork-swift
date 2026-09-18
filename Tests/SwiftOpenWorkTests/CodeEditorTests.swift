@@ -257,6 +257,7 @@ final class EditorTextTests: XCTestCase {
         XCTAssertEqual(removal.firstChangedLine, 2, "a pure removal points at the line now in its place")
     }
 
+    @MainActor
     func testUnsavedBannerWording() {
         XCTAssertTrue(UnsavedEditorFilesBanner.message(for: ["A.swift"]).contains("A.swift has unsaved edits"))
         XCTAssertTrue(UnsavedEditorFilesBanner.message(for: ["A", "B", "C"]).hasPrefix("3 files"))

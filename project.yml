@@ -8,7 +8,8 @@ options:
 
 settings:
   base:
-    SWIFT_VERSION: "5.9"
+    # Every target overrides this too; the modules take theirs from Package.swift.
+    SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     PRODUCT_NAME: "SwiftOpenWork"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
@@ -119,7 +120,7 @@ targets:
         PRODUCT_NAME: "SwiftOpenWorkTests"
         PRODUCT_BUNDLE_IDENTIFIER: io.github.foscoe63.SwiftOpenWorkTests
         GENERATE_INFOPLIST_FILE: YES
-        OTHER_SWIFT_FLAGS: "$(inherited) -strict-concurrency=minimal"
+        SWIFT_VERSION: "6.0"
         # XcodeGen derives TEST_HOST from the target name and lands on SwiftOpenWork.app,
         # but the app ships as SwiftOpenWork.app. Point at the real product.
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SwiftOpenWork.app/Contents/MacOS/SwiftOpenWork"
@@ -143,6 +144,6 @@ targets:
         PRODUCT_NAME: "SwiftOpenWorkEngineTests"
         PRODUCT_BUNDLE_IDENTIFIER: io.github.foscoe63.SwiftOpenWorkEngineTests
         GENERATE_INFOPLIST_FILE: YES
-        OTHER_SWIFT_FLAGS: "$(inherited) -strict-concurrency=minimal"
+        SWIFT_VERSION: "6.0"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SwiftOpenWork.app/Contents/MacOS/SwiftOpenWork"
         BUNDLE_LOADER: "$(TEST_HOST)"

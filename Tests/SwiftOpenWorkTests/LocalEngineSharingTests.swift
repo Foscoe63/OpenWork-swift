@@ -292,6 +292,7 @@ final class DeclaredContextWindowTests: XCTestCase {
 }
 
 final class GenerationSpeedLabelTests: XCTestCase {
+    @MainActor
     func testSpeedIsShownOnlyWhenMeasuredAndFinished() {
         var message = ChatMessage(role: .assistant, content: "hi")
         XCTAssertNil(MessageBubbleView.speedLabel(message))

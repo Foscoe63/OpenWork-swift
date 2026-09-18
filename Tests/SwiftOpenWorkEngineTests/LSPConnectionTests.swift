@@ -177,7 +177,7 @@ final class LSPConnectionTests: XCTestCase {
     func testCancellingTheCallingTaskEndsTheRequest() async throws {
         let wire = Wire()
         let connection = wire.connect()
-        let task = Task { try await connection.request("never", nil, timeout: 60) }
+        let task = Task { _ = try await connection.request("never", nil, timeout: 60) }
         _ = try await wire.waitForMessage { $0["method"] as? String == "never" }
         let started = Date()
         task.cancel()

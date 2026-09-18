@@ -35,19 +35,13 @@ let package = Package(
         // Models and small utilities: no dependencies on the rest of the app.
         .target(
             name: "SwiftOpenWorkCore",
-            path: "Sources/SwiftOpenWorkCore",
-            swiftSettings: [
-                .swiftLanguageMode(.v6)
-            ]
+            path: "Sources/SwiftOpenWorkCore"
         ),
         // Settings, sessions and credentials on disk and in the Keychain.
         .target(
             name: "SwiftOpenWorkStorage",
             dependencies: ["SwiftOpenWorkCore"],
-            path: "Sources/SwiftOpenWorkStorage",
-            swiftSettings: [
-                .swiftLanguageMode(.v6)
-            ]
+            path: "Sources/SwiftOpenWorkStorage"
         ),
         // The in-process MLX engine and model discovery. Everything that links MLX, Hugging Face
         // or Transformers lives here, so code that does not need them does not compile them.
@@ -68,9 +62,6 @@ let package = Package(
             path: "Sources/SwiftOpenWorkLocalInference",
             cxxSettings: [
                 .unsafeFlags(["-std=c++17", "-Wno-c++17-extensions"])
-            ],
-            swiftSettings: [
-                .swiftLanguageMode(.v6)
             ]
         ),
         // The agent loop, tools, providers, MCP, language servers, preview and automations. It
@@ -87,10 +78,7 @@ let package = Package(
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
             ],
-            path: "Sources/SwiftOpenWorkEngine",
-            swiftSettings: [
-                .swiftLanguageMode(.v6)
-            ]
+            path: "Sources/SwiftOpenWorkEngine"
         ),
         .executableTarget(
             name: "SwiftOpenWork",
@@ -106,9 +94,6 @@ let package = Package(
             ],
             cxxSettings: [
                 .unsafeFlags(["-std=c++17", "-Wno-c++17-extensions"])
-            ],
-            swiftSettings: [
-                .swiftLanguageMode(.v6)
             ]
         ),
         // Tests that need only the engine and what it depends on. No app, no MLX: building these
@@ -133,5 +118,6 @@ let package = Package(
             ]
         )
     ],
-    swiftLanguageModes: [.v5]
+    // Every target, tests included, compiles in the Swift 6 language mode.
+    swiftLanguageModes: [.v6]
 )

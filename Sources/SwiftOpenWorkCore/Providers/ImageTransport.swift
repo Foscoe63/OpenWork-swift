@@ -1,6 +1,5 @@
 import Foundation
 import AppKit
-import SwiftOpenWorkCore
 
 /// Getting an image from a `ChatMessage` to a model.
 ///

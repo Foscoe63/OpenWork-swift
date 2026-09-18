@@ -9,16 +9,17 @@ import XCTest
 @MainActor
 final class LiveToolOutputTests: XCTestCase {
 
-    private var workspace: Workspace!
-    private var agent: Agent!
-    private var root: String!
+    // XCTest makes a new instance per test, so these are fixed for one test. Constants rather than
+    // vars set in setUp, which overrides a nonisolated method and cannot write main-actor state.
+    private let root = NSTemporaryDirectory() + "ow-live-\(UUID().uuidString.prefix(8))"
+    private let workspaceId = UUID().uuidString
+    private var workspace: Workspace { Workspace(id: workspaceId, name: "Live", folderPath: root) }
+    private let agent = Agent(name: "Runner", role: "executor")
 
     override func setUpWithError() throws {
-        root = NSTemporaryDirectory() + "ow-live-\(UUID().uuidString.prefix(8))"
         try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
-        workspace = Workspace(name: "Live", folderPath: root)
-        agent = Agent(name: "Runner", role: "executor")
-        WorkspaceTerminalSession.shared.clear()
+        // XCTest runs setUp on the main thread.
+        MainActor.assumeIsolated { WorkspaceTerminalSession.shared.clear() }
     }
 
     override func tearDownWithError() throws {

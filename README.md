@@ -283,8 +283,9 @@ work when there is no host, as in a test that never creates the app's state.
 | `SwiftOpenWorkEngine` | Core, Storage, Yams, MCP, NIO | Swift 6 |
 | `SwiftOpenWork` (app) | all of the above | Swift 6 |
 
-Every module compiles in the Swift 6 language mode, with its concurrency errors fixed rather than
-suppressed. The test targets stay in the Swift 5 mode.
+Every module and both test targets compile in the Swift 6 language mode, with concurrency errors
+fixed rather than suppressed. `Package.swift` sets it once for the package; `project.yml` sets
+`SWIFT_VERSION: "6.0"` for the targets Xcode compiles itself (the app and the two test bundles).
 
 JSON from `JSONSerialization` (`[String: Any]`, `Any`) is not Sendable, and the language-server and
 MCP layers pass it in and out of actors. The rules that make that compile:
@@ -297,7 +298,7 @@ MCP layers pass it in and out of actors. The rules that make that compile:
 - To send a value that is still in use — one element of an array, or arguments read again
   afterwards — send `JSONCopy.fresh(value)`, a deep copy that shares nothing with the original.
 - An API whose closure type is `@MainActor` also writes `@Sendable`. Swift 6 implies it and puts it
-  in the symbol name; Swift 5 does not. Without it, the Swift 5 test bundles cannot link.
+  in the symbol name; Swift 5 does not, so code built in the other mode cannot link against it.
 
 ### Sidebar destinations
 

@@ -1,5 +1,4 @@
 import Foundation
-import SwiftOpenWorkCore
 
 public struct LLMStreamChunk: Sendable {
     public var deltaText: String
@@ -57,7 +56,7 @@ public protocol LLMProviderClient: Sendable {
 }
 
 public extension LLMProviderClient {
-    public func streamChat(
+    func streamChat(
         provider: ModelProvider,
         model: ModelInfo,
         systemPrompt: String,
