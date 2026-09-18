@@ -53,7 +53,7 @@ public final class StaticFileServer: @unchecked Sendable {
         }
         let once = OSAllocatedUnfairLock(initialState: Once.idle)
 
-        func takePending() -> CheckedContinuation<URL, Error>? {
+        @Sendable func takePending() -> CheckedContinuation<URL, Error>? {
             once.withLock { state in
                 if case .pending(let continuation) = state {
                     state = .finished

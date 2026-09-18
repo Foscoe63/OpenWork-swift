@@ -12,7 +12,7 @@ public final class WatchFolderEngine: ObservableObject {
 
     private init() {}
 
-    public func startWatching(items: [WatchItem], onEventTriggered: @escaping (WatchItem, String) -> Void) {
+    public func startWatching(items: [WatchItem], onEventTriggered: @escaping @MainActor (WatchItem, String) -> Void) {
         stopAll()
 
         for item in items where item.isEnabled && !item.path.isEmpty {
@@ -51,7 +51,7 @@ public final class WatchFolderEngine: ObservableObject {
         }
     }
 
-    private func handleDirectoryEvent(for item: WatchItem, onEventTriggered: @escaping (WatchItem, String) -> Void) {
+    private func handleDirectoryEvent(for item: WatchItem, onEventTriggered: @escaping @MainActor (WatchItem, String) -> Void) {
         debounceTimers[item.id]?.invalidate()
 
         debounceTimers[item.id] = Timer.scheduledTimer(withTimeInterval: max(1.0, item.debounceIntervalSeconds), repeats: false) { _ in

@@ -15,6 +15,7 @@ struct EditorPalette {
     var currentLine: NSColor
     var tokens: [SyntaxTokenKind: NSColor]
 
+    @MainActor
     static func make(theme: AppTheme) -> EditorPalette {
         let dark: Bool = {
             switch theme {

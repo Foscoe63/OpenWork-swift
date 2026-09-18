@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// "Where is `X` defined?" in one hop.
 ///
@@ -97,16 +98,18 @@ public actor SymbolIndex {
         return map
     }()
 
-    private static var compiled: [String: [(Kind, NSRegularExpression)]] = [:]
+    /// Compiled once per extension. Behind a lock: indexes for different workspaces build on
+    /// different threads, and this cache is shared by all of them.
+    private static let compiled = OSAllocatedUnfairLock(initialState: [String: [(Kind, NSRegularExpression)]]())
 
     private static func regexes(for ext: String) -> [(Kind, NSRegularExpression)]? {
-        if let cached = compiled[ext] { return cached }
+        if let cached = compiled.withLock({ $0[ext] }) { return cached }
         guard let patterns = patternsByExtension[ext] else { return nil }
         let built = patterns.compactMap { kind, pattern -> (Kind, NSRegularExpression)? in
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
             return (kind, regex)
         }
-        compiled[ext] = built
+        compiled.withLock { $0[ext] = built }
         return built
     }
 

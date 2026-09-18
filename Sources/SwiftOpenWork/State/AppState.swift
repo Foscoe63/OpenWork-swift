@@ -213,7 +213,7 @@ public final class AppState: ObservableObject {
     @Published public var pullModelStatusText: String = ""
     @Published public var isPullingModel: Bool = false
     private var currentExecutionTask: Task<Void, Never>? = nil
-    private var mlxLoadedObserver: NSObjectProtocol?
+    private var mlxLoadedObserver: MLXLoadedModelsObserver?
 
     private let persistence = PersistenceManager.shared
 
@@ -225,23 +225,14 @@ public final class AppState: ObservableObject {
         loadAll()
         EngineHosting.host = self
         recoverInterruptedAutomationRuns()
-        mlxLoadedObserver = NotificationCenter.default.addObserver(
-            forName: .mlxLoadedModelsDidChange,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshLoadedMLXModels()
-            }
+        mlxLoadedObserver = MLXLoadedModelsObserver { [weak self] in
+            self?.refreshLoadedMLXModels()
         }
         refreshLoadedMLXModels()
     }
 
     deinit {
         currentExecutionTask?.cancel()
-        if let mlxLoadedObserver {
-            NotificationCenter.default.removeObserver(mlxLoadedObserver)
-        }
     }
 
     public func refreshLoadedMLXModels() {
@@ -2112,5 +2103,27 @@ extension AppState: EngineHost {
     public func revealPreviewIfWatched() {
         if navigationDestination != .chat && navigationDestination != .tools { return }
         revealInspector(tab: .preview, minimumWidth: 560)
+    }
+}
+
+/// Calls `onChange` on the main actor whenever the MLX engine loads or unloads a model.
+///
+/// The engine posts from whatever thread it is on, so the handler hops to the main actor itself.
+/// Selector-based, so NotificationCenter drops the registration when this object is freed and
+/// `AppState.deinit` has no observer token to remove.
+@MainActor
+private final class MLXLoadedModelsObserver: NSObject {
+    private let onChange: @MainActor () -> Void
+
+    init(onChange: @escaping @MainActor () -> Void) {
+        self.onChange = onChange
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(loadedModelsDidChange), name: .mlxLoadedModelsDidChange, object: nil
+        )
+    }
+
+    @objc nonisolated private func loadedModelsDidChange(_ note: Notification) {
+        Task { @MainActor in self.onChange() }
     }
 }
