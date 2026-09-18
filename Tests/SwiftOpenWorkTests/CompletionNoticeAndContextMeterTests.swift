@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// Two things that only earn their place by staying quiet most of the time: a banner nobody asked
 /// for is worse than no banner, and a meter that is always on screen stops being read.

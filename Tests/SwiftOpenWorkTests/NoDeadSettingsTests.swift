@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// The rule this codebase kept breaking: **nothing ships with a control until something reads it.**
 ///
@@ -32,7 +33,7 @@ final class NoDeadSettingsTests: XCTestCase {
 
     /// Every stored field name, read from the model's own declaration.
     private func declaredFields() throws -> [String] {
-        let settingsFile = Self.sourceRoot.appendingPathComponent("Models/Settings.swift")
+        let settingsFile = SourceTree.url("Models/Settings.swift")
         let source = try String(contentsOf: settingsFile, encoding: .utf8)
         guard let start = source.range(of: "public struct AppSettings"),
               let end = source.range(of: "public static let currentSchemaVersion") else {
@@ -88,7 +89,7 @@ final class NoDeadSettingsTests: XCTestCase {
     func testEverySettingIsReachableFromTheUI() throws {
         let fields = try declaredFields()
         let settingsView = try String(
-            contentsOf: Self.sourceRoot.appendingPathComponent("UI/Views/Settings/SettingsView.swift"),
+            contentsOf: SourceTree.url("UI/Views/Settings/SettingsView.swift"),
             encoding: .utf8
         )
         let notUserFacing: Set<String> = [

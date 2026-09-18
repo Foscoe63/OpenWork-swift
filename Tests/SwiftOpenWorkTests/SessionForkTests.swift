@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// A long session that went 80% right and then took one bad turn has, today, only two bad
 /// recoveries: argue inside the same transcript (leaving the bad turn in context, steering

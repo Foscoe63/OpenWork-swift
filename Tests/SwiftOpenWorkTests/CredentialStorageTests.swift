@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// `saveProviders` carried the comment "save sensitive API keys to Keychain securely and sanitize
 /// for JSON backup" directly above `let sanitized = providers` — a copy that sanitises nothing.

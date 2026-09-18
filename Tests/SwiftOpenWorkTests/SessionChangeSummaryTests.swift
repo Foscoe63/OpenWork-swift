@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// Per-turn review reads the checkpoint store, which holds real contents but only for this turn.
 /// A session-wide view has to come from the transcript, and can therefore only say what was touched

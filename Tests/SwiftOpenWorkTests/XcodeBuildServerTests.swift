@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// Xcode projects get code intelligence through xcode-build-server, whose index is only as new as
 /// the last build. The pure half pins how that age is judged and reported; the integration test

@@ -34,7 +34,7 @@ final class HitTestableButtonSweepTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Sources/UI")
+            .appendingPathComponent("Sources/SwiftOpenWork/UI")
     }
 
     func testBorderlessButtonsAreClickableAcrossTheirFrame() throws {

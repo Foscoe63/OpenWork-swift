@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// Settings that existed in the model and the UI but that nothing ever read. A switch that does
 /// nothing is worse than no switch: it reads as a guarantee. These pin the ones now wired.

@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// From a real session: a 46GB checkpoint loaded in ~220s and answered, then the next turn gave up
 /// on the same load at the flat 180s budget and reported the model unavailable — abandoning work it

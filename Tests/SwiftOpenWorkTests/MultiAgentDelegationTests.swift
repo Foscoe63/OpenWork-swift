@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// Delegation is the model's decision now, made with `agent_spawn`. These pin what makes that
 /// path trustworthy: the right model, a depth budget that actually applies, refusals that say
@@ -157,8 +158,7 @@ final class MultiAgentDelegationTests: XCTestCase {
     // MARK: - Sweeps
 
     private func source(_ relative: String) throws -> String {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        return try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+        try SourceTree.read(relative)
     }
 
     /// Keyword-triggered delegation is gone; it fanned out on "create a note".

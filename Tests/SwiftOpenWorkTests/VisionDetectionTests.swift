@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// Whether a model can see was decided by matching `model_type` against a list of names — "vl",
 /// "vision", "pixtral", "mllama", "gemma4". Ornith reports `qwen3_5_moe` and carries a

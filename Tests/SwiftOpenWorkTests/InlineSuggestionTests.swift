@@ -1,6 +1,7 @@
 import XCTest
 import AppKit
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 final class InlineSuggestionLogicTests: XCTestCase {
 

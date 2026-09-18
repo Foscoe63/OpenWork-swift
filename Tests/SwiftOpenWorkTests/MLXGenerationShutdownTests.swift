@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// A stopped generation used to keep evaluating on the GPU after `streamChat` returned. When the
 /// process exited meanwhile, `exit` destroyed MLX's scheduler and compiler cache under it: SIGSEGV

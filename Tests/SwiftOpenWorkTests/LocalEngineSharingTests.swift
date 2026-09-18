@@ -1,5 +1,6 @@
 import XCTest
 @testable import SwiftOpenWork
+@testable import SwiftOpenWorkCore
 
 /// The in-process engine is one model shared by everything that can start a turn: the chat
 /// window, scheduled automations, Shortcuts, and sub-agents running in parallel.
@@ -214,8 +215,7 @@ final class SystemPromptIsRenderedOnceTests: XCTestCase {
     /// measured, turn two of a conversation prefilled the whole 498-token system prompt again.
     /// The engine must never hand the system prompt over that way.
     func testTheEngineNeverPassesInstructionsToChatSession() throws {
-        let source = try String(contentsOf: Self.sourcesRoot
-            .appendingPathComponent("Engine/Providers/NativeMLXService.swift"), encoding: .utf8)
+        let source = try String(contentsOf: SourceTree.url("Engine/Providers/NativeMLXService.swift"), encoding: .utf8)
         let calls = source.components(separatedBy: "ChatSession(").dropFirst()
         XCTAssertFalse(calls.isEmpty, "expected to find the ChatSession construction")
         for call in calls {
