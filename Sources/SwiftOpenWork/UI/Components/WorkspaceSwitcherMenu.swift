@@ -16,6 +16,7 @@ public struct WorkspaceSwitcherMenu<LabelContent: View>: View {
     @State private var newWorkspaceCategory: WorkspaceCategory = .general
     @State private var newWorkspaceAgentId: String = ""
     @State private var newWorkspaceFolderPath: String = ""
+    @State private var newWorkspaceTemplate: WorkspaceBootstrap.StarterTemplate = .empty
 
     public init(
         appState: AppState,
@@ -121,6 +122,8 @@ public struct WorkspaceSwitcherMenu<LabelContent: View>: View {
                     .pickerStyle(.menu)
                 }
 
+                WorkspaceTemplatePicker(template: $newWorkspaceTemplate)
+
                 if newWorkspaceCategory == .agent {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Assigned Agent Sandbox")
@@ -188,27 +191,13 @@ public struct WorkspaceSwitcherMenu<LabelContent: View>: View {
 
                 Button("Create Workspace") {
                     guard !newWorkspaceName.isEmpty else { return }
-                    let folder: String
-                    if !newWorkspaceFolderPath.isEmpty {
-                        folder = newWorkspaceFolderPath
-                    } else {
-                        let home = FileManager.default.homeDirectoryForCurrentUser.path
-                        let baseWs = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath)
-                        folder = (baseWs as NSString).appendingPathComponent(newWorkspaceName.replacingOccurrences(of: " ", with: "-"))
-                    }
-
-                    let ws = Workspace(
+                    let ws = appState.createWorkspace(
                         name: newWorkspaceName,
-                        icon: newWorkspaceCategory.icon,
-                        color: ["#8B5CF6", "#3B82F6", "#10B981", "#EC4899", "#F59E0B", "#06B6D4"].randomElement() ?? "#8B5CF6",
-                        folderPath: folder,
                         category: newWorkspaceCategory,
-                        assignedAgentId: newWorkspaceCategory == .agent && !newWorkspaceAgentId.isEmpty ? newWorkspaceAgentId : nil,
-                        isPipelineStagingEnabled: true,
-                        inputFolderPath: "input",
-                        outputFolderPath: "output"
+                        assignedAgentId: newWorkspaceAgentId,
+                        folderPath: newWorkspaceFolderPath,
+                        template: newWorkspaceTemplate
                     )
-                    appState.saveWorkspace(ws)
                     onSelectWorkspace(ws.id)
                     showingWorkspaceSheet = false
                     resetNewWorkspaceFields()
@@ -227,5 +216,6 @@ public struct WorkspaceSwitcherMenu<LabelContent: View>: View {
         newWorkspaceCategory = .general
         newWorkspaceAgentId = ""
         newWorkspaceFolderPath = ""
+        newWorkspaceTemplate = .empty
     }
 }

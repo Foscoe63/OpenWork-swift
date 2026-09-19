@@ -209,6 +209,16 @@ public enum EditorText {
 
     // MARK: - Positions
 
+    /// 1-based first and last line a selection covers. A selection that ends at the start of a
+    /// line (a whole-line selection includes the newline) does not count that line.
+    public static func lineSpan(of range: NSRange, in text: NSString) -> (first: Int, last: Int) {
+        let first = lineAndColumn(of: range.location, in: text).line
+        guard range.length > 0 else { return (first, first) }
+        let end = lineAndColumn(of: NSMaxRange(range), in: text)
+        let last = end.column == 1 ? end.line - 1 : end.line
+        return (first, max(first, last))
+    }
+
     /// 1-based line and column of a UTF-16 offset.
     public static func lineAndColumn(of location: Int, in text: NSString) -> (line: Int, column: Int) {
         let clamped = max(0, min(location, text.length))

@@ -8,6 +8,9 @@ import SwiftOpenWorkEngine
 /// from the transcript's tool calls instead, so it knows *what* was touched and *when* but holds no
 /// prior contents. It shows git's diff and offers no revert, and says so plainly: a view that
 /// looked like the turn review but silently could not restore anything would be worse than none.
+///
+/// It can commit, though: "Commit…" stages and commits the session's files when *you* press it.
+/// The agent still cannot commit on your checkout.
 public struct SessionChangeReviewView: View {
     @ObservedObject var appState: AppState
     let root: String
@@ -16,6 +19,13 @@ public struct SessionChangeReviewView: View {
     @State private var selected: SessionChangeSummary.ChangedFile?
     @State private var diffText: String = ""
     @State private var isRepository = true
+    /// Session files git still sees as changed; what "Commit…" offers.
+    @State private var pending: [String] = []
+    @State private var commitSelection: Set<String> = []
+    @State private var showingCommit = false
+    @State private var commitMessage = ""
+    @State private var isCommitting = false
+    @State private var commitError: String?
 
     public init(appState: AppState, root: String) {
         self.appState = appState
@@ -25,6 +35,10 @@ public struct SessionChangeReviewView: View {
     public var body: some View {
         VStack(spacing: 0) {
             header
+            if showingCommit {
+                Divider()
+                commitPanel
+            }
             Divider()
             if files.isEmpty {
                 empty
@@ -48,11 +62,75 @@ public struct SessionChangeReviewView: View {
                      ? "Changes this session"
                      : "\(files.count) file\(files.count == 1 ? "" : "s") changed this session")
                     .font(.system(size: 12.5, weight: .semibold))
-                Text("Read-only. Undo covers the current turn only — use the turn review, or git.")
+                Text("Undo covers the current turn only — use the turn review, or commit what works.")
                     .font(.system(size: 10.5))
                     .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
             }
             Spacer()
+            if isRepository && !pending.isEmpty && !showingCommit {
+                Button("Commit…") { beginCommit() }
+                    .controlSize(.small)
+                    .help("Commit this session's changed files")
+            }
+        }
+        .padding(12)
+    }
+
+    private var commitPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Commit message")
+                .font(.system(size: 11, weight: .semibold))
+            TextEditor(text: $commitMessage)
+                .font(.system(size: 12))
+                .frame(minHeight: 44, maxHeight: 80)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
+            Text("Files (\(commitSelection.count) of \(pending.count))")
+                .font(.system(size: 11, weight: .semibold))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(pending, id: \.self) { path in
+                        Toggle(isOn: Binding(
+                            get: { commitSelection.contains(path) },
+                            set: { on in
+                                if on { commitSelection.insert(path) } else { commitSelection.remove(path) }
+                            }
+                        )) {
+                            Text(path)
+                                .font(.system(size: 11, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.head)
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 110)
+            if let commitError {
+                Text(commitError)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.red)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Text("Only the checked files are committed. Anything else you have staged is left out.")
+                    .font(.system(size: 10))
+                    .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                Spacer()
+                Button("Cancel") {
+                    showingCommit = false
+                    commitError = nil
+                }
+                .controlSize(.small)
+                .disabled(isCommitting)
+                Button(isCommitting ? "Committing…" : "Commit") { performCommit() }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(isCommitting || commitSelection.isEmpty
+                              || commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
         }
         .padding(12)
     }
@@ -150,8 +228,51 @@ public struct SessionChangeReviewView: View {
         files = SessionChangeSummary.changedFiles(in: messages, workspaceRoot: root)
         isRepository = GitTools.status(in: root).isRepository
         if let first = files.first {
-            selected = first
-            loadDiff(for: first)
+            selected = selected.flatMap { current in files.first { $0.path == current.path } } ?? first
+            if let selected { loadDiff(for: selected) }
+        }
+        refreshPending()
+    }
+
+    /// Ask git which session files still differ. One `git status` per file, so off the main thread.
+    private func refreshPending() {
+        guard isRepository else {
+            pending = []
+            return
+        }
+        let paths = files.map(\.path)
+        let root = root
+        Task {
+            let result = await Task.detached { SessionCommit.pendingPaths(paths, in: root) }.value
+            pending = result
+            commitSelection.formIntersection(result)
+        }
+    }
+
+    private func beginCommit() {
+        commitSelection = Set(pending)
+        commitMessage = SessionCommit.suggestedMessage(sessionTitle: appState.currentSession?.title, paths: pending)
+        commitError = nil
+        showingCommit = true
+    }
+
+    private func performCommit() {
+        let paths = pending.filter { commitSelection.contains($0) }
+        let message = commitMessage
+        isCommitting = true
+        commitError = nil
+        Task {
+            do {
+                let hash = try await SessionCommit.commit(paths: paths, message: message, in: root)
+                isCommitting = false
+                showingCommit = false
+                let firstLine = message.split(separator: "\n").first.map(String.init) ?? message
+                appState.showToast("Committed \(hash): \(firstLine)")
+                reload()
+            } catch {
+                isCommitting = false
+                commitError = error.localizedDescription
+            }
         }
     }
 

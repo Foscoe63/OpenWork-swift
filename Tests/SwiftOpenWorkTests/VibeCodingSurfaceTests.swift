@@ -123,6 +123,45 @@ final class VibeCodingSurfaceTests: XCTestCase {
         XCTAssertFalse(enriched.modelText.contains("| line 200"))
     }
 
+    func testMentionWithLineRangeAttachesExactlyThoseLines() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ow-range-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let file = dir.appendingPathComponent("Big.swift")
+        let body = (1...200).map { "line \($0)" }.joined(separator: "\n")
+        try body.write(to: file, atomically: true, encoding: .utf8)
+
+        let enriched = ComposerContextMentions.enrich(
+            text: "tidy @Big.swift:120-140, thanks",
+            workspacePath: dir.path
+        )
+        XCTAssertTrue(enriched.modelText.contains("selected lines 120–140 of 200"))
+        XCTAssertTrue(enriched.modelText.contains(">>> 120| line 120"))
+        XCTAssertTrue(enriched.modelText.contains(">>> 140| line 140"))
+        XCTAssertFalse(enriched.modelText.contains("| line 119\n"))
+        XCTAssertFalse(enriched.modelText.contains("| line 141\n"))
+    }
+
+    func testMentionTokenParsesLineRange() {
+        let range = ComposerContextMentions.parseMentionToken("Sources/A.swift:12-40")
+        XCTAssertEqual(range.pathToken, "Sources/A.swift")
+        XCTAssertEqual(range.line, 12)
+        XCTAssertEqual(range.endLine, 40)
+        XCTAssertNil(ComposerContextMentions.parseMentionToken("Sources/A.swift:12-12").endLine)
+        XCTAssertEqual(ComposerContextMentions.activeQuery(in: "see @Foo.swift:1-9"), "Foo.swift")
+    }
+
+    func testLineSpanIgnoresTrailingNewlineOfWholeLineSelection() {
+        let text = "one\ntwo\nthree\n" as NSString
+        // "two\n" selected: ends at the start of line 3, which is not part of the selection.
+        XCTAssertTrue(EditorText.lineSpan(of: NSRange(location: 4, length: 4), in: text) == (2, 2))
+        XCTAssertTrue(EditorText.lineSpan(of: NSRange(location: 0, length: 8), in: text) == (1, 2))
+        XCTAssertTrue(EditorText.lineSpan(of: NSRange(location: 5, length: 0), in: text) == (2, 2))
+        XCTAssertTrue(EditorText.lineSpan(of: NSRange(location: 2, length: 8), in: text) == (1, 3))
+    }
+
     func testMentionTokenParsesTrailingLine() {
         XCTAssertEqual(ComposerContextMentions.parseMentionToken("Sources/A.swift:42").line, 42)
         XCTAssertEqual(ComposerContextMentions.parseMentionToken("Sources/A.swift:42").pathToken, "Sources/A.swift")

@@ -1736,6 +1736,58 @@ public final class AppState: ObservableObject {
         ensureWorkspaceFolderExists(for: workspace)
     }
 
+    /// Create a workspace from the new-workspace sheet, and set up its folder when it is new or
+    /// empty: starter files from `template` and a git repository, which session diffs, agent
+    /// worktrees and `git_commit` all need. A folder that already has files is only registered.
+    ///
+    /// Code projects do not get the staged pipeline's `input/` and `output/` folders; they are
+    /// for file-drop automations and were cluttering every repository.
+    @discardableResult
+    public func createWorkspace(
+        name: String,
+        category: WorkspaceCategory,
+        assignedAgentId: String?,
+        folderPath: String,
+        template: WorkspaceBootstrap.StarterTemplate
+    ) -> Workspace {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let folder: String
+        if !folderPath.isEmpty {
+            folder = (folderPath as NSString).expandingTildeInPath
+        } else {
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let baseWs = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath)
+            folder = (baseWs as NSString).appendingPathComponent(trimmedName.replacingOccurrences(of: " ", with: "-"))
+        }
+        let ws = Workspace(
+            name: trimmedName,
+            icon: category.icon,
+            color: ["#8B5CF6", "#3B82F6", "#10B981", "#EC4899", "#F59E0B", "#06B6D4"].randomElement() ?? "#8B5CF6",
+            folderPath: folder,
+            category: category,
+            assignedAgentId: category == .agent ? assignedAgentId.flatMap { $0.isEmpty ? nil : $0 } : nil,
+            isPipelineStagingEnabled: category != .project && template == .empty,
+            inputFolderPath: "input",
+            outputFolderPath: "output"
+        )
+        saveWorkspace(ws)
+
+        let staging: Set<String> = ws.isPipelineStagingEnabled ? [ws.inputFolderPath, ws.outputFolderPath] : []
+        Task { [weak self] in
+            let outcome = await WorkspaceBootstrap.bootstrap(
+                folder: folder,
+                template: template,
+                projectName: trimmedName,
+                ignoring: staging
+            )
+            // An existing project picked with no template is the common case; nothing to say.
+            let quiet = template == .empty && outcome.writtenFiles.isEmpty && !outcome.initialisedRepository
+            guard !quiet, !outcome.summary.isEmpty else { return }
+            self?.showToast(outcome.summary)
+        }
+        return ws
+    }
+
     public func deleteWorkspace(_ workspace: Workspace) {
         workspaces.removeAll(where: { $0.id == workspace.id })
         if activeWorkspaceId == workspace.id {

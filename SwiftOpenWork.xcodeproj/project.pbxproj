@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00DB83B1176604248B3C1D83 /* WorkspaceTemplatePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90866A7A4C49960768F1D24E /* WorkspaceTemplatePicker.swift */; };
 		012CEB709F4B88A1B480536C /* InlineFileDiffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B76478EE5F5957662736F76 /* InlineFileDiffTests.swift */; };
 		04D76AD06D4A860834456D23 /* HitTestableButtonSweepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C807D6E8D9E37ADB1D74E30 /* HitTestableButtonSweepTests.swift */; };
 		067CEB834E5D513B989184B5 /* SymbolIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C85C2940573684C5C4B253F /* SymbolIndexTests.swift */; };
@@ -256,6 +257,7 @@
 		8C37EABF32E2FA6911F83B3B /* SessionCheckpointStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCheckpointStoreTests.swift; sourceTree = "<group>"; };
 		8C9586B2BB84439DC990D24F /* ProvidersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvidersView.swift; sourceTree = "<group>"; };
 		8F44154AE4151F5C06F45CB0 /* BuiltInProviderDefaultTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInProviderDefaultTests.swift; sourceTree = "<group>"; };
+		90866A7A4C49960768F1D24E /* WorkspaceTemplatePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTemplatePicker.swift; sourceTree = "<group>"; };
 		9095E531286AE79AC5D4728B /* SessionTodosBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTodosBar.swift; sourceTree = "<group>"; };
 		949A7C72B71FDE13EAF8AE4D /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		9B2BC524A47712DA7FD51259 /* ThemeColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeColors.swift; sourceTree = "<group>"; };
@@ -423,6 +425,7 @@
 				63E03643608040E689004D8E /* HitTestablePlainButtonStyle.swift */,
 				753DBF2C36BDC49568A01E7B /* ModelPickerButton.swift */,
 				0D2CD9DFEAD968492E29255F /* WorkspaceSwitcherMenu.swift */,
+				90866A7A4C49960768F1D24E /* WorkspaceTemplatePicker.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -964,6 +967,7 @@
 				A03E2F2ADC90997B5BACA887 /* WindowLayoutStore.swift in Sources */,
 				17BBD5AA40E302B438B08139 /* WorkspaceRulesCard.swift in Sources */,
 				1DE94E2EA353B748E9B8DD42 /* WorkspaceSwitcherMenu.swift in Sources */,
+				00DB83B1176604248B3C1D83 /* WorkspaceTemplatePicker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -280,16 +280,19 @@ public struct EditorPane: View {
         }
     }
 
-    /// Put `@path:line` in the composer, which attaches the lines around it when sent.
+    /// Put `@path:line`, or `@path:first-last` for a selection, in the composer; sending it
+    /// attaches those lines.
     private func mention(_ document: EditorDocument) {
         let relative = EditorWorkspace.relativePath(document.path, root: appState.currentWorkspace.folderPath)
-        let token = "@\(relative):\(cursor.line) "
+        let span = EditorText.lineSpan(of: document.selectedRange, in: document.text as NSString)
+        let lines = span.first == span.last ? "\(span.first)" : "\(span.first)-\(span.last)"
+        let token = "@\(relative):\(lines) "
         if appState.composerText.isEmpty {
             appState.composerText = token
         } else if !appState.composerText.contains(token.trimmingCharacters(in: .whitespaces)) {
             appState.composerText += (appState.composerText.hasSuffix(" ") ? "" : " ") + token
         }
-        appState.showToast("Added \(relative):\(cursor.line) to the message")
+        appState.showToast("Added \(relative):\(lines) to the message")
     }
 }
 
