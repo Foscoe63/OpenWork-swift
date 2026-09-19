@@ -214,7 +214,22 @@ public enum SubAgentExecutor {
                     onProgress("\(subAgent.name): \(call.toolName)")
                     // The frame is what lets an `agent_spawn` from here know its depth and which
                     // model is really running.
-                    let frame = AgentRunContext.Frame(provider: provider, model: model, depth: depth)
+                    let parentSession = AgentRunContext.current?.sessionId ?? ""
+                    let frame = AgentRunContext.Frame(provider: provider, model: model, depth: depth, sessionId: parentSession)
+                    // A sub-agent is unattended, so a fetch that would ask is refused and reported
+                    // rather than run: sites the user approved in the parent chat still work.
+                    if call.toolName == "fetch_url",
+                       let reason = AgentRunner.fetchApprovalReason(argumentsJson: call.argumentsJson, settings: settings, sessionId: parentSession) {
+                        _ = await ToolApprovalManager.shared.requestApproval(
+                            callId: call.id, toolName: call.toolName, argumentsJson: call.argumentsJson, reason: reason
+                        )
+                        messages.append(ChatMessage(
+                            id: call.id,
+                            role: .tool,
+                            content: "Refused: \(reason) Sub-agents run unattended, so nobody can approve it. Continue without it and say in your report that this fetch was skipped."
+                        ))
+                        continue
+                    }
                     let result = await AgentRunContext.$current.withValue(frame) {
                         await ToolExecutionEngine.shared.execute(
                             toolName: call.toolName,

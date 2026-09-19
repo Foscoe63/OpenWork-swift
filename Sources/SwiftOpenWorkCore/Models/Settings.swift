@@ -185,6 +185,10 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var terminalSafetyLevel: TerminalSafetyLevel
     public var terminalShell: String // e.g. "/bin/zsh", "/bin/bash", "/opt/homebrew/bin/fish"
     public var allowWebAccess: Bool
+    /// Ask before `fetch_url` reaches a host this session has not used. Local and private-network
+    /// addresses ask every time while this is on. Off restores unasked fetches, for automations
+    /// that must fetch unattended.
+    public var askBeforeFetchingNewSites: Bool
     public var sandboxAgentFileSystem: Bool
 
     // Appearance
@@ -327,6 +331,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         terminalSafetyLevel: TerminalSafetyLevel = .safeOnly,
         terminalShell: String = "/bin/zsh",
         allowWebAccess: Bool = true,
+        askBeforeFetchingNewSites: Bool = true,
         // Secure by default. Existing installs keep whatever they have: settings.json already
         // carries this key, and decoding prefers the stored value over this default.
         sandboxAgentFileSystem: Bool = true,
@@ -403,6 +408,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.terminalSafetyLevel = terminalSafetyLevel
         self.terminalShell = terminalShell
         self.allowWebAccess = allowWebAccess
+        self.askBeforeFetchingNewSites = askBeforeFetchingNewSites
         self.sandboxAgentFileSystem = sandboxAgentFileSystem
         self.theme = theme
         self.accentColor = accentColor
@@ -470,6 +476,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.terminalSafetyLevel = try container.decodeIfPresent(TerminalSafetyLevel.self, forKey: .terminalSafetyLevel) ?? def.terminalSafetyLevel
         self.terminalShell = try container.decodeIfPresent(String.self, forKey: .terminalShell) ?? def.terminalShell
         self.allowWebAccess = try container.decodeIfPresent(Bool.self, forKey: .allowWebAccess) ?? def.allowWebAccess
+        self.askBeforeFetchingNewSites = try container.decodeIfPresent(Bool.self, forKey: .askBeforeFetchingNewSites) ?? def.askBeforeFetchingNewSites
         self.sandboxAgentFileSystem = try container.decodeIfPresent(Bool.self, forKey: .sandboxAgentFileSystem) ?? def.sandboxAgentFileSystem
 
         self.theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? def.theme

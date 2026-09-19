@@ -23,11 +23,14 @@ public enum AgentRunContext {
         public var model: ModelInfo
         /// 0 for the turn the user started; a sub-agent spawned from it runs at 1.
         public var depth: Int
+        /// The chat this run belongs to, so a sub-agent fetches only from sites approved there.
+        public var sessionId: String?
 
-        public init(provider: ModelProvider, model: ModelInfo, depth: Int) {
+        public init(provider: ModelProvider, model: ModelInfo, depth: Int, sessionId: String? = nil) {
             self.provider = provider
             self.model = model
             self.depth = depth
+            self.sessionId = sessionId
         }
     }
 

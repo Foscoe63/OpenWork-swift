@@ -339,6 +339,14 @@ public final class ToolExecutionEngine: @unchecked Sendable {
 
     /// nil for a file that is absent, and also for one that is binary or unreadable — a diff that
     /// treated an unreadable file as empty would claim the call deleted every line of it.
+    /// For `fetch_url`: no shared cookies with anything else, and no redirect from a public page
+    /// into the local network (`WebFetchPolicy.allowsRedirect`).
+    static let fetchSession = URLSession(
+        configuration: .ephemeral,
+        delegate: WebFetchRedirectGuard(),
+        delegateQueue: nil
+    )
+
     /// Tools that write file contents, whose results carry a warm language server's errors.
     static let editToolNames: Set<String> = [
         "file_write", "write_file", "create_file", "save_file",
@@ -1017,7 +1025,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             do {
                 var request = URLRequest(url: url)
                 request.timeoutInterval = 30
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await Self.fetchSession.data(for: request)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 let body = String(data: data, encoding: .utf8)
                     ?? String(data: data, encoding: .isoLatin1)
