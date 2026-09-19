@@ -1339,8 +1339,8 @@ macOS is the only authority on whether a login item is registered.
 
 ### Worth building next
 
-- **`SwiftOpenWork.podspec` still says `1.0.0`** and `swift_version` 5.9. Either bump it on
-  release with `project.yml` or delete it if nothing consumes it.
+- Nothing listed. (`SwiftOpenWork.podspec` was deleted on 2026-09-19: it named a tag that never
+  existed, depended on pods that do not exist and targeted iOS. This is an app, not a pod.)
 
 ### Explicitly decided against — with reasons, so they are not re-proposed
 

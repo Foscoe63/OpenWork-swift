@@ -39,6 +39,14 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 
 ---
 
+## Download
+
+Get **`SwiftOpenWork.zip`** from the [latest release](https://github.com/Foscoe63/OpenWork-swift/releases/latest), unzip it, and drag `SwiftOpenWork.app` to Applications. Releases are signed with a Developer ID and **notarised by Apple**, so the app opens with no Gatekeeper warning. The app checks for new releases itself.
+
+Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibility and Screen Recording are only requested the first time the agent uses a tool that looks at the screen. Since those permissions follow the code signature, you grant them once, not on every update.
+
+---
+
 ## Features
 
 ### Autonomous agents
@@ -144,7 +152,9 @@ The code-intelligence tools run real language servers, started on first use and 
 - Local RAG (Accelerate), PDF/Vision extract, live canvas, diffs, terminal, voice STT/TTS
 - **Window state persistence** — frame, sidebar & inspector widths, open/closed inspector, navigation destination, settings tab, last workspace & session survive quit/relaunch
 - **Vibe coding loop** — sticky plan todos from `todo_write`, Plan mode chip / `/plan`, queue a follow-up while the agent is still generating (Stop keeps what you typed), live turn-change review, clickable `file:line` diagnostics, and a project Rules editor for `SWIFTOPENWORK.md`
-- **Composer input** — `@file` and `@folder` completion, `@path:line` to paste a focused, numbered excerpt around a line, and drag-and-drop or paste of files and images straight into the box
+- **Composer input** — `@file` and `@folder` completion, `@path:line` to paste a focused, numbered excerpt around a line, `@path:first-last` for exactly those lines (what **Mention in Chat** sends for an editor selection), and drag-and-drop or paste of files and images straight into the box
+- **Start from a template** — a new workspace can start empty or as a static site, a React (Vite) app, a SwiftUI Mac app or a Python script, each with an `AGENTS.md` that tells the agent how to run and check that kind of project. A new or empty folder also gets a `.gitignore`, `git init` and a first commit, so diffs, worktrees and commits work from the start. A folder that already has files is left as it is
+- **Commit from the app** — *Changes this session* has **Commit…**: a checkbox per file and an editable message. Only the session's files are committed, and anything else you had staged stays staged. The agent still cannot commit on your checkout
 - **Context meter** — the last turn's real prompt-token count against the model's window, shown beside the composer once it passes half full, amber and then red as compaction gets close. The provider's own number, never an estimate
 - **Finished-turn notifications** — a chime plus a banner naming the session, only when the app is in the background and only for turns long enough to have walked away from. A turn that *failed* is announced however short it was
 
@@ -409,11 +419,26 @@ Quit any running SwiftOpenWork instance before replacing the bundle.
 
 ### Notarizing a release
 
-An ad-hoc signed build is blocked by Gatekeeper on first launch, so users have to right-click →
-Open. `Scripts/notarize-release.sh` builds Release, signs with a Developer ID Application certificate, submits to
-`notarytool`, staples the ticket and produces `build/release/SwiftOpenWork.zip`. It needs your Developer ID and
-an App Store Connect key; the script says which values it wants and stops rather than half-signing
-if any are missing.
+`Scripts/notarize-release.sh` builds Release, signs nested code and then the app with a Developer ID
+Application certificate and hardened runtime, submits to `notarytool`, staples the ticket, checks it
+with `spctl`, and zips **after** stapling to `build/release/SwiftOpenWork.zip`. A build that is not
+notarised is blocked by Gatekeeper on first launch.
+
+It needs the Developer ID identity and notarisation credentials, in either of two forms:
+
+```bash
+# Once: store an Apple ID and app-specific password in the keychain
+xcrun notarytool store-credentials swiftopenwork --apple-id you@example.com --team-id TEAMID
+
+# Each release
+DEVELOPER_ID_APP="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=swiftopenwork \
+  Scripts/notarize-release.sh
+```
+
+or an App Store Connect API key via `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` and
+`APPLE_API_KEY_PATH` instead of `NOTARY_PROFILE`. The script stops, rather than half-signing, if
+anything it needs is missing. `SIGN_ONLY=1` runs everything up to submission, to check signing
+without submitting.
 
 ---
 
