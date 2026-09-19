@@ -114,6 +114,19 @@ public actor LanguageServerPool {
         }
     }
 
+    /// The live session already serving `file`, or nil. Never starts, restarts or waits for a
+    /// server, so a check built on it costs nothing when none is up. The innermost root wins.
+    public func runningSession(for file: String) -> LanguageServerSession? {
+        let path = LanguageServerCatalog.standardized(file)
+        return sessions.values
+            .filter { session in
+                session.isAlive
+                    && session.resolution.spec.languageId(forPath: path) != nil
+                    && FileChangeWatcher.isRelevant(path, root: session.root, spec: session.resolution.spec)
+            }
+            .max { $0.root.count < $1.root.count }
+    }
+
     public var runningServers: [(server: String, root: String)] {
         sessions.values.map { ($0.server, $0.root) }
     }

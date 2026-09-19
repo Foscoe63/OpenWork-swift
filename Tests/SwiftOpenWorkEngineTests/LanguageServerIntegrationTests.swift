@@ -207,6 +207,41 @@ final class LanguageServerIntegrationTests: XCTestCase {
         XCTAssertTrue(unsupported.error?.contains("No language server handles .txt") ?? false, unsupported.error ?? "")
     }
 
+    /// An edit reports what a warm server makes of it, so the model sees its own error at once.
+    func testEditsCarryErrorsFromAServerThatIsAlreadyRunning() async throws {
+        guard ExecutableLocator().locate(LanguageServerCatalog.sourceKit) != nil else {
+            throw XCTSkip("sourcekit-lsp is not installed")
+        }
+        try write("Package.swift", """
+        // swift-tools-version: 5.9
+        import PackageDescription
+        let package = Package(name: "Toy", targets: [.target(name: "Toy")])
+        """)
+        try write("Sources/Toy/Math.swift", "func double(_ x: Int) -> Int { x * 2 }\nlet four = double(2)\n")
+        let workspace = Workspace(name: "LSP", folderPath: root)
+        let agent = Agent(name: "Runner", role: "executor")
+        func run(_ tool: String, _ args: [String: Any]) async -> ToolExecutionResult {
+            let json = String(data: try! JSONSerialization.data(withJSONObject: args), encoding: .utf8)!
+            return await ToolExecutionEngine.shared.execute(toolName: tool, argumentsJson: json, workspace: workspace, currentAgent: agent)
+        }
+
+        // Nothing running for this root yet: the edit reports only itself and does not wait.
+        let cold = await run("edit_file", ["path": "Sources/Toy/Math.swift", "old_string": "double(2)", "new_string": "double(3)"])
+        XCTAssertTrue(cold.success, cold.error ?? "")
+        XCTAssertFalse(cold.output.contains("sourcekit-lsp"), cold.output)
+
+        // Warm the server the way an agent would, then break the file.
+        let warm = await run("code_diagnostics", ["path": "Sources/Toy/Math.swift"])
+        XCTAssertTrue(warm.success, warm.error ?? "")
+        let broken = await run("edit_file", ["path": "Sources/Toy/Math.swift", "old_string": "double(3)", "new_string": "double(\"three\")"])
+        XCTAssertTrue(broken.success, broken.error ?? "")
+        XCTAssertTrue(broken.output.contains("sourcekit-lsp reports 1 error in Sources/Toy/Math.swift"), broken.output)
+        XCTAssertTrue(broken.output.contains("Sources/Toy/Math.swift:2:19: error:"), broken.output)
+
+        let fixed = await run("edit_file", ["path": "Sources/Toy/Math.swift", "old_string": "double(\"three\")", "new_string": "double(3)"])
+        XCTAssertTrue(fixed.output.contains("sourcekit-lsp reports no errors in Sources/Toy/Math.swift."), fixed.output)
+    }
+
     // MARK: - Other servers
 
     private func resolvable(_ file: String) -> Bool {

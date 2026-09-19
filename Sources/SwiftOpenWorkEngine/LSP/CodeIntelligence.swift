@@ -124,8 +124,56 @@ public enum CodeIntelligence {
         guard !items.isEmpty else {
             return header + "No problems reported in \(relative)."
         }
+        let parsed = parseDiagnostics(items, absolute: absolute)
+        let counts = ["error", "warning", "note"].compactMap { kind -> String? in
+            let count = parsed.filter { $0.severity == kind }.count
+            return count == 0 ? nil : "\(count) \(kind)\(count == 1 ? "" : "s")"
+        }
+        return header + "\(counts.joined(separator: ", ")) in \(relative):\n"
+            + parsed.map { "\(relative):\($0.line):\($0.column): \($0.severity): \($0.message)" }.joined(separator: "\n")
+    }
+
+    /// What a server that is *already running* reports for `path` straight after an edit, as text to
+    /// append to the edit's tool result — so a model that skips `code_diagnostics` still sees the
+    /// error it just introduced. Nil when no server is up for the file, or it does not answer
+    /// within `timeout`: this never starts a server or waits for an index, so an edit is never
+    /// slowed by more than `timeout`. Errors only; warnings are not worth a turn.
+    public static func errorsAfterEdit(
+        path: String,
+        workspaceRoot: String,
+        pool: LanguageServerPool = .shared,
+        timeout: TimeInterval = 4,
+        limit: Int = 10
+    ) async -> String? {
+        let absolute = absolutePath(path, workspaceRoot: workspaceRoot)
+        guard let session = await pool.runningSession(for: absolute) else { return nil }
+        let file = LanguageServerCatalog.standardized(absolute)
+        let items: [[String: Any]]
+        do {
+            items = try await session.diagnostics(for: file, timeout: timeout)
+        } catch {
+            return nil
+        }
+        let relative = relativePath(absolute, workspaceRoot: workspaceRoot)
+        let errors = parseDiagnostics(items, absolute: absolute).filter { $0.severity == "error" }
+        guard !errors.isEmpty else {
+            return "\(session.server) reports no errors in \(relative)."
+        }
+        var lines = errors.prefix(limit).map { "\(relative):\($0.line):\($0.column): error: \($0.message)" }
+        if errors.count > limit {
+            lines.append("… and \(errors.count - limit) more; code_diagnostics lists them all.")
+        }
+        let count = "\(errors.count) error\(errors.count == 1 ? "" : "s")"
+        return "\(session.server) reports \(count) in \(relative) after this change:\n" + lines.joined(separator: "\n")
+    }
+
+    /// LSP diagnostics as 1-based line, character column, severity word and one-line message,
+    /// in file order.
+    static func parseDiagnostics(
+        _ items: [[String: Any]], absolute: String
+    ) -> [(line: Int, column: Int, severity: String, message: String)] {
         let lines = (try? String(contentsOfFile: absolute, encoding: .utf8))?.components(separatedBy: "\n") ?? []
-        let parsed = items.compactMap { item -> (line: Int, column: Int, severity: String, message: String)? in
+        return items.compactMap { item -> (line: Int, column: Int, severity: String, message: String)? in
             guard let start = (item["range"] as? [String: Any])?["start"] as? [String: Any],
                   let line = start["line"] as? Int, let character = start["character"] as? Int,
                   let message = item["message"] as? String else { return nil }
@@ -140,12 +188,6 @@ public enum CodeIntelligence {
             let flat = message.replacingOccurrences(of: "\n", with: " ")
             return (line + 1, SymbolPosition.characterColumn(utf16Offset: character, in: lineText), severity, flat)
         }.sorted { ($0.line, $0.column) < ($1.line, $1.column) }
-        let counts = ["error", "warning", "note"].compactMap { kind -> String? in
-            let count = parsed.filter { $0.severity == kind }.count
-            return count == 0 ? nil : "\(count) \(kind)\(count == 1 ? "" : "s")"
-        }
-        return header + "\(counts.joined(separator: ", ")) in \(relative):\n"
-            + parsed.map { "\(relative):\($0.line):\($0.column): \($0.severity): \($0.message)" }.joined(separator: "\n")
     }
 
     /// An outline of the declarations in one file.
