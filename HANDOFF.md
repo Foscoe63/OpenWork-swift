@@ -10,9 +10,9 @@ against this machine, not remembered.
 | SwiftOpenWork | `origin/main`; the module split, Swift 6 and test-host isolation landed in PR #18 | see *Verifying a change* |
 | GrizzyBot | yes, `ecce520` | 538 |
 
-Latest **published** release: 1.3.1 (build 4), notarised and stapled — see *Notarisation works
-(2026-09-19)* below. The copy that was in `/Applications` on 2026-09-19 was a local 1.3.0 build
-signed with `SwiftOpenWork Local Signing`, not the published zip.
+Latest **published** release: **1.3.2 (build 5)**, notarised and stapled, installed in
+`/Applications` on 2026-09-19 — see *Notarisation works (2026-09-19)* below. It carries PR #21
+(starter templates, git on new workspaces, commit from the session review, range mentions).
 
 > **The app was renamed SwiftOpenWork on 2026-09-16** (bundle ID `io.github.foscoe63.SwiftOpenWork`,
 > was `ai.openwork.OpenWorkSwift`). Sections written before that say "OpenWork" and use the old
@@ -1290,6 +1290,12 @@ with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afte
 - **Built 2026-09-19:** submission `b0952c9a-4ba6-4cab-ace8-f91636021e79`, Accepted and stapled.
   `build/release/SwiftOpenWork.zip`, 52.5MB, sha256
   `6529c2d2022a27bf8ec3ef19609471eb5d7820354dc1979a78ba62af96b82fca`.
+- **1.3.2 (build 5), 2026-09-19:** built from `main` at `94161f4` (PR #21 merged) in a separate
+  worktree so a test run in the main checkout was not disturbed. Submission
+  `214329d1-783e-4eca-bb0d-30f115244868`, Accepted and stapled; `spctl` reports
+  `Notarized Developer ID`. Zip 52.5MB, sha256
+  `a33b836d6f707585d1cac84ae5a79c55e307f7af585978e958746489c00de668`. Installed over 1.3.1 in
+  `/Applications`; the Developer ID is unchanged, so privacy grants given to 1.3.1 carry over.
 
 ## The vibe-coding loop: new projects and saving progress (2026-09-19)
 
@@ -1331,11 +1337,12 @@ macOS is the only authority on whether a login item is registered.
 
 ### Needs you
 
-- **Re-grant Accessibility and Screen Recording** after installing the notarised build in
-  `/Applications`, and remove the old OpenWork entries (System Settings → Privacy & Security). An
-  app cannot do this itself. Grants follow the code signature: the copy installed on 2026-09-19 was
-  a local 1.3.0 build signed with `SwiftOpenWork Local Signing`, so its grants do not carry over. Grants given to
-  a Developer ID build carry over to later Developer ID builds.
+- **Re-grant Accessibility and Screen Recording** once, if not done since 1.3.1 was installed
+  (System Settings → Privacy & Security), and remove the old OpenWork entries. Grants follow the
+  Developer ID signature, so they carry over to 1.3.2 and later notarised builds.
+- **Revoke the Firecrawl API key in `config.json`.** The file has been in this public repository
+  since the first commit and holds a live-looking `FIRECRAWL_API_KEY`. Removing the file does not
+  un-publish the key; only revoking it at Firecrawl does.
 
 ### Worth building next
 
