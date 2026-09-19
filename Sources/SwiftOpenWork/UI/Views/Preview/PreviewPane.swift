@@ -221,6 +221,11 @@ private struct PreviewPanel: View {
         )
         .simultaneousGesture(TapGesture().onEnded { onFocus() })
         .onAppear {
+            tab.onElementPicked = { [weak appState] element, png in
+                let image = png.flatMap { ComposerAttachmentIntake.attachment(fromPNGData: $0, preferredName: "picked-\(element.tag).png") }
+                appState?.addToComposer(text: element.promptText, attachments: image.map { [$0] } ?? [])
+                appState?.showToast("Element added to the message box — say what to change")
+            }
             if tab.workspaceRoot == nil { tab.workspaceRoot = root }
             refreshPlan()
             addressText = tab.currentURL?.absoluteString ?? ""
@@ -244,6 +249,18 @@ private struct PreviewPanel: View {
                        help: tab.isLoading ? "Stop loading" : "Reload (bypassing the cache)",
                        enabled: tab.currentURL != nil) {
                 if tab.isLoading { tab.webView.stopLoading() } else { tab.reload() }
+            }
+
+            iconButton("cursorarrow.rays",
+                       help: tab.isPicking ? "Cancel selecting (Esc)" : "Select an element to ask about it",
+                       enabled: tab.currentURL != nil && tab.loadError == nil) {
+                if tab.isPicking { tab.stopPicking() } else { tab.startPicking() }
+            }
+            .background(tab.isPicking ? ThemeColors.accent(for: appState.settings.accentColor).opacity(0.25) : Color.clear)
+            .cornerRadius(4)
+            iconButton("camera", help: "Add a screenshot of the page to the message",
+                       enabled: tab.currentURL != nil && tab.loadError == nil) {
+                screenshotToComposer()
             }
 
             TextField("localhost:5173, a port, or a URL", text: $addressText)
@@ -291,6 +308,19 @@ private struct PreviewPanel: View {
         .padding(.horizontal, 8)
         .frame(height: 36)
         .background(ThemeColors.sidebarBg(for: theme))
+    }
+
+    private func screenshotToComposer() {
+        let url = tab.currentURL?.absoluteString ?? "the preview"
+        Task {
+            guard let png = await tab.snapshotPNG(),
+                  let image = ComposerAttachmentIntake.attachment(fromPNGData: png, preferredName: "preview.png") else {
+                appState.showToast("Could not take a screenshot of the page")
+                return
+            }
+            appState.addToComposer(text: "Screenshot of \(url) attached.", attachments: [image])
+            appState.showToast("Screenshot added to the message box")
+        }
     }
 
     private func iconButton(_ symbol: String, help: String, enabled: Bool, action: @escaping () -> Void) -> some View {

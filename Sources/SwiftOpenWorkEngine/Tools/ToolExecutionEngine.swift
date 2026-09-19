@@ -147,6 +147,19 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 // Running language servers would otherwise answer from the old text until the
                 // file-system event arrives, and an agent often edits and then queries at once.
                 await LanguageServerPool.shared.filesChanged(changed.paths, created: changed.created)
+                if Self.editToolNames.contains(toolName) {
+                    // Instructions say to check an edit; smaller models often do not. When a
+                    // server is already warm, its verdict rides along with the edit for free.
+                    var reports: [String] = []
+                    for path in changed.paths.prefix(3) {
+                        if let report = await CodeIntelligence.errorsAfterEdit(path: path, workspaceRoot: workspace.folderPath) {
+                            reports.append(report)
+                        }
+                    }
+                    if !reports.isEmpty {
+                        result.output += "\n\n" + reports.joined(separator: "\n")
+                    }
+                }
             }
         }
         AppLog.verbose(
@@ -326,6 +339,12 @@ public final class ToolExecutionEngine: @unchecked Sendable {
 
     /// nil for a file that is absent, and also for one that is binary or unreadable — a diff that
     /// treated an unreadable file as empty would claim the call deleted every line of it.
+    /// Tools that write file contents, whose results carry a warm language server's errors.
+    static let editToolNames: Set<String> = [
+        "file_write", "write_file", "create_file", "save_file",
+        "edit_file", "file_edit", "multi_edit", "edit_file_multi",
+    ]
+
     private static func readForDiff(_ path: String) -> String? {
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         return try? String(contentsOfFile: path, encoding: .utf8)

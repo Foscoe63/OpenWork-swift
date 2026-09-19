@@ -638,3 +638,126 @@ final class PreviewSessionsTests: XCTestCase {
         XCTAssertEqual(sessions.tabs.count, 2)
     }
 }
+
+/// Pointing at the page: the picker script in a real web view, and what it hands the composer.
+@MainActor
+final class PreviewElementPickerTests: XCTestCase {
+
+    func testPickingAButtonReportsItWithoutPressingIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("preview-pick-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try """
+        <!doctype html>
+        <html><head><title>Shop</title></head>
+        <body style="font: 20px -apple-system">
+        <main class="shop">
+          <p>Intro</p>
+          <button class="primary big" onclick="window.pressed = true">Buy now</button>
+          <button class="primary">Later</button>
+        </main>
+        </body></html>
+        """.write(to: root.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+
+        let server = StaticFileServer(root: root)
+        let url = try await server.start()
+        defer { server.stop() }
+
+        let preview = PreviewController()
+        preview.workspaceRoot = root.path
+        let loaded = await preview.check(url: url, reload: false, settleSeconds: 0.3, viewportWidth: 800, screenshotDirectory: nil)
+        XCTAssertNil(loaded.loadError)
+
+        final class Box: @unchecked Sendable { var element: PickedElement?; var png: Data? }
+        let box = Box()
+        let picked = expectation(description: "picked")
+        preview.onElementPicked = { element, png in
+            box.element = element
+            box.png = png
+            picked.fulfill()
+        }
+        preview.startPicking()
+        XCTAssertTrue(preview.isPicking)
+        for _ in 0..<50 {
+            if (try? await preview.webView.evaluateJavaScript("!!window.__sowPickerStop")) as? Bool == true { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        _ = try? await preview.webView.evaluateJavaScript("document.querySelector('button.big').click(); true")
+        await fulfillment(of: [picked], timeout: 10)
+
+        let element = try XCTUnwrap(box.element)
+        XCTAssertEqual(element.tag, "button")
+        XCTAssertEqual(element.selector, "main.shop > button.primary.big:nth-of-type(1)")
+        XCTAssertEqual(element.text, "Buy now")
+        XCTAssertTrue(element.html.hasPrefix("<button class=\"primary big\""), element.html)
+        XCTAssertGreaterThan(element.frame.width, 0)
+        XCTAssertNotNil(box.png, "the picked element should come with a screenshot")
+        XCTAssertFalse(preview.isPicking)
+        let pressed = try? await preview.webView.evaluateJavaScript("window.pressed === true")
+        XCTAssertEqual(pressed as? Bool, false, "picking must not press the button")
+        let overlayGone = try? await preview.webView.evaluateJavaScript("window.__sowPickerStop == null")
+        XCTAssertEqual(overlayGone as? Bool, true)
+        XCTAssertTrue(element.promptText.contains("- selector: `main.shop > button.primary.big:nth-of-type(1)`"), element.promptText)
+    }
+
+    func testPickMessagesParseAndOtherMessagesDoNot() {
+        let body: [String: Any] = [
+            "kind": "pick", "selector": "#buy", "tag": "button", "html": String(repeating: "x", count: 5_000),
+            "text": "Buy", "x": 10, "y": 20.5, "width": 100, "height": 40, "url": "http://localhost:5173/",
+        ]
+        let element = PickedElement(message: body)
+        XCTAssertEqual(element?.selector, "#buy")
+        XCTAssertEqual(element?.html.count, PreviewElementPicker.maxHTML)
+        XCTAssertEqual(element?.frame, CGRect(x: 10, y: 20.5, width: 100, height: 40))
+        XCTAssertNil(PickedElement(message: ["level": "log", "message": "hi"]))
+        XCTAssertNil(PickedElement(message: ["kind": "pick", "selector": ""]))
+    }
+
+    func testCropKeepsAMarginInsideTheView() {
+        let bounds = CGRect(x: 0, y: 0, width: 800, height: 600)
+        func element(_ frame: CGRect) -> PickedElement {
+            PickedElement(selector: "a", tag: "a", html: "", text: "", pageURL: "", frame: frame)
+        }
+        XCTAssertEqual(element(CGRect(x: 100, y: 100, width: 50, height: 20)).cropRect(in: bounds), CGRect(x: 92, y: 92, width: 66, height: 36))
+        XCTAssertEqual(element(CGRect(x: -50, y: 590, width: 100, height: 100)).cropRect(in: bounds), CGRect(x: 0, y: 582, width: 58, height: 18))
+        XCTAssertNil(element(CGRect(x: 900, y: 900, width: 10, height: 10)).cropRect(in: bounds))
+    }
+}
+
+final class StarterSuggestionsTests: XCTestCase {
+
+    private func folder(_ files: [String]) throws -> String {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("starters-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for file in files {
+            let url = dir.appendingPathComponent(file)
+            if file.hasSuffix("/") {
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            } else {
+                try "".write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return dir.path
+    }
+
+    func testKinds() throws {
+        XCTAssertEqual(StarterSuggestions.kind(ofFolder: try folder([])), .empty)
+        XCTAssertEqual(StarterSuggestions.kind(ofFolder: try folder([".git/", ".gitignore", "AGENTS.md", "input/", ".DS_Store"])), .empty)
+        XCTAssertEqual(StarterSuggestions.kind(ofFolder: try folder(["package.json", "src/"])), .web)
+        XCTAssertEqual(StarterSuggestions.kind(ofFolder: try folder(["index.html"])), .web)
+        XCTAssertEqual(StarterSuggestions.kind(ofFolder: try folder(["Package.swift"])), .swift)
+        XCTAssertEqual(StarterSuggestions.kind(ofFolder: try folder(["App.xcodeproj/"])), .swift)
+        XCTAssertEqual(StarterSuggestions.kind(ofFolder: try folder(["main.py"])), .python)
+        XCTAssertEqual(StarterSuggestions.kind(ofFolder: try folder(["README.md", "notes.txt"])), .other)
+        XCTAssertEqual(StarterSuggestions.kind(ofFolder: "/nonexistent-\(UUID().uuidString)"), .empty)
+    }
+
+    func testEmptyFoldersGetIdeasAndProjectsGetWork() {
+        XCTAssertEqual(StarterSuggestions.suggestions(for: .empty), StarterSuggestions.buildIdeas)
+        let web = StarterSuggestions.suggestions(for: .web)
+        XCTAssertEqual(web.map(\.title), ["Explain this project", "Run it and look", "Find and fix a bug", "Add tests"])
+        XCTAssertTrue(web[1].prompt.contains("preview_check"))
+        XCTAssertTrue(StarterSuggestions.suggestions(for: .swift)[1].prompt.contains("run_app"))
+    }
+}

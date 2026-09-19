@@ -25,6 +25,10 @@ public final class PreviewController: NSObject, ObservableObject, Identifiable {
     /// Reload when a workspace file is saved. Most dev servers hot-reload by themselves; plain
     /// files served by the app do not.
     @Published public var reloadOnSave = true
+    /// True while the page is waiting for the user to click an element.
+    @Published public private(set) var isPicking = false
+    /// Called with the element the user picked and a PNG of it, when WebKit could take one.
+    public var onElementPicked: ((PickedElement, Data?) -> Void)?
 
     /// The folder `file://` pages may load from.
     public var workspaceRoot: String?
@@ -226,13 +230,49 @@ public final class PreviewController: NSObject, ObservableObject, Identifiable {
         for waiter in waiters { waiter.resume() }
     }
 
-    private func snapshot(to directory: URL) async -> String? {
+    // MARK: Pointing at the page
+
+    /// Highlight elements under the pointer until the user clicks one or presses Escape.
+    public func startPicking() {
+        guard webView.url != nil, loadError == nil else { return }
+        isPicking = true
+        webView.evaluateJavaScript(PreviewElementPicker.startScript) { [weak self] result, _ in
+            // False or an error: no handler on this page (a navigation raced it). Leave pick mode.
+            if (result as? Bool) != true { Task { @MainActor in self?.isPicking = false } }
+        }
+    }
+
+    public func stopPicking() {
+        isPicking = false
+        webView.evaluateJavaScript(PreviewElementPicker.stopScript, completionHandler: nil)
+    }
+
+    /// A PNG of what the page shows now, or of `rect` within it (web view coordinates).
+    public func snapshotPNG(rect: CGRect? = nil) async -> Data? {
         let configuration = WKSnapshotConfiguration()
         configuration.afterScreenUpdates = true
+        if let rect { configuration.rect = rect }
         guard let image = try? await webView.takeSnapshot(configuration: configuration),
               let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let png = bitmap.representation(using: .png, properties: [:]) else {
+              let bitmap = NSBitmapImageRep(data: tiff) else {
+            return nil
+        }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+
+    private func picked(_ element: PickedElement) {
+        isPicking = false
+        Task { [weak self] in
+            guard let self else { return }
+            let crop = element.cropRect(in: self.webView.bounds)
+            var png: Data?
+            if let crop { png = await self.snapshotPNG(rect: crop) }
+            self.onElementPicked?(element, png)
+        }
+    }
+
+    private func snapshot(to directory: URL) async -> String? {
+        guard let png = await snapshotPNG() else {
             return nil
         }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -351,6 +391,8 @@ extension PreviewController: WKNavigationDelegate, WKUIDelegate, WKScriptMessage
     /// A new page starts a new log, as a browser's console does without "Preserve log". Keeping
     /// the old entries made the error badge count errors that a reload had already fixed.
     public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        // A new page does not have the picker script, so a pick in progress is over.
+        isPicking = false
         let carried = console.filter { $0.timestamp >= lastNavigationStart && $0.level == .network }
         console = carried
         record(PreviewConsoleEntry(level: .info, message: "Loaded \(webView.url?.absoluteString ?? "page")", pageURL: webView.url?.absoluteString ?? ""))
@@ -432,8 +474,18 @@ extension PreviewController: WKNavigationDelegate, WKUIDelegate, WKScriptMessage
     }
 
     public func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any],
-              let rawLevel = body["level"] as? String,
+        guard let body = message.body as? [String: Any] else { return }
+        switch body["kind"] as? String {
+        case "pick":
+            if let element = PickedElement(message: body) { picked(element) } else { isPicking = false }
+            return
+        case "pickCancelled":
+            isPicking = false
+            return
+        default:
+            break
+        }
+        guard let rawLevel = body["level"] as? String,
               let text = body["message"] as? String else { return }
         let level = PreviewConsoleEntry.Level(rawValue: rawLevel) ?? .log
         record(PreviewConsoleEntry(level: level, message: text, pageURL: body["url"] as? String ?? ""))
