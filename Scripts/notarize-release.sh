@@ -3,7 +3,8 @@
 #
 # Requires, for a real release:
 #   - a "Developer ID Application" certificate in the login keychain
-#   - an App Store Connect API key
+#   - notarisation credentials: either a notarytool keychain profile (NOTARY_PROFILE), or an
+#     App Store Connect API key (APPLE_API_KEY_ID, APPLE_API_ISSUER, APPLE_API_KEY_PATH)
 #
 # Usage:
 #   export DEVELOPER_ID_APP="Developer ID Application: Your Name (TEAMID)"
@@ -11,6 +12,9 @@
 #   export APPLE_API_ISSUER=...
 #   export APPLE_API_KEY_PATH=$HOME/AuthKey_XXXX.p8
 #   Scripts/notarize-release.sh [path/to/SwiftOpenWork.app]
+#
+# or, with credentials stored once by `xcrun notarytool store-credentials <profile>`:
+#   export NOTARY_PROFILE=<profile>
 #
 # With no app path it builds Release itself. Output: build/release/SwiftOpenWork.zip.
 #
@@ -25,7 +29,8 @@ OUT="$ROOT/build/release"
 SIGN_ONLY="${SIGN_ONLY:-0}"
 
 : "${DEVELOPER_ID_APP:?Set DEVELOPER_ID_APP to your Developer ID Application identity}"
-if [[ "$SIGN_ONLY" != "1" ]]; then
+NOTARY_PROFILE="${NOTARY_PROFILE:-}"
+if [[ "$SIGN_ONLY" != "1" && -z "$NOTARY_PROFILE" ]]; then
   : "${APPLE_API_KEY_ID:?Set APPLE_API_KEY_ID}"
   : "${APPLE_API_ISSUER:?Set APPLE_API_ISSUER}"
   : "${APPLE_API_KEY_PATH:?Set APPLE_API_KEY_PATH to the .p8 key file}"
@@ -80,11 +85,15 @@ trap 'rm -rf "$STAGING"' EXIT
 ditto -c -k --keepParent "$APP_PATH" "$STAGING/submit.zip"
 
 echo "Submitting for notarisation…"
-xcrun notarytool submit "$STAGING/submit.zip" \
-  --key "$APPLE_API_KEY_PATH" \
-  --key-id "$APPLE_API_KEY_ID" \
-  --issuer "$APPLE_API_ISSUER" \
-  --wait
+if [[ -n "$NOTARY_PROFILE" ]]; then
+  xcrun notarytool submit "$STAGING/submit.zip" --keychain-profile "$NOTARY_PROFILE" --wait
+else
+  xcrun notarytool submit "$STAGING/submit.zip" \
+    --key "$APPLE_API_KEY_PATH" \
+    --key-id "$APPLE_API_KEY_ID" \
+    --issuer "$APPLE_API_ISSUER" \
+    --wait
+fi
 
 echo "Stapling…"
 xcrun stapler staple "$APP_PATH"
