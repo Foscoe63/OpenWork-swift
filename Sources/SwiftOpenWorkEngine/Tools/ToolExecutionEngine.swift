@@ -1966,50 +1966,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         )
     }
 
-    /// A conservative allowlist for Terminal Safety Level "Allow Safe Read-Only Commands". This is
-    /// not a full shell parser — it rejects anything containing redirection, substitution, or
-    /// privilege-escalation syntax outright, then requires every `;`/`&&`/`||`/`|`-separated segment
-    /// to start with a recognized read-only command (with extra checks for `git` and `find`, whose
-    /// subcommands/flags can otherwise mutate or delete).
+    /// Whether `command` may run unasked under Terminal Safety Level "Allow Safe Read-Only
+    /// Commands". See `SafeShellCommand` for the rules and the bypasses they close.
     public static func isSafeReadOnlyCommand(_ command: String) -> Bool {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return true }
-
-        let dangerousSubstrings = [">", ">>", "<(", "$(", "`", "sudo", "chmod", "chown", "kill", "curl", "wget", "nc ", "ssh", "scp", "eval", "xargs", "rm ", "mv ", ":(){"]
-        let lowered = trimmed.lowercased()
-        for marker in dangerousSubstrings where lowered.contains(marker) {
-            return false
-        }
-
-        let readOnlyCommands: Set<String> = [
-            "ls", "cat", "head", "tail", "wc", "pwd", "echo", "date", "whoami", "which",
-            "file", "du", "df", "ps", "grep", "rg", "sort", "uniq", "uname", "sw_vers",
-            "hostname", "env", "printenv", "stat", "tree", "less", "more", "diff"
-        ]
-        let readOnlyGitSubcommands: Set<String> = ["status", "log", "diff", "show", "branch", "remote", "blame", "describe", "rev-parse"]
-
-        let segments = trimmed.components(separatedBy: CharacterSet(charactersIn: ";|&"))
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-
-        guard !segments.isEmpty else { return false }
-
-        for segment in segments {
-            let tokens = segment.split(separator: " ").map(String.init)
-            guard let head = tokens.first else { return false }
-
-            if head == "git" {
-                guard tokens.count > 1, readOnlyGitSubcommands.contains(tokens[1]) else { return false }
-                continue
-            }
-            if head == "find" {
-                if segment.contains("-delete") || segment.contains("-exec") { return false }
-                continue
-            }
-            guard readOnlyCommands.contains(head) else { return false }
-        }
-
-        return true
+        SafeShellCommand.isSafe(command)
     }
 
     /// Lines returned when the caller does not ask for a specific window.

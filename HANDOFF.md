@@ -1421,6 +1421,29 @@ workspace is not a git repository) edits would land in the user's checkout, so t
 and the prompt says to read, build and report instead. Copying *into* the worktree from outside
 is refused too: it reads outside. `SubAgentToolPolicyTests`.
 
+## The safe-command allowlist ran arbitrary code (2026-09-19)
+
+Terminal Safety Level "Allow Safe Read-Only Commands" is the default, and an allowed command runs
+**without asking**. The check looked only at each segment's first word plus a list of banned
+substrings, and all of these passed as read-only: `env python3 -c …` / `env sh -c …` (`env` runs
+any program), `rg --pre sh` (ripgrep runs the preprocessor on every file), `sort -o FILE`,
+`uniq IN FILE`, `tree -o FILE`, `find -fprint FILE`, `git log --output=FILE` (each overwrites
+any file), `git branch -D`, `git remote add`. An instruction planted in a page or README could get
+code run in one tool call — and that code could send data anywhere, around `fetch_url`'s
+approval.
+
+`SafeShellCommand` replaces it: the command is tokenised as the shell reads it (quotes and
+backslashes removed, so `'--pre'` and `--pr\e` are seen; unbalanced quotes are refused); `env`,
+`printenv`, `less` and `more` are off the list; each command's executing or writing flags are
+refused (`find -exec*/-ok*/-delete/-fprint*/-fls`, `rg --pre*`, `sort -o/--output/--compress-program`,
+`uniq` with an output operand, `tree -o`, `file -C`, `git --output/--ext-diff/--textconv`,
+`hostname`/`date` operands that set things); `git branch` and `git remote` only list; git global
+options before the subcommand are refused; and for commands whose danger hangs on a flag an
+unquoted glob is refused, because a repository can hold a file named `--pre=sh`. Command names
+were dropped from the banned substrings — every command must start with an allowlisted word, and
+matching names as text refused `rg "func (x|y)"` (`func ` contains `nc `).
+`SafeShellBypassTests` lists every bypass above.
+
 ## What is left
 
 ### Settings still dead
