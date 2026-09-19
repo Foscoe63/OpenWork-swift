@@ -1293,7 +1293,7 @@ with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afte
 - **1.3.2 (build 5), 2026-09-19:** built from `main` at `94161f4` (PR #21 merged) in a separate
   worktree so a test run in the main checkout was not disturbed. Submission
   `214329d1-783e-4eca-bb0d-30f115244868`, Accepted and stapled; `spctl` reports
-  `Notarized Developer ID`. Zip 52.5MB, sha256
+  `Notarized Developer ID`. Zip 52.7MB, sha256
   `a33b836d6f707585d1cac84ae5a79c55e307f7af585978e958746489c00de668`. Installed over 1.3.1 in
   `/Applications`; the Developer ID is unchanged, so privacy grants given to 1.3.1 carry over.
 
