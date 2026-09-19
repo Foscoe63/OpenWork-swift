@@ -1352,6 +1352,24 @@ Tests: `WorkspaceBootstrapTests`, `SessionCommitTests`, and range cases in `Vibe
   build + screenshot, or run + tests) / find and fix a bug / add tests. The four fixed demo cards
   about SwiftOpenWork itself are gone.
 
+## Sandbox symlink escape closed; session review off the main thread (2026-09-19)
+
+- **The file sandbox could be walked around through a symlink.** `canonicalPath` resolved
+  symlinks only in the file's immediate parent, and only when that parent existed. With a link
+  `escape → /somewhere/outside` in the workspace, `file_write` to `escape/newdir/file.txt` passed
+  the containment check — `newdir` did not exist, so nothing was resolved and the path still looked
+  inside — and `writeFile` then created `newdir` on the far side of the link. A cloned repository
+  can carry such a link, so a prompt-injected agent could create files anywhere the user can write
+  (existing files like `~/.zshrc` were safe: their parent exists and did resolve). It now walks
+  the path component by component, following every link (relative, absolute, dangling) and
+  applying `..` after the link it follows, as the kernel does, with a 40-link cap for loops. The
+  same check guards all 19 file tools and the shell-redirect check.
+  `SandboxContainmentTests` covers the escape end to end through `file_write`.
+- **Session change review no longer runs git on the main thread.** Opening the sheet ran
+  `git status`, and every file click `git diff`, synchronously — a freeze on a large repository
+  or diff. Both run detached now, and a slow diff for a file clicked earlier does not overwrite
+  the one selected since.
+
 ## What is left
 
 ### Settings still dead

@@ -1889,17 +1889,48 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     /// workspace pointing at `/etc` passed the containment check. Resolving symlinks closes that;
     /// the last component is resolved separately because a path that does not exist yet (a file
     /// about to be written) resolves to nothing otherwise.
+    /// The real location `path` names, as the kernel would reach it: every symlink along the way
+    /// is followed, including ones sitting *above* folders that do not exist yet, and `..` is
+    /// applied after the link it follows, as the kernel does.
+    ///
+    /// Resolving only the file's parent let `link/newdir/file` through when `link` pointed outside
+    /// the workspace: `newdir` did not exist, so nothing was resolved, the path still looked
+    /// inside, and `file_write` created the folders on the far side of the link.
     public static func canonicalPath(_ path: String) -> String {
         let expanded = (path as NSString).expandingTildeInPath
-        let url = URL(fileURLWithPath: expanded)
-        if FileManager.default.fileExists(atPath: expanded) {
-            return url.resolvingSymlinksInPath().path
+        let absolute = expanded.hasPrefix("/")
+            ? expanded
+            : (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(expanded)
+        var linksLeft = 40
+        let resolved = resolvePath(components: absolute.split(separator: "/").map(String.init), linksLeft: &linksLeft)
+        // Foundation reports /private/var, /private/tmp and /private/etc by their /var, /tmp and
+        // /etc links; follow suit so paths from both sources compare equal.
+        for top in ["var", "tmp", "etc"] where resolved == "/private/\(top)" || resolved.hasPrefix("/private/\(top)/") {
+            return String(resolved.dropFirst("/private".count))
         }
-        let parent = url.deletingLastPathComponent()
-        let resolvedParent = FileManager.default.fileExists(atPath: parent.path)
-            ? parent.resolvingSymlinksInPath()
-            : URL(fileURLWithPath: (parent.path as NSString).standardizingPath)
-        return resolvedParent.appendingPathComponent(url.lastPathComponent).path
+        return resolved
+    }
+
+    private static func resolvePath(components: [String], linksLeft: inout Int) -> String {
+        var current = "/"
+        for (index, part) in components.enumerated() {
+            if part.isEmpty || part == "." { continue }
+            if part == ".." {
+                // `current` is already real, so its parent is where `..` really goes.
+                current = (current as NSString).deletingLastPathComponent
+                if current.isEmpty { current = "/" }
+                continue
+            }
+            let candidate = (current as NSString).appendingPathComponent(part)
+            if linksLeft > 0, let target = try? FileManager.default.destinationOfSymbolicLink(atPath: candidate) {
+                linksLeft -= 1
+                let targetPath = target.hasPrefix("/") ? target : (current as NSString).appendingPathComponent(target)
+                let rest = components[(index + 1)...]
+                return resolvePath(components: targetPath.split(separator: "/").map(String.init) + rest, linksLeft: &linksLeft)
+            }
+            current = candidate
+        }
+        return current
     }
 
     private func sandboxDenial(for rawPath: String, workspace: Workspace, settings: AppSettings, startTime: Double) -> ToolExecutionResult? {

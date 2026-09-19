@@ -223,15 +223,20 @@ public struct SessionChangeReviewView: View {
         return .orange
     }
 
+    /// Git runs off the main thread throughout: on a large repository `git status` and a big
+    /// diff take long enough to freeze the sheet.
     private func reload() {
         let messages = appState.currentSession?.messages ?? []
         files = SessionChangeSummary.changedFiles(in: messages, workspaceRoot: root)
-        isRepository = GitTools.status(in: root).isRepository
         if let first = files.first {
             selected = selected.flatMap { current in files.first { $0.path == current.path } } ?? first
-            if let selected { loadDiff(for: selected) }
         }
-        refreshPending()
+        let root = root
+        Task {
+            isRepository = await Task.detached { GitTools.isRepository(root) }.value
+            if let selected { loadDiff(for: selected) }
+            refreshPending()
+        }
     }
 
     /// Ask git which session files still differ. One `git status` per file, so off the main thread.
@@ -281,9 +286,16 @@ public struct SessionChangeReviewView: View {
             diffText = ""
             return
         }
-        let result = GitTools.diff(in: root, path: file.path, staged: false)
-        diffText = result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "No uncommitted diff for \(file.path). It may have been committed, reverted, or changed outside git."
-            : result.text
+        diffText = "Loading diff…"
+        let root = root
+        let path = file.path
+        Task {
+            let result = await Task.detached { GitTools.diff(in: root, path: path, staged: false) }.value
+            // A slower diff for a file clicked earlier must not replace the one now selected.
+            guard selected?.path == path else { return }
+            diffText = result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "No uncommitted diff for \(path). It may have been committed, reverted, or changed outside git."
+                : result.text
+        }
     }
 }
