@@ -1404,6 +1404,23 @@ Tests: `WorkspaceBootstrapTests`, `SessionCommitTests`, and range cases in `Vibe
   `saveSessions` goes through `SessionWriter`, one background queue where a newer snapshot
   replaces an older one still waiting. `loadSessions` and `applicationWillTerminate` flush first.
 
+## Sub-agents go through approval; edits inside their own worktree do not ask (2026-09-19)
+
+Only `AgentRunner` ever called `ToolApprovalManager.requestApproval`. `SubAgentExecutor` ran its
+tools straight through `ToolExecutionEngine.execute`, so `file_delete`, `run_app`, `git_commit`,
+`revert_changes` and shell commands under "Always Ask" ran unasked, while the sub-agent's prompt
+promised they would be refused and `refusedActions` — built to report them — stayed empty.
+
+`SubAgentToolPolicy.approvalReason` now gates every sub-agent call. It starts from
+`AgentRunner.approvalReason` and lets one class through: **file edits whose every path is inside
+the sub-agent's own worktree** (write, edit, multi-edit, move, copy, delete, rename; relative
+paths resolve against the worktree, symlinks are followed, `.git` is excluded), and `git_commit`
+of that worktree. Anything else that would ask is requested inside the unattended scope, so it is
+refused, recorded in `refusedActions`, and the model is told not to retry. With no worktree (the
+workspace is not a git repository) edits would land in the user's checkout, so they are refused
+and the prompt says to read, build and report instead. Copying *into* the worktree from outside
+is refused too: it reads outside. `SubAgentToolPolicyTests`.
+
 ## What is left
 
 ### Settings still dead
@@ -1421,16 +1438,6 @@ macOS is the only authority on whether a login item is registered.
   un-publish the key; only revoking it at Firecrawl does.
 
 ### Worth building next
-
-- **Sub-agents do not go through tool approval (found 2026-09-19, not fixed).** Only
-  `AgentRunner` calls `ToolApprovalManager.requestApproval`; `SubAgentExecutor` runs its tools
-  through `ToolExecutionEngine.execute` directly, so `file_delete`, `run_app`, `git_commit`, and
-  shell commands under "Always Ask" run without asking. Its prompt says approvals will be refused
-  and `refusedActions` exists to report them, but nothing enforces it, so that list is always
-  empty. Only `fetch_url` is gated so far. Enforcing all of `approvalReason` would also refuse
-  file edits, which sub-agents exist to make; the likely rule is to allow edits inside the
-  sub-agent's own worktree and refuse the rest. That is a product decision, so it was left for
-  the owner.
 
 - Nothing listed. (`SwiftOpenWork.podspec` was deleted on 2026-09-19: it named a tag that never
   existed, depended on pods that do not exist and targeted iOS. This is an app, not a pod.)

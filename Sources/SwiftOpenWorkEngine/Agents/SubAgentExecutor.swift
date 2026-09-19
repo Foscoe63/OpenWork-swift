@@ -139,8 +139,10 @@ public enum SubAgentExecutor {
         \(subAgent.systemPrompt)
 
         You are \(subAgent.name), a \(subAgent.role) sub-agent working for \(parentAgent.name).
-        You are running unattended: nobody is watching, so you cannot ask questions. Anything \
-        that needs a person's approval will be refused and reported.
+        You are running unattended: nobody is watching, so you cannot ask questions. \
+        \(worktree != nil
+            ? "You may create, edit, move and delete files inside your working directory, and commit there. Anything else that needs a person's approval — files outside it, launching apps, and similar — will be refused and reported."
+            : "Your working directory is the user's own checkout, so changing files there needs a person's approval and will be refused and reported. Read, search, build and report instead.")
 
         Your working directory is \(effectiveWorkspace.folderPath)\(worktree != nil ? " — an isolated worktree. Changes here do not affect the user's checkout." : ".")
 
@@ -216,17 +218,22 @@ public enum SubAgentExecutor {
                     // model is really running.
                     let parentSession = AgentRunContext.current?.sessionId ?? ""
                     let frame = AgentRunContext.Frame(provider: provider, model: model, depth: depth, sessionId: parentSession)
-                    // A sub-agent is unattended, so a fetch that would ask is refused and reported
-                    // rather than run: sites the user approved in the parent chat still work.
-                    if call.toolName == "fetch_url",
-                       let reason = AgentRunner.fetchApprovalReason(argumentsJson: call.argumentsJson, settings: settings, sessionId: parentSession) {
+                    // Unattended: whatever would ask a person is refused and recorded, except edits
+                    // inside this sub-agent's own worktree (see `SubAgentToolPolicy`).
+                    if let reason = SubAgentToolPolicy.approvalReason(
+                        toolName: call.toolName,
+                        argumentsJson: call.argumentsJson,
+                        worktreePath: worktree?.path,
+                        settings: settings,
+                        sessionId: parentSession
+                    ) {
                         _ = await ToolApprovalManager.shared.requestApproval(
                             callId: call.id, toolName: call.toolName, argumentsJson: call.argumentsJson, reason: reason
                         )
                         messages.append(ChatMessage(
                             id: call.id,
                             role: .tool,
-                            content: "Refused: \(reason) Sub-agents run unattended, so nobody can approve it. Continue without it and say in your report that this fetch was skipped."
+                            content: "Refused: \(reason) Sub-agents run unattended, so nobody can approve it. Do not retry it; continue without it and say in your report that it was skipped."
                         ))
                         continue
                     }
