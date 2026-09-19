@@ -1232,6 +1232,11 @@ public struct SettingsView: View {
                         .toggleStyle(.switch)
                 }
 
+                SettingsRow(title: "Ask Before Fetching New Sites", subtitle: "Approve each new site per chat, and every fetch from this Mac or local network. Off lets automations fetch unattended", icon: "hand.raised") {
+                    Toggle("", isOn: $appState.settings.askBeforeFetchingNewSites)
+                        .toggleStyle(.switch)
+                }
+
                 SettingsRow(title: "Sandbox Agent File System", subtitle: "Restrict write operations strictly to workspace directory", icon: "lock.shield") {
                     Toggle("", isOn: $appState.settings.sandboxAgentFileSystem)
                         .toggleStyle(.switch)

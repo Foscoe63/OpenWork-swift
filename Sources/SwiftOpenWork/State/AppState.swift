@@ -197,6 +197,8 @@ public final class AppState: ObservableObject {
     /// Attachments offered to the composer from elsewhere — a preview screenshot or a picked
     /// element. The composer owns its attachment list, so it takes these and clears the inbox.
     @Published public var composerAttachmentInbox: [MessageAttachment] = []
+    /// When a streaming reply last reached `sessions.json`; see `onMessageUpdated`.
+    private var lastStreamingSessionSave = Date.distantPast
     /// Follow-up typed while a turn is running — sent automatically when the turn finishes.
     @Published public var queuedFollowUp: QueuedComposerMessage?
     /// Set by tool cards when the user wants the turn-change sheet; ChatView observes it.
@@ -990,7 +992,14 @@ public final class AppState: ObservableObject {
                         } else {
                             self.sessions[sIdx].messages.append(updatedMsg)
                         }
-                        self.persistence.saveSessions(self.sessions)
+                        // Every streamed chunk lands here. Saving each one rewrote all chat
+                        // history tens of times a second; once a second is enough while it
+                        // streams, and the finished message is always saved.
+                        let now = Date()
+                        if !updatedMsg.isStreaming || now.timeIntervalSince(self.lastStreamingSessionSave) >= 1 {
+                            self.lastStreamingSessionSave = now
+                            self.persistence.saveSessions(self.sessions)
+                        }
                     }
                 },
                 onSubAgentTaskCreated: { [weak self] subTask in

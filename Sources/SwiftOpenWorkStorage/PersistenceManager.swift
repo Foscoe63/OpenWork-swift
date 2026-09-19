@@ -5,6 +5,7 @@ public final class PersistenceManager: Sendable {
     public static let shared = PersistenceManager()
 
     private let storage = StorageService.shared
+    private let sessionWriter = SessionWriter()
 
     private init() {
         // Core's logger cannot see settings; point its verbose switch at them.
@@ -751,6 +752,7 @@ public final class PersistenceManager: Sendable {
 
     // MARK: - Sessions
     public func loadSessions() -> [Session] {
+        flushSessionWrites()
         var items: [Session] = []
         if let loaded = storage.load([Session].self, from: "sessions.json"), !loaded.isEmpty {
             items = loaded
@@ -829,8 +831,17 @@ public final class PersistenceManager: Sendable {
         ]
     }
 
+    /// Chat history is the largest file and the most often written: a reply used to rewrite all
+    /// of it, pretty-printed, on the main thread for every streamed chunk. Writes now happen on
+    /// one background queue, in order, and only the newest snapshot waiting is written.
     public func saveSessions(_ sessions: [Session]) {
-        storage.save(sessions, to: "sessions.json")
+        sessionWriter.save(sessions, with: storage)
+    }
+
+    /// Wait until every requested `saveSessions` is on disk: before reading the file back, and
+    /// when the app quits.
+    public func flushSessionWrites() {
+        sessionWriter.flush()
     }
 
     // MARK: - Tools
@@ -1299,3 +1310,29 @@ public final class PersistenceManager: Sendable {
     }
 }
 
+/// Writes `sessions.json` off the calling thread. A burst of saves costs one write per snapshot
+/// the queue actually reaches: a newer snapshot replaces an older one still waiting.
+final class SessionWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "SwiftOpenWork.sessions-write", qos: .utility)
+    private let lock = NSLock()
+    private var pending: [Session]?
+
+    func save(_ sessions: [Session], with storage: StorageService) {
+        lock.lock()
+        let alreadyScheduled = pending != nil
+        pending = sessions
+        lock.unlock()
+        guard !alreadyScheduled else { return }
+        queue.async { [self] in
+            lock.lock()
+            let snapshot = pending
+            pending = nil
+            lock.unlock()
+            if let snapshot { storage.save(snapshot, to: "sessions.json") }
+        }
+    }
+
+    func flush() {
+        queue.sync {}
+    }
+}

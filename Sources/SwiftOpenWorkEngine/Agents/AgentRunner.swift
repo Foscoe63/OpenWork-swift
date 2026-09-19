@@ -1275,7 +1275,8 @@ public final class AgentRunner {
                 if let reason = AgentRunner.approvalReason(
                     toolName: toolName,
                     argumentsJson: argsJson,
-                    settings: loadedSettings
+                    settings: loadedSettings,
+                    sessionId: session.id
                 ) {
                     callInfo.status = .waitingApproval
                     callInfo.approvalReason = reason
@@ -1310,6 +1311,7 @@ public final class AgentRunner {
                         continue
                     }
 
+                    AgentRunner.rememberApprovedFetch(toolName: toolName, argumentsJson: argsJson, sessionId: session.id)
                     callInfo.status = .running
                     accumulator.updateToolCall(callInfo)
                 } else {
@@ -1406,7 +1408,7 @@ public final class AgentRunner {
                         """
                         accumulator.appendNotice("Blocked a repeated failing call to \(toolName).")
                     } else {
-                        let runFrame = AgentRunContext.Frame(provider: provider, model: model, depth: 0)
+                        let runFrame = AgentRunContext.Frame(provider: provider, model: model, depth: 0, sessionId: session.id)
                         let result = await AgentRunContext.$current.withValue(runFrame) {
                             await ToolExecutionEngine.shared.execute(
                                 toolName: toolName,
@@ -1793,14 +1795,47 @@ public final class AgentRunner {
     /// or nil if it can proceed immediately. Deleting a file is always irreversible enough to ask;
     /// shell commands are gated by the user's configured Terminal Safety Level.
     /// Internal rather than private so tests can prove a newly added writing tool is gated here.
+    /// `fetch_url` asks per new site and for every local address; see `WebFetchPolicy`. With web
+    /// access off the tool refuses by itself, so there is nothing to ask about.
+    static func fetchApprovalReason(argumentsJson: String, settings: AppSettings, sessionId: String) -> String? {
+        guard settings.allowWebAccess, settings.askBeforeFetchingNewSites,
+              let url = fetchURL(argumentsJson: argumentsJson) else { return nil }
+        let previewPorts = Set(DevServerManager.shared.servers.compactMap { $0.url?.port })
+        return WebFetchPolicy.approvalReason(
+            for: url,
+            allowedHosts: WebFetchAllowlist.shared.hosts(for: sessionId),
+            previewPorts: previewPorts
+        )
+    }
+
+    /// Approving a fetch from a public site allows that site for the rest of the chat. Local
+    /// addresses are never remembered: they ask every time.
+    static func rememberApprovedFetch(toolName: String, argumentsJson: String, sessionId: String) {
+        guard toolName == "fetch_url", !sessionId.isEmpty,
+              let url = fetchURL(argumentsJson: argumentsJson),
+              let host = WebFetchPolicy.normalizedHost(url),
+              !WebFetchPolicy.isLocal(host: host) else { return }
+        WebFetchAllowlist.shared.allow(host, for: sessionId)
+    }
+
+    private static func fetchURL(argumentsJson: String) -> URL? {
+        guard let data = argumentsJson.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = (dict["url"] as? String) ?? (dict["href"] as? String) else { return nil }
+        return URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     public static func approvalReason(
         toolName: String,
         argumentsJson: String = "{}",
-        settings: AppSettings
+        settings: AppSettings,
+        sessionId: String = ""
     ) -> String? {
         switch toolName {
         case "ask_user":
             return nil
+        case "fetch_url":
+            return fetchApprovalReason(argumentsJson: argumentsJson, settings: settings, sessionId: sessionId)
         case "file_write", "write_file", "create_file", "save_file",
              "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol",
              "file_move", "move_file", "mv",
