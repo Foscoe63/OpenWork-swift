@@ -1,16 +1,18 @@
 # Handoff
 
-Written 2026-09-14, extended through 2026-09-17. Everything below is verified against the code and
+Written 2026-09-14, extended through 2026-09-19. Everything below is verified against the code and
 against this machine, not remembered.
 
 ## Where things stand
 
 | Repo | Pushed | Tests |
 |---|---|---|
-| SwiftOpenWork | `origin/main` is `e1f6afe` (release `1.2.0` at `51abca3`); this branch merges the local editor/preview/ghost-text work onto that | see *Verifying a change* |
+| SwiftOpenWork | `origin/main`; the module split, Swift 6 and test-host isolation landed in PR #18 | see *Verifying a change* |
 | GrizzyBot | yes, `ecce520` | 538 |
 
-Latest **released** build: 1.2.0, the first under the SwiftOpenWork name (signed, not notarised). This working tree is an unreleased integration of 1.2.0's language-server stack with the local seventh-pass editor, live preview, ghost-text and local-engine sharing. It is **not** on `origin/main` until this branch is reviewed and pushed.
+Latest **published** release: 1.3.1 (build 4), notarised and stapled — see *Notarisation works
+(2026-09-19)* below. The copy that was in `/Applications` on 2026-09-19 was a local 1.3.0 build
+signed with `SwiftOpenWork Local Signing`, not the published zip.
 
 > **The app was renamed SwiftOpenWork on 2026-09-16** (bundle ID `io.github.foscoe63.SwiftOpenWork`,
 > was `ai.openwork.OpenWorkSwift`). Sections written before that say "OpenWork" and use the old
@@ -1267,6 +1269,28 @@ with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afte
   component and was treated as installed (the only CI failure). The npm lifecycle test no longer
   assumes the server is a child of the launched shell.
 
+## Notarisation works (2026-09-19)
+
+- **Credentials:** a notarytool keychain profile, `swiftopenwork`, for Apple ID
+  `deepgapnc@gmail.com`, team `5XKHL47YG3`, with an app-specific password. Stored with
+  `xcrun notarytool store-credentials`. No App Store Connect API key is needed.
+- **Script:** `Scripts/notarize-release.sh` accepts `NOTARY_PROFILE` as an alternative to the
+  `APPLE_API_*` key variables. A full release is now:
+
+  ```bash
+  DEVELOPER_ID_APP="Developer ID Application: Edward Griswold (5XKHL47YG3)" NOTARY_PROFILE=swiftopenwork Scripts/notarize-release.sh
+  ```
+
+  It takes about 10 minutes on this machine: build, sign, a few minutes in Apple's queue, staple,
+  zip. `spctl` then reports `accepted, source=Notarized Developer ID`.
+- **Version:** bumped to 1.3.1, build 4, in both `project.yml` and `project.pbxproj` (the
+  checked-in project is edited directly, not regenerated). 1.3.1 carries the 20 commits after the
+  `1.3.0` tag: the module split, Swift 6 language mode, test-host isolation and the SourceKit and
+  TypeScript fixes.
+- **Built 2026-09-19:** submission `b0952c9a-4ba6-4cab-ace8-f91636021e79`, Accepted and stapled.
+  `build/release/SwiftOpenWork.zip`, 52.5MB, sha256
+  `6529c2d2022a27bf8ec3ef19609471eb5d7820354dc1979a78ba62af96b82fca`.
+
 ## What is left
 
 ### Settings still dead
@@ -1276,23 +1300,16 @@ macOS is the only authority on whether a login item is registered.
 
 ### Needs you
 
-- **Review and land this integration branch** (`integrate/local-on-1.2`) onto `main`. It is not
-  on `origin/main` yet. 1.2.0 stays the last published release until you cut the next one.
-- **Re-grant Accessibility and Screen Recording** to SwiftOpenWork, and remove the old OpenWork
-  entries (System Settings → Privacy & Security). An app cannot do this itself. 1.2.0, signed with
-  the Developer ID, is installed in `/Applications`; the ad-hoc-signed 1.1.0 copy that was there
-  is in the Trash. Grant the installed copy: grants follow the code signature, so a grant given to
-  the old copy would not have carried over.
-- **Notarise future releases.** 1.2.0 shipped signed but not notarised because the App Store
-  Connect issuer ID was not available. Once you have it (App Store Connect → Users and Access →
-  Integrations → App Store Connect API), either run the full `Scripts/notarize-release.sh`, or
-  store credentials once with `xcrun notarytool store-credentials` so the next release can use a
-  keychain profile.
+- **Re-grant Accessibility and Screen Recording** after installing the notarised build in
+  `/Applications`, and remove the old OpenWork entries (System Settings → Privacy & Security). An
+  app cannot do this itself. Grants follow the code signature: the copy installed on 2026-09-19 was
+  a local 1.3.0 build signed with `SwiftOpenWork Local Signing`, so its grants do not carry over. Grants given to
+  a Developer ID build carry over to later Developer ID builds.
 
 ### Worth building next
 
-- **Test host UserDefaults and Keychain are still real.** The data folder is isolated; preferences
-  and Keychain items written under test are not.
+- **`SwiftOpenWork.podspec` still says `1.0.0`** and `swift_version` 5.9. Either bump it on
+  release with `project.yml` or delete it if nothing consumes it.
 
 ### Explicitly decided against — with reasons, so they are not re-proposed
 
