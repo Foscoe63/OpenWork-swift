@@ -557,6 +557,11 @@ public struct ComposerView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+            .onReceive(appState.$composerAttachmentInbox) { inbox in
+                guard !inbox.isEmpty else { return }
+                addAttachments(inbox)
+                appState.composerAttachmentInbox.removeAll()
+            }
             .onDrop(of: [.fileURL], isTargeted: nil) { providers in
                 importDroppedProviders(providers)
             }

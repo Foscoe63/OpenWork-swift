@@ -6,6 +6,9 @@ public struct ChatView: View {
     @State private var showingChangeReview = false
     @State private var showingSessionChangeReview = false
     @State private var turnChangeCount = 0
+    /// What the empty chat offers, from the workspace's top-level files.
+    @State private var starterKind: StarterSuggestions.ProjectKind = .other
+    @State private var starters: [StarterSuggestions.Suggestion] = StarterSuggestions.suggestions(for: .other)
     @ObservedObject var appState: AppState
 
     public init(appState: AppState) {
@@ -319,7 +322,9 @@ public struct ChatView: View {
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
 
-                Text("Autonomous, local & cloud agent orchestrator powered by Swift")
+                Text(starterKind == .empty
+                     ? "What should we build in \(appState.currentWorkspace.name)?"
+                     : "Working in \(appState.currentWorkspace.name)")
                     .font(.system(size: 13))
                     .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
             }
@@ -329,30 +334,9 @@ public struct ChatView: View {
                 LazyVGrid(columns: [
                     GridItem(.adaptive(minimum: 180, maximum: 230), spacing: 12)
                 ], spacing: 12) {
-                    starterCard(
-                        title: "Multi-Agent System",
-                        subtitle: "Spawn sub-agents to collaborate on complex software architecture",
-                        icon: "person.3.fill",
-                        prompt: "Design and implement a multi-agent workflow for continuous code quality inspection with specialized sub-agents."
-                    )
-                    starterCard(
-                        title: "Local Ollama Inference",
-                        subtitle: "Execute offline with locally installed models (Llama 3, DeepSeek R1)",
-                        icon: "desktopcomputer",
-                        prompt: "Write a high performance Swift concurrency pipeline using async algorithms and structured concurrency."
-                    )
-                    starterCard(
-                        title: "Deep Code Analysis",
-                        subtitle: "Scan workspace files, detect bottlenecks, and refactor",
-                        icon: "curlybraces",
-                        prompt: "Analyze the current workspace files, check for memory leaks and race conditions, and recommend optimizations."
-                    )
-                    starterCard(
-                        title: "Automations & Tools",
-                        subtitle: "Execute safe shell commands and scheduled task triggers",
-                        icon: "bolt.badge.clock.fill",
-                        prompt: "Explain how SwiftOpenWork automations trigger recurring agent workflows."
-                    )
+                    ForEach(starters) { starter in
+                        starterCard(title: starter.title, subtitle: starter.subtitle, icon: starter.icon, prompt: starter.prompt)
+                    }
                 }
                 .frame(maxWidth: 880)
             }
@@ -363,6 +347,12 @@ public struct ChatView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: appState.currentWorkspace.folderPath) {
+            let folder = appState.currentWorkspace.folderPath
+            let kind = await Task.detached { StarterSuggestions.kind(ofFolder: folder) }.value
+            starterKind = kind
+            starters = StarterSuggestions.suggestions(for: kind)
+        }
     }
 
     private func starterCard(title: String, subtitle: String, icon: String, prompt: String) -> some View {

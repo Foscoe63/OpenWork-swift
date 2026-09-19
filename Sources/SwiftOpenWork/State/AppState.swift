@@ -194,6 +194,9 @@ public final class AppState: ObservableObject {
     /// `isGenerating` describes only the chat turn on screen.
     @Published public var backgroundRuns: [BackgroundRun] = []
     @Published public var composerText: String = ""
+    /// Attachments offered to the composer from elsewhere — a preview screenshot or a picked
+    /// element. The composer owns its attachment list, so it takes these and clears the inbox.
+    @Published public var composerAttachmentInbox: [MessageAttachment] = []
     /// Follow-up typed while a turn is running — sent automatically when the turn finishes.
     @Published public var queuedFollowUp: QueuedComposerMessage?
     /// Set by tool cards when the user wants the turn-change sheet; ChatView observes it.
@@ -1271,6 +1274,14 @@ public final class AppState: ObservableObject {
         }
 
         showToast("Switched to '\(target.name)'")
+    }
+
+    /// Put text and optional attachments in the message box, after anything already typed.
+    public func addToComposer(text: String, attachments: [MessageAttachment] = []) {
+        if !text.isEmpty {
+            composerText = composerText.isEmpty ? text : composerText + "\n\n" + text
+        }
+        composerAttachmentInbox.append(contentsOf: attachments)
     }
 
     public func showToast(_ message: String) {

@@ -1322,6 +1322,30 @@ starting a project and keeping a version that works.
 
 Tests: `WorkspaceBootstrapTests`, `SessionCommitTests`, and range cases in `VibeCodingSurfaceTests`.
 
+## Show, don't tell: pointing, pictures and self-checks (2026-09-19)
+
+- **Errors ride along with edits.** After `file_write`, `edit_file` or `multi_edit`, a language
+  server that is *already running* for the file is asked for diagnostics (4s cap, errors only, 10
+  lines) and the verdict is appended to the tool result — "sourcekit-lsp reports 1 error in …" or
+  "… reports no errors in …". `LanguageServerPool.runningSession(for:)` never starts, restarts or
+  waits for a server, so a cold workspace's edits are exactly as before. The instructions already
+  said to verify; smaller local models skip it, and now they see their error in the same step.
+  `testEditsCarryErrorsFromAServerThatIsAlreadyRunning` runs it against real sourcekit-lsp.
+- **Select an element in the preview.** The cursor button on the preview toolbar injects
+  `PreviewElementPicker.startScript`: hover highlights with a size label, the next click is
+  swallowed (a button is picked, not pressed), Escape cancels, a navigation ends pick mode. The
+  pick — selector, tag, text, outer HTML (1,500 chars), frame — goes into the message box as a
+  block to write around, with a screenshot cropped to the element. `PreviewElementPickerTests`
+  drives the script in a real web view.
+- **Screenshot to chat.** The camera button attaches a PNG of the page as shown.
+  `AppState.addToComposer(text:attachments:)` and `composerAttachmentInbox` are how anything
+  outside the composer adds attachments; the composer takes and clears the inbox.
+- **Empty-chat suggestions fit the workspace.** `StarterSuggestions` reads the top level only:
+  an empty folder (git, `.gitignore`, `AGENTS.md` and staging folders do not count) gets four
+  small things to build; a web, Swift or Python project gets explain / run-and-check (preview,
+  build + screenshot, or run + tests) / find and fix a bug / add tests. The four fixed demo cards
+  about SwiftOpenWork itself are gone.
+
 ## What is left
 
 ### Settings still dead
