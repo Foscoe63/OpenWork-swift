@@ -1291,6 +1291,37 @@ with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afte
   `build/release/SwiftOpenWork.zip`, 52.5MB, sha256
   `6529c2d2022a27bf8ec3ef19609471eb5d7820354dc1979a78ba62af96b82fca`.
 
+## The vibe-coding loop: new projects and saving progress (2026-09-19)
+
+A review of the prompt → watch → see → fix loop found it well covered (queued follow-ups, image
+paste, preview errors into the composer, rules files, rewind). The gaps were at the two ends:
+starting a project and keeping a version that works.
+
+- **New workspaces get a git repository.** `WorkspaceBootstrap` runs when a workspace is created:
+  a new or empty folder (Finder metadata and the staging folders do not count) gets the chosen
+  starter files, a `.gitignore`, `git init` and a first commit. Session diffs, agent worktrees and
+  `git_commit` all need a repository and silently had none on a fresh workspace. A folder that
+  already has files is only registered; a folder inside an existing repository gets the files but
+  no nested repository. No git identity → no first commit, and the toast says why.
+- **Starter templates.** "Start From" in both new-workspace sheets: empty, static site, React
+  (Vite), SwiftUI Mac app (Swift package), Python script. Each carries an `AGENTS.md` telling the
+  agent how to run and check that kind of project. The SwiftUI and Python starters were built and
+  run; the React one was not (`npm install` downloads packages), only its `package.json` parsed.
+- **One place creates workspaces.** `AppState.createWorkspace` replaces two copies of the same
+  inline code in `WorkspaceSwitcherMenu` and `SettingsView`.
+- **No more `input/` and `output/` in code projects.** New workspaces get the staged pipeline only
+  when the category is not Project and no starter was chosen. Existing workspaces are unchanged
+  (this repo's own `input/`/`output/` came from that default).
+- **You can commit from the app.** "Commit…" in the session change review stages and commits the
+  session's files that git still sees as changed, with a checkbox per file and an editable
+  message. `SessionCommit` uses `git commit -- <paths>`, so anything else you had staged stays
+  staged and out of the commit. It is not a tool: the agent still cannot commit on your checkout.
+- **Editor selections mention as ranges.** "Mention in Chat" sends `@path:first-last` for a
+  selection (`EditorText.lineSpan`; a whole-line selection's trailing newline does not add a
+  line), and the composer attaches exactly those lines, capped at 400.
+
+Tests: `WorkspaceBootstrapTests`, `SessionCommitTests`, and range cases in `VibeCodingSurfaceTests`.
+
 ## What is left
 
 ### Settings still dead

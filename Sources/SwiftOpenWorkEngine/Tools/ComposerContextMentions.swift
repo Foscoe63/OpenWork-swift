@@ -1,6 +1,6 @@
 import Foundation
 
-/// Resolves `@path` / `@path:line` tokens in the composer into workspace context the agent can read.
+/// Resolves `@path`, `@path:line` and `@path:first-last` tokens in the composer into workspace context the agent can read.
 public enum ComposerContextMentions {
 
     public struct Suggestion: Identifiable, Equatable, Sendable {
@@ -12,19 +12,35 @@ public enum ComposerContextMentions {
     public struct ParsedMention: Equatable, Sendable {
         public var pathToken: String
         public var line: Int?
+        /// Last line of a `first-last` range; nil for a single line.
+        public var endLine: Int?
+
+        public init(pathToken: String, line: Int?, endLine: Int? = nil) {
+            self.pathToken = pathToken
+            self.line = line
+            self.endLine = endLine
+        }
     }
 
-    /// `@Sources/Foo.swift` or `@Sources/Foo.swift:42`
+    /// `@Sources/Foo.swift`, `@Sources/Foo.swift:42` or `@Sources/Foo.swift:42-60`
     private static let mentionPattern = try! NSRegularExpression(
-        pattern: #"(?<![\w/])@([A-Za-z0-9_./\-]+)(?::(\d+))?"#
+        pattern: #"(?<![\w/])@([A-Za-z0-9_./\-]+)(?::(\d+)(?:-(\d+))?)?"#
     )
 
+    /// Lines a range mention attaches at most; longer ranges are cut and say so.
+    public static let maxRangeLines = 400
+
     public static func parseMentionToken(_ token: String) -> ParsedMention {
-        if let colon = token.lastIndex(of: ":"),
-           colon < token.endIndex,
-           let line = Int(token[token.index(after: colon)...]),
-           line > 0 {
-            return ParsedMention(pathToken: String(token[..<colon]), line: line)
+        if let colon = token.lastIndex(of: ":") {
+            let suffix = token[token.index(after: colon)...]
+            let parts = suffix.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+            if let line = parts.first.flatMap({ Int($0) }), line > 0 {
+                let path = String(token[..<colon])
+                if parts.count == 1 { return ParsedMention(pathToken: path, line: line) }
+                if let end = Int(parts[1]), end >= line {
+                    return ParsedMention(pathToken: path, line: line, endLine: end == line ? nil : end)
+                }
+            }
         }
         return ParsedMention(pathToken: token, line: nil)
     }
@@ -33,10 +49,10 @@ public enum ComposerContextMentions {
         guard let at = text.lastIndex(of: "@") else { return nil }
         let after = text[text.index(after: at)...]
         if after.contains(where: { $0.isWhitespace || $0 == "\n" }) { return nil }
-        // Suggestions are path-only; strip a trailing :line while typing.
+        // Suggestions are path-only; strip a trailing :line or :first-last while typing.
         let raw = String(after)
         if let colon = raw.lastIndex(of: ":"),
-           raw[raw.index(after: colon)...].allSatisfy(\.isNumber) {
+           raw[raw.index(after: colon)...].allSatisfy({ $0.isNumber || $0 == "-" }) {
             return String(raw[..<colon])
         }
         return raw
@@ -96,7 +112,14 @@ public enum ComposerContextMentions {
                       let lineRange = Range(match.range(at: 2), in: trimmed) else { return nil }
                 return Int(trimmed[lineRange])
             }()
-            let seenKey = line.map { "\(pathToken):\($0)" } ?? pathToken
+            let endLine: Int? = {
+                guard let line, match.numberOfRanges > 3,
+                      match.range(at: 3).location != NSNotFound,
+                      let endRange = Range(match.range(at: 3), in: trimmed),
+                      let end = Int(trimmed[endRange]), end > line else { return nil }
+                return end
+            }()
+            let seenKey = line.map { l in endLine.map { "\(pathToken):\(l)-\($0)" } ?? "\(pathToken):\(l)" } ?? pathToken
             guard let resolved = resolve(token: pathToken, root: root),
                   seen.insert(seenKey).inserted else {
                 continue
@@ -106,7 +129,14 @@ public enum ComposerContextMentions {
                 let shown = listing.filter { !$0.hasPrefix(".") }.sorted().prefix(40).joined(separator: "\n")
                 blocks.append("#### Directory `\(resolved.relative)`\n```\n\(shown)\n```")
             } else if let content = try? String(contentsOfFile: resolved.absolute, encoding: .utf8) {
-                if let line {
+                if let line, let endLine {
+                    blocks.append(rangeExcerpt(
+                        relative: resolved.relative,
+                        content: content,
+                        first: line,
+                        last: endLine
+                    ))
+                } else if let line {
                     blocks.append(focusedExcerpt(
                         relative: resolved.relative,
                         content: content,
@@ -149,6 +179,29 @@ public enum ComposerContextMentions {
         var header = "#### File `\(relative)` — focus line \(target)"
         if start > 1 || end < lines.count {
             header += " (showing \(start)–\(end) of \(lines.count))"
+        }
+        return header + "\n```\n" + body.joined(separator: "\n") + "\n```"
+    }
+
+    /// Numbered lines `first...last` (1-based), each marked, so the model sees exactly what was
+    /// selected. Ranges past `maxRangeLines` are cut and the header says where.
+    public static func rangeExcerpt(
+        relative: String,
+        content: String,
+        first: Int,
+        last: Int
+    ) -> String {
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard !lines.isEmpty else {
+            return "#### File `\(relative)` (lines \(first)–\(last))\n```\n```"
+        }
+        let start = min(max(first, 1), lines.count)
+        let requestedEnd = min(max(last, start), lines.count)
+        let end = min(requestedEnd, start + maxRangeLines - 1)
+        let body = (start...end).map { ">>> \($0)| \(lines[$0 - 1])" }
+        var header = "#### File `\(relative)` — selected lines \(start)–\(requestedEnd) of \(lines.count)"
+        if end < requestedEnd {
+            header += " (showing the first \(maxRangeLines))"
         }
         return header + "\n```\n" + body.joined(separator: "\n") + "\n```"
     }

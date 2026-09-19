@@ -34,6 +34,7 @@ public struct SettingsView: View {
     @State private var newWsCategory: WorkspaceCategory = .general
     @State private var newWsAgentId = ""
     @State private var newWsFolderPath = ""
+    @State private var newWsTemplate: WorkspaceBootstrap.StarterTemplate = .empty
     @State private var showingAddWatchItemModal = false
     @State private var editingWatchItem: WatchItem? = nil
     @State private var googleClientId = ""
@@ -172,6 +173,8 @@ public struct SettingsView: View {
                     .pickerStyle(.menu)
                 }
 
+                WorkspaceTemplatePicker(template: $newWsTemplate)
+
                 if newWsCategory == .agent {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Assigned Agent Sandbox")
@@ -234,6 +237,7 @@ public struct SettingsView: View {
                     newWsName = ""
                     newWsAgentId = ""
                     newWsFolderPath = ""
+                    newWsTemplate = .empty
                 }
                 .keyboardShortcut(.cancelAction)
 
@@ -241,32 +245,19 @@ public struct SettingsView: View {
 
                 Button("Create Workspace") {
                     guard !newWsName.isEmpty else { return }
-                    let folder: String
-                    if !newWsFolderPath.isEmpty {
-                        folder = newWsFolderPath
-                    } else {
-                        let home = FileManager.default.homeDirectoryForCurrentUser.path
-                        let baseWs = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath)
-                        folder = (baseWs as NSString).appendingPathComponent(newWsName.replacingOccurrences(of: " ", with: "-"))
-                    }
-
-                    let ws = Workspace(
+                    let ws = appState.createWorkspace(
                         name: newWsName,
-                        icon: newWsCategory.icon,
-                        color: ["#8B5CF6", "#3B82F6", "#10B981", "#EC4899", "#F59E0B", "#06B6D4"].randomElement() ?? "#8B5CF6",
-                        folderPath: folder,
                         category: newWsCategory,
-                        assignedAgentId: newWsCategory == .agent && !newWsAgentId.isEmpty ? newWsAgentId : nil,
-                        isPipelineStagingEnabled: true,
-                        inputFolderPath: "input",
-                        outputFolderPath: "output"
+                        assignedAgentId: newWsAgentId,
+                        folderPath: newWsFolderPath,
+                        template: newWsTemplate
                     )
-                    appState.saveWorkspace(ws)
                     appState.switchWorkspace(to: ws.id)
                     showingCreateWorkspaceModal = false
                     newWsName = ""
                     newWsAgentId = ""
                     newWsFolderPath = ""
+                    newWsTemplate = .empty
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
