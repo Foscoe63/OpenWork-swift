@@ -41,7 +41,7 @@ Agent tooling aims for **Radiant-class** reliability: official MCP Swift SDK ses
 
 ## Download
 
-Get **`SwiftOpenWork.zip`** from the [latest release](https://github.com/Foscoe63/OpenWork-swift/releases/latest), unzip it, and drag `SwiftOpenWork.app` to Applications. Releases are signed with a Developer ID and **notarised by Apple**, so the app opens with no Gatekeeper warning. The app checks for new releases itself.
+Get **`SwiftOpenWork.zip`** from the [latest release](https://github.com/Foscoe63/SwiftOpenWork/releases/latest), unzip it, and drag `SwiftOpenWork.app` to Applications. Releases are signed with a Developer ID and **notarised by Apple**, so the app opens with no Gatekeeper warning. The app checks for new releases itself.
 
 Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibility and Screen Recording are only requested the first time the agent uses a tool that looks at the screen. Since those permissions follow the code signature, you grant them once, not on every update.
 

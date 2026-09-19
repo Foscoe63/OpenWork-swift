@@ -138,7 +138,6 @@ final class RenameToSwiftOpenWorkTests: XCTestCase {
             "\"OPENWORK.md\"",              // legacy rules file, still read
             "\".openwork.md\"",
             "Also recognised at the workspace root", // lists the legacy file names on purpose
-            "/Foscoe63/OpenWork-swift",              // the GitHub repository's own name
         ]
         // Any "OpenWork" not part of "SwiftOpenWork", in any case, inside a string literal.
         let literal = try NSRegularExpression(pattern: #""[^"\n]*((?<!Swift)OpenWork|(?<!swift)openwork|(?<!SWIFT)OPENWORK)[^"\n]*""#)

@@ -8,7 +8,7 @@ import XCTest
 final class UpdateCheckerTests: XCTestCase {
 
     private func release(_ tag: String) -> Data {
-        Data(#"{"tag_name":"\#(tag)","html_url":"https://github.com/Foscoe63/OpenWork-swift/releases/tag/\#(tag)"}"#.utf8)
+        Data(#"{"tag_name":"\#(tag)","html_url":"https://github.com/Foscoe63/SwiftOpenWork/releases/tag/\#(tag)"}"#.utf8)
     }
 
     func testVersionsCompareNumericallyNotAsStrings() {
