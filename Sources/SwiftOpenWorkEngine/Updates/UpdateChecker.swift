@@ -15,7 +15,7 @@ import SwiftOpenWorkCore
 ///    tests and `swift run` never touch the network.
 public enum UpdateChecker {
 
-    public static let latestReleaseURL = URL(string: "https://api.github.com/repos/Foscoe63/OpenWork-swift/releases/latest")!
+    public static let latestReleaseURL = URL(string: "https://api.github.com/repos/Foscoe63/SwiftOpenWork/releases/latest")!
     public static let automaticInterval: TimeInterval = 24 * 60 * 60
     public static let lastCheckKey = "SwiftOpenWork.updates.lastAutomaticCheck"
 
@@ -80,7 +80,7 @@ public enum UpdateChecker {
         }
         if current < latest {
             let page = (object["html_url"] as? String).flatMap(URL.init(string:))
-                ?? URL(string: "https://github.com/Foscoe63/OpenWork-swift/releases/latest")!
+                ?? URL(string: "https://github.com/Foscoe63/SwiftOpenWork/releases/latest")!
             return .available(current: current.description, latest: latest.description, url: page)
         }
         return .upToDate(current: current.description)

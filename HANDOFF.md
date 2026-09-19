@@ -10,9 +10,15 @@ against this machine, not remembered.
 | SwiftOpenWork | `origin/main`; the module split, Swift 6 and test-host isolation landed in PR #18 | see *Verifying a change* |
 | GrizzyBot | yes, `ecce520` | 538 |
 
-Latest **published** release: **1.3.2 (build 5)**, notarised and stapled, installed in
-`/Applications` on 2026-09-19 — see *Notarisation works (2026-09-19)* below. It carries PR #21
-(starter templates, git on new workspaces, commit from the session review, range mentions).
+Latest **published** release: **1.3.3 (build 6)**, notarised and stapled, installed in
+`/Applications` on 2026-09-19 — see *Notarisation works (2026-09-19)* below. It carries PR #22
+(element picking, screenshot to chat, errors on edits, workspace suggestions) and PR #26 (the
+sandbox symlink escape fix), and points the update checker at the renamed repository.
+
+> **The GitHub repository was renamed `Foscoe63/SwiftOpenWork` on 2026-09-19** (was
+> `Foscoe63/OpenWork-swift`). GitHub redirects the old URLs, including the API URL that 1.3.2 and
+> earlier check for updates (301 to `/repositories/1349995482/…`), so older installs still see new
+> releases — until something else is created under the old name. 1.3.3 uses the new name.
 
 > **The app was renamed SwiftOpenWork on 2026-09-16** (bundle ID `io.github.foscoe63.SwiftOpenWork`,
 > was `ai.openwork.OpenWorkSwift`). Sections written before that say "OpenWork" and use the old
@@ -1296,6 +1302,13 @@ with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afte
   `Notarized Developer ID`. Zip 52.7MB, sha256
   `a33b836d6f707585d1cac84ae5a79c55e307f7af585978e958746489c00de668`. Installed over 1.3.1 in
   `/Applications`; the Developer ID is unchanged, so privacy grants given to 1.3.1 carry over.
+- **1.3.3 (build 6), 2026-09-19:** built from `main` at `a3c2eca` (PR #26 merged) plus the
+  version bump and the repository URL change, in its own worktree. Submission
+  `0be76e5d-e333-4bf7-aadb-22a0c3e8aa96`, Accepted and stapled; `spctl` reports
+  `Notarized Developer ID`. Zip 52.8MB, sha256
+  `a54bd1a42e6f8726e275b09e2aa52586bb85c8f76985c06a735a0a5ad45feb46`. Installed over 1.3.2 in
+  `/Applications`. The release tests (`RenameToSwiftOpenWorkTests`, `UpdateCheckerTests`,
+  `SandboxContainmentTests`) ran in the worktree before the build.
 
 ## The vibe-coding loop: new projects and saving progress (2026-09-19)
 
